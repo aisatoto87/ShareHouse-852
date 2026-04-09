@@ -234,7 +234,7 @@ export default function EditPropertyPage() {
           if (!rest.length) return { raw: entry, category: "其他", url: entry };
           return { raw: entry, category: category || "其他", url: rest.join("::") };
         })
-        .filter((item) => item.url.startsWith("http"));
+        .filter((item: StoredGalleryItem) => item.url.startsWith("http"));
       setExistingGalleryItems(parsed);
     }
     void loadProperty();
