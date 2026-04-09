@@ -1,0 +1,21 @@
+/* app/globals.css */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --brand-dark:  #0f2540;
+    --brand-mid:   #1a3a5c;
+    --brand-light: #7eb8f7;
+    --brand-pale:  #eef2ff;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    @apply text-zinc-900 antialiased;
+  }
+}
