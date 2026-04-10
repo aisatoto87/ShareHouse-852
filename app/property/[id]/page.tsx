@@ -1,4 +1,3 @@
-import Image from "next/image";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArrowLeft, MapPin, Maximize2, MessageCircle } from "lucide-react";
@@ -8,6 +7,7 @@ import PropertyBentoGallery from "@/components/PropertyBentoGallery";
 import ShareListingButton from "@/components/ShareListingButton";
 import WishlistHeartButton from "@/components/WishlistHeartButton";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { mapRowToProperty } from "@/lib/property-mapper";
 
@@ -17,14 +17,28 @@ type PageProps = { params: Promise<{ id: string }> };
 
 type GalleryItem = { category: string; url: string };
 
+function parseGalleryEntry(entry: string): GalleryItem {
+  const [category, ...rest] = entry.split("::");
+  if (rest.length === 0) {
+    return { category: "其他", url: entry };
+  }
+  return { category: category || "其他", url: rest.join("::") };
+}
+
 function parseGallery(gallery: string[]): GalleryItem[] {
   return gallery
-    .map((entry) => {
-      const [category, ...rest] = entry.split("::");
-      const url = rest.length ? rest.join("::") : entry;
-      return { category: category || "其他", url };
-    })
+    .map((entry) => parseGalleryEntry(entry))
     .filter((item) => item.url.startsWith("http"));
+}
+
+function isAdminUser(user: { app_metadata?: Record<string, unknown>; user_metadata?: Record<string, unknown> } | null) {
+  if (!user) return false;
+  return (
+    user.app_metadata?.role === "admin" ||
+    user.user_metadata?.role === "admin" ||
+    user.app_metadata?.is_admin === true ||
+    user.user_metadata?.is_admin === true
+  );
 }
 
 function buildWhatsAppUrl(phone: string, title: string): string {
@@ -55,11 +69,26 @@ export async function generateMetadata({ params }: PageProps) {
 
 export default async function PropertyDetailPage({ params }: PageProps) {
   const { id } = await params;
-  const property = await fetchProperty(id);
+  const supabase = await createSupabaseServerClient();
+  const { data: row, error } = await supabase.from("properties").select("*").eq("id", id).single();
+  if (error || !row) notFound();
+
+  const property = mapRowToProperty(row as Record<string, unknown>);
   if (!property) notFound();
+  const ownerId = typeof row.owner_id === "string" ? row.owner_id : "";
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  const canEditProperty = Boolean(user) && (isAdminUser(user) || (ownerId.length > 0 && user.id === ownerId));
 
   const parsedGallery = parseGallery(property.gallery);
-  const sideImages = parsedGallery.slice(0, 4);
+  const normalizedMainImage = parseGalleryEntry(property.imageUrl).url;
+  const mainImage = normalizedMainImage.startsWith("http")
+    ? normalizedMainImage
+    : parsedGallery[0]?.url ?? property.imageUrl;
+  const sideImages = parsedGallery
+    .filter((item) => item.url !== mainImage)
+    .slice(0, 4);
   const formattedPrice = new Intl.NumberFormat("zh-HK").format(property.price);
   const waUrl = buildWhatsAppUrl(property.contact_whatsapp, property.title);
 
@@ -68,6 +97,14 @@ export default async function PropertyDetailPage({ params }: PageProps) {
       <Navbar />
 
       <main className="mx-auto max-w-7xl space-y-8 px-4 py-8 sm:px-6 sm:py-10">
+        {canEditProperty ? (
+          <div className="rounded-xl border border-[#0f2540]/20 bg-[#f3f7ff] p-3">
+            <Link href={`/edit-property/${property.id}`}>
+              <Button className="bg-[#0f2540] text-white hover:bg-[#1a3a5c]">編輯此房源</Button>
+            </Link>
+          </div>
+        ) : null}
+
         <div className="space-y-3">
           <Link
             href="/"
@@ -102,7 +139,7 @@ export default async function PropertyDetailPage({ params }: PageProps) {
 
         <PropertyBentoGallery
           title={property.title}
-          mainImage={property.imageUrl}
+          mainImage={mainImage}
           sideImages={sideImages}
         />
 

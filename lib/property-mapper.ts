@@ -43,6 +43,12 @@ function pickString(row: Record<string, unknown>, ...keys: string[]): string {
   return "";
 }
 
+function extractGalleryUrl(entry: string): string {
+  const [first, ...rest] = entry.split("::");
+  if (rest.length === 0) return first;
+  return rest.join("::");
+}
+
 function parseDistrict(v: unknown): Property["district"] {
   const s = String(v ?? "").trim();
   return isDistrict(s) ? s : "九龍";
@@ -55,7 +61,7 @@ function parseDistrict(v: unknown): Property["district"] {
 export function mapRowToProperty(row: Record<string, unknown>): Property {
   const gallery = toStringArray(row.gallery);
   const imageUrl =
-    pickString(row, "image_url", "imageUrl") || gallery[0] || "";
+    pickString(row, "image_url", "imageUrl") || extractGalleryUrl(gallery[0] ?? "") || "";
 
   return {
     id: pickString(row, "id") || "unknown",
