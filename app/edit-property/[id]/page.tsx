@@ -1,6 +1,6 @@
 "use client";
 
-import { type FormEvent, useEffect, useMemo, useState } from "react";
+import { type FormEvent, type KeyboardEvent, useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import {
   Check,
@@ -246,6 +246,11 @@ export default function EditPropertyPage() {
   function updateForm<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((prev) => ({ ...prev, [key]: value }));
   }
+  function handleNonNegativeNumberKeyDown(e: KeyboardEvent<HTMLInputElement>) {
+    if (e.key === "-" || e.key.toLowerCase() === "e") {
+      e.preventDefault();
+    }
+  }
   const districtSubDistricts = form.district ? DISTRICT_SUBDISTRICTS[form.district as (typeof DISTRICT_OPTIONS)[number]] ?? [] : [];
   const usingOtherSubDistrict = form.sub_district === SUBDISTRICT_OTHER_VALUE;
   const finalSubDistrict = usingOtherSubDistrict ? customSubDistrict.trim() : form.sub_district.trim();
@@ -325,6 +330,11 @@ export default function EditPropertyPage() {
     if (!form.title || !form.district || !finalSubDistrict || !form.price || !form.size_sqft || !form.description || !form.contact_whatsapp) {
       return toast.error("請先填妥所有必填欄位。");
     }
+    const priceNum = Number(form.price);
+    const sizeNum = Number(form.size_sqft);
+    if (!Number.isFinite(priceNum) || !Number.isFinite(sizeNum) || priceNum < 0 || sizeNum < 0) {
+      return toast.error("租金與面積必須是大於或等於 0 的有效數字。");
+    }
 
     setIsSaving(true);
     setIsUploadingGallery(true);
@@ -357,8 +367,8 @@ export default function EditPropertyPage() {
       title: form.title.trim(),
       district: form.district.trim(),
       sub_district: finalSubDistrict,
-      price: Number(form.price),
-      size_sqft: Number(form.size_sqft),
+      price: priceNum,
+      size_sqft: sizeNum,
       imageUrl: mainUrl,
       description: form.description.trim(),
       contact_whatsapp: form.contact_whatsapp.trim(),
@@ -416,8 +426,8 @@ export default function EditPropertyPage() {
               </Select>
             </div>
             {usingOtherSubDistrict ? <div className="sm:col-span-2"><label className="mb-1 block text-sm font-medium text-zinc-700">自訂分區名稱 *</label><Input value={customSubDistrict} onChange={(e) => setCustomSubDistrict(e.target.value)} /></div> : null}
-            <div><label className="mb-1 block text-sm font-medium text-zinc-700">租金 *</label><Input type="number" value={form.price} onChange={(e) => updateForm("price", e.target.value)} /></div>
-            <div><label className="mb-1 block text-sm font-medium text-zinc-700">面積 *</label><Input type="number" value={form.size_sqft} onChange={(e) => updateForm("size_sqft", e.target.value)} /></div>
+            <div><label className="mb-1 block text-sm font-medium text-zinc-700">租金 *</label><Input type="number" min={0} value={form.price} onKeyDown={handleNonNegativeNumberKeyDown} onChange={(e) => { const value = e.target.value; if (value === "") { updateForm("price", value); return; } const parsed = Number(value); if (Number.isFinite(parsed) && parsed >= 0) { updateForm("price", value); } }} /></div>
+            <div><label className="mb-1 block text-sm font-medium text-zinc-700">面積 *</label><Input type="number" min={0} value={form.size_sqft} onKeyDown={handleNonNegativeNumberKeyDown} onChange={(e) => { const value = e.target.value; if (value === "") { updateForm("size_sqft", value); return; } const parsed = Number(value); if (Number.isFinite(parsed) && parsed >= 0) { updateForm("size_sqft", value); } }} /></div>
             <div className="sm:col-span-2"><label className="mb-1 block text-sm font-medium text-zinc-700">描述 *</label><Textarea rows={5} value={form.description} onChange={(e) => updateForm("description", e.target.value)} /></div>
             <div className="sm:col-span-2"><label className="mb-1 block text-sm font-medium text-zinc-700">WhatsApp *</label><Input value={form.contact_whatsapp} onChange={(e) => updateForm("contact_whatsapp", e.target.value)} /></div>
 
