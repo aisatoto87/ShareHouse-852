@@ -79,7 +79,7 @@ export default async function PropertyDetailPage({ params }: PageProps) {
   const {
     data: { user },
   } = await supabase.auth.getUser();
-  const canEditProperty = Boolean(user) && (isAdminUser(user) || (ownerId.length > 0 && user.id === ownerId));
+  const canEditProperty = isAdminUser(user) || (ownerId.length > 0 && user?.id === ownerId);
 
   const parsedGallery = parseGallery(property.gallery);
   const normalizedMainImage = parseGalleryEntry(property.imageUrl).url;
