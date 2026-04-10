@@ -1,6 +1,6 @@
 "use client";
 
-import { type FormEvent, useEffect, useMemo, useState } from "react";
+import { type FormEvent, type KeyboardEvent, useEffect, useMemo, useState } from "react";
 import { Check, ChevronsUpDown, Loader2, Plus, PlusCircle, UploadCloud, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
@@ -271,6 +271,12 @@ export default function ListPropertyPage() {
     setForm((prev) => ({ ...prev, [key]: value }));
   }
 
+  function handleNonNegativeNumberKeyDown(e: KeyboardEvent<HTMLInputElement>) {
+    if (e.key === "-" || e.key.toLowerCase() === "e") {
+      e.preventDefault();
+    }
+  }
+
   function appendGalleryFiles(files: FileList | null) {
     if (!files?.length) return;
     const nextItems: GalleryUploadItem[] = Array.from(files).map((file) => ({
@@ -440,8 +446,8 @@ export default function ListPropertyPage() {
 
     const priceNum = Number(form.price);
     const sizeNum = Number(form.size_sqft);
-    if (!Number.isFinite(priceNum) || !Number.isFinite(sizeNum)) {
-      toast.error("租金與面積必須是有效數字。");
+    if (!Number.isFinite(priceNum) || !Number.isFinite(sizeNum) || priceNum < 0 || sizeNum < 0) {
+      toast.error("租金與面積必須是大於或等於 0 的有效數字。");
       return;
     }
 
@@ -639,8 +645,20 @@ export default function ListPropertyPage() {
               <label className="mb-1 block text-sm font-medium text-zinc-700">租金 (HKD) *</label>
               <Input
                 type="number"
+                min={0}
                 value={form.price}
-                onChange={(e) => updateForm("price", e.target.value)}
+                onKeyDown={handleNonNegativeNumberKeyDown}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  if (value === "") {
+                    updateForm("price", value);
+                    return;
+                  }
+                  const parsed = Number(value);
+                  if (Number.isFinite(parsed) && parsed >= 0) {
+                    updateForm("price", value);
+                  }
+                }}
                 placeholder="9500"
               />
             </div>
@@ -648,8 +666,20 @@ export default function ListPropertyPage() {
               <label className="mb-1 block text-sm font-medium text-zinc-700">面積 (sqft) *</label>
               <Input
                 type="number"
+                min={0}
                 value={form.size_sqft}
-                onChange={(e) => updateForm("size_sqft", e.target.value)}
+                onKeyDown={handleNonNegativeNumberKeyDown}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  if (value === "") {
+                    updateForm("size_sqft", value);
+                    return;
+                  }
+                  const parsed = Number(value);
+                  if (Number.isFinite(parsed) && parsed >= 0) {
+                    updateForm("size_sqft", value);
+                  }
+                }}
                 placeholder="150"
               />
             </div>
