@@ -14,11 +14,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import type { ProfileRole } from "@/types/profile";
-
-function isRoleUnset(role: string | null | undefined): boolean {
-  return role == null || String(role).trim() === "";
-}
+import { hasValidProfileRole, type ProfileRole } from "@/types/profile";
 
 export default function RoleOnboardingGate() {
   const router = useRouter();
@@ -32,7 +28,8 @@ export default function RoleOnboardingGate() {
     let mounted = true;
 
     async function applySession(session: Session | null) {
-      if (!session?.user) {
+      // 第一道防線：沒有有效 session / user → 訪客，不查 profile、不顯示 Modal
+      if (!session?.user?.id) {
         if (!mounted) return;
         setUserId(null);
         setNeedsOnboarding(false);
@@ -52,6 +49,18 @@ export default function RoleOnboardingGate() {
 
       if (!mounted) return;
 
+      // 非同步查詢期間可能已登出：再次確認目前仍有登入者且 id 一致，避免訪客被誤設成需引導
+      const {
+        data: { session: latest },
+      } = await supabase.auth.getSession();
+      if (!latest?.user?.id || latest.user.id !== uid) {
+        if (!mounted) return;
+        setUserId(null);
+        setNeedsOnboarding(false);
+        setChecking(false);
+        return;
+      }
+
       if (error) {
         console.error(error);
         toast.error("無法載入帳戶資料，請重新整理頁面。");
@@ -60,7 +69,8 @@ export default function RoleOnboardingGate() {
         return;
       }
 
-      if (!data || isRoleUnset(data.role)) {
+      // 第二道防線：僅在已確認登入時，依 profile.role 決定是否顯示 Modal
+      if (!data || !hasValidProfileRole(data.role)) {
         setNeedsOnboarding(true);
       } else {
         setNeedsOnboarding(false);
@@ -129,15 +139,20 @@ export default function RoleOnboardingGate() {
     toast.success("設定完成，歡迎使用 ShareHouse 852！");
     setNeedsOnboarding(false);
     setSubmitting(false);
-    router.push("/");
     router.refresh();
   }
 
-  const open = !checking && needsOnboarding;
+  /** 訪客（無 userId）絕不顯示；僅在已登入且需補齊 role 時顯示 */
+  const showOnboarding =
+    Boolean(userId) && !checking && needsOnboarding;
+
+  if (!showOnboarding) {
+    return null;
+  }
 
   return (
     <Dialog
-      open={open}
+      open
       onOpenChange={handleOpenChange}
       modal
       disablePointerDismissal
