@@ -79,7 +79,7 @@ export default function Navbar() {
                 心水清單
               </Link>
               <Link
-                href="/account"
+                href="/dashboard"
                 className="inline-flex items-center rounded-full border border-[#12355f] bg-[#0f2540] px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-[#1a3a5c]"
               >
                 我的帳號
