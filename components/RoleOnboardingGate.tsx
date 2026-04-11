@@ -14,11 +14,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import type { ProfileRole } from "@/types/profile";
-
-function isRoleUnset(role: string | null | undefined): boolean {
-  return role == null || String(role).trim() === "";
-}
+import { hasValidProfileRole, type ProfileRole } from "@/types/profile";
 
 export default function RoleOnboardingGate() {
   const router = useRouter();
@@ -60,7 +56,7 @@ export default function RoleOnboardingGate() {
         return;
       }
 
-      if (!data || isRoleUnset(data.role)) {
+      if (!data || !hasValidProfileRole(data.role)) {
         setNeedsOnboarding(true);
       } else {
         setNeedsOnboarding(false);
@@ -129,15 +125,19 @@ export default function RoleOnboardingGate() {
     toast.success("設定完成，歡迎使用 ShareHouse 852！");
     setNeedsOnboarding(false);
     setSubmitting(false);
-    router.push("/");
     router.refresh();
   }
 
-  const open = !checking && needsOnboarding;
+  /** 僅在已確認需引導時掛載 Dialog，老用戶與未登入者完全不渲染 Modal */
+  const showOnboarding = !checking && needsOnboarding;
+
+  if (!showOnboarding) {
+    return null;
+  }
 
   return (
     <Dialog
-      open={open}
+      open
       onOpenChange={handleOpenChange}
       modal
       disablePointerDismissal
