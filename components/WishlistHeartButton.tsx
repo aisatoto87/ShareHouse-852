@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Heart } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -35,7 +35,7 @@ export default function WishlistHeartButton({
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
   const [saved, setSaved] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [toggling, setToggling] = useState(false);
+  const mutatingRef = useRef(false);
 
   useEffect(() => {
     let active = true;
@@ -54,7 +54,7 @@ export default function WishlistHeartButton({
       }
 
       const { data, error } = await supabase
-        .from("wishlists")
+        .from("favorites")
         .select("id")
         .eq("user_id", user.id)
         .eq("property_id", propertyId)
@@ -88,57 +88,59 @@ export default function WishlistHeartButton({
   }, [propertyId, supabase]);
 
   async function handleToggle() {
-    if (toggling || loading) return;
+    if (loading || mutatingRef.current) return;
 
-    setToggling(true);
     const {
       data: { user },
     } = await supabase.auth.getUser();
 
     if (!user) {
       toast.info("請先登入以加入心水清單");
-      setToggling(false);
       return;
     }
 
-    if (!saved) {
-      const { error } = await supabase
-        .from("wishlists")
-        .insert({ user_id: user.id, property_id: propertyId });
+    const previous = saved;
+    const next = !previous;
+    setSaved(next);
+
+    mutatingRef.current = true;
+
+    if (next) {
+      const { error } = await supabase.from("favorites").insert({
+        user_id: user.id,
+        property_id: propertyId,
+      });
 
       if (error) {
+        setSaved(previous);
         toast.error("加入心水清單失敗，請稍後再試。");
-        setToggling(false);
+        mutatingRef.current = false;
         return;
       }
-
-      setSaved(true);
       toast.success("已加入心水清單");
-      setToggling(false);
+      mutatingRef.current = false;
       return;
     }
 
     const { error } = await supabase
-      .from("wishlists")
+      .from("favorites")
       .delete()
       .eq("user_id", user.id)
       .eq("property_id", propertyId);
 
     if (error) {
+      setSaved(previous);
       toast.error("移除心水清單失敗，請稍後再試。");
-      setToggling(false);
-      return;
+    } else {
+      toast.success("已從心水清單移除");
     }
-
-    setSaved(false);
-    toast.success("已從心水清單移除");
-    setToggling(false);
+    mutatingRef.current = false;
   }
 
   return (
     <button
       type="button"
-      disabled={loading || toggling}
+      disabled={loading}
       className={cn(
         "inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full border transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 disabled:cursor-not-allowed disabled:opacity-70",
         variantClass[variant],
