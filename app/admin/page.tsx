@@ -169,13 +169,21 @@ function TagInputField({
         </Button>
       </div>
       <Popover open={open} onOpenChange={setOpen}>
-        <PopoverTrigger className="flex min-h-10 w-full items-center gap-2 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-left text-sm text-zinc-900 outline-none transition-colors hover:border-[#1a3a5c]/40 focus-visible:border-[#0f2540] focus-visible:ring-2 focus-visible:ring-[#0f2540]/25">
+        <PopoverTrigger
+          type="button"
+          className="flex min-h-10 w-full items-center gap-2 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-left text-sm text-zinc-900 outline-none transition-colors hover:border-[#1a3a5c]/40 focus-visible:border-[#0f2540] focus-visible:ring-2 focus-visible:ring-[#0f2540]/25"
+        >
           <span className={selectedItems.length > 0 ? "text-zinc-900" : "text-zinc-500"}>
             {selectedItems.length > 0 ? `已選 ${selectedItems.length} 項，點擊以編輯預設選項` : "參考常用選項（可直接輸入新增）"}
           </span>
           <ChevronsUpDown className="ml-auto h-4 w-4 shrink-0 text-zinc-400" />
         </PopoverTrigger>
-        <PopoverContent align="start" className="w-[360px] p-0">
+        <PopoverContent
+          align="start"
+          className="w-[360px] p-0"
+          initialFocus={false}
+          finalFocus={false}
+        >
           <Command>
             <CommandList>
               <CommandEmpty>{emptyText}</CommandEmpty>
