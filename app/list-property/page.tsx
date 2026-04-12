@@ -228,7 +228,6 @@ export default function ListPropertyPage() {
   const router = useRouter();
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
   const [authChecking, setAuthChecking] = useState(true);
-  const [ownerId, setOwnerId] = useState<string | null>(null);
 
   const [form, setForm] = useState<FormState>(initialForm);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -258,7 +257,6 @@ export default function ListPropertyPage() {
         router.replace("/login");
         return;
       }
-      setOwnerId(data.user.id);
       setAuthChecking(false);
     });
 
@@ -421,11 +419,18 @@ export default function ListPropertyPage() {
   async function handleCreateProperty(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
 
-    if (!ownerId) {
-      toast.error("登入狀態失效，請重新登入後再試。");
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser();
+
+    if (authError || !user?.id) {
+      toast.error("請先登入");
       router.replace("/login");
       return;
     }
+
+    const ownerUserId = user.id;
 
     if (
       !form.title ||
@@ -456,7 +461,7 @@ export default function ListPropertyPage() {
     const extension = selectedImageFile.name.includes(".")
       ? selectedImageFile.name.split(".").pop()?.toLowerCase() ?? "jpg"
       : "jpg";
-    const filePath = `properties/${ownerId}/${Date.now()}-${Math.random().toString(36).slice(2)}.${extension}`;
+    const filePath = `properties/${ownerUserId}/${Date.now()}-${Math.random().toString(36).slice(2)}.${extension}`;
     const { error: uploadError } = await supabase
       .storage
       .from("property-images")
@@ -479,7 +484,7 @@ export default function ListPropertyPage() {
         const extension = item.file.name.includes(".")
           ? item.file.name.split(".").pop()?.toLowerCase() ?? "jpg"
           : "jpg";
-        const itemPath = `properties/${ownerId}/gallery/${Date.now()}-${Math.random()
+        const itemPath = `properties/${ownerUserId}/gallery/${Date.now()}-${Math.random()
           .toString(36)
           .slice(2)}.${extension}`;
         const { error } = await supabase
@@ -519,7 +524,7 @@ export default function ListPropertyPage() {
       roommates_req: selectedRoommateReqs,
       tags: selectedTags,
       gallery: galleryUploads,
-      owner_id: ownerId,
+      owner_id: ownerUserId,
     };
 
     const { error } = await supabase.from("properties").insert(payload);
