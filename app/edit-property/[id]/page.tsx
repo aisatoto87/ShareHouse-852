@@ -82,40 +82,55 @@ export default function EditPropertyPage() {
   const [currentImageUrl, setCurrentImageUrl] = useState("");
 
   useEffect(() => {
-    let mounted = true;
-    supabase.auth.getUser().then(({ data }) => {
-      if (!mounted) return;
-      if (!data.user) {
-        toast.info("請先登入");
-        router.replace("/login");
-        return;
-      }
-      setAuthChecking(false);
-    });
-    return () => {
-      mounted = false;
-    };
-  }, [router, supabase]);
-
-  useEffect(() => {
     return () => {
       for (const item of appendGalleryItems) URL.revokeObjectURL(item.previewUrl);
     };
   }, [appendGalleryItems]);
 
   useEffect(() => {
-    if (authChecking || !propertyId) return;
+    if (!propertyId) return;
     let cancelled = false;
-    async function loadProperty() {
+
+    async function loadPropertyWithAccess() {
+      setAuthChecking(true);
       setLoadingProperty(true);
-      const { data, error } = await supabase.from("properties").select("*").eq("id", propertyId).single();
-      setLoadingProperty(false);
-      if (error || !data) {
-        toast.error("讀取租盤失敗");
-        router.replace("/admin");
+
+      const {
+        data: { user },
+        error: authError,
+      } = await supabase.auth.getUser();
+
+      if (cancelled) return;
+
+      if (authError || !user?.id) {
+        toast.info("請先登入");
+        router.replace("/login");
+        setAuthChecking(false);
+        setLoadingProperty(false);
         return;
       }
+
+      const { data, error } = await supabase.from("properties").select("*").eq("id", propertyId).single();
+
       if (cancelled) return;
+
+      if (error || !data) {
+        toast.error("讀取租盤失敗");
+        router.replace("/dashboard");
+        setAuthChecking(false);
+        setLoadingProperty(false);
+        return;
+      }
+
+      const ownerId = data.owner_id as string | null | undefined;
+      if (!ownerId || ownerId !== user.id) {
+        toast.error("無權限存取");
+        router.replace("/dashboard");
+        setAuthChecking(false);
+        setLoadingProperty(false);
+        return;
+      }
+
       setForm({
         title: data.title ?? "",
         district: data.district ?? "",
@@ -139,12 +154,16 @@ export default function EditPropertyPage() {
         })
         .filter((item: StoredGalleryItem) => item.url.startsWith("http"));
       setExistingGalleryItems(parsed);
+
+      setAuthChecking(false);
+      setLoadingProperty(false);
     }
-    void loadProperty();
+
+    void loadPropertyWithAccess();
     return () => {
       cancelled = true;
     };
-  }, [authChecking, propertyId, router, supabase]);
+  }, [propertyId, router, supabase]);
 
   function updateForm<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -230,6 +249,28 @@ export default function EditPropertyPage() {
   async function handleSave(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (!propertyId) return;
+
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser();
+    if (authError || !user?.id) {
+      toast.error("請先登入");
+      router.replace("/login");
+      return;
+    }
+
+    const { data: accessRow, error: accessError } = await supabase
+      .from("properties")
+      .select("owner_id")
+      .eq("id", propertyId)
+      .single();
+    if (accessError || !accessRow || accessRow.owner_id !== user.id) {
+      toast.error("無權限存取");
+      router.replace("/dashboard");
+      return;
+    }
+
     if (!form.title || !form.district || !finalSubDistrict || !form.price || !form.size_sqft || !form.description || !form.contact_whatsapp) {
       return toast.error("請先填妥所有必填欄位。");
     }
@@ -280,12 +321,22 @@ export default function EditPropertyPage() {
       tags: selectedTags,
       gallery: mergedGallery,
     };
-    const { error } = await supabase.from("properties").update(payload).eq("id", propertyId);
+    const { data: updatedRows, error } = await supabase
+      .from("properties")
+      .update(payload)
+      .eq("id", propertyId)
+      .eq("owner_id", user.id)
+      .select("id");
     setIsSaving(false);
     if (error) return toast.error(`更新失敗：${error.message}`);
+    if (!updatedRows?.length) {
+      toast.error("無權限存取");
+      router.replace("/dashboard");
+      return;
+    }
 
     toast.success("更新成功！");
-    router.push("/admin");
+    router.push("/dashboard");
   }
 
   if (authChecking || loadingProperty) {
