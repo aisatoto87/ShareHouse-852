@@ -2,7 +2,6 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArrowLeft, MapPin, Maximize2, MessageCircle } from "lucide-react";
 import Navbar from "@/components/Navbar";
-import BackToTopButton from "@/components/BackToTopButton";
 import PropertyBentoGallery from "@/components/PropertyBentoGallery";
 import ShareListingButton from "@/components/ShareListingButton";
 import WishlistHeartButton from "@/components/WishlistHeartButton";
@@ -230,7 +229,6 @@ export default async function PropertyDetailPage({ params }: PageProps) {
           <WishlistHeartButton propertyId={property.id} variant="onLight" />
         </div>
       </div>
-      <BackToTopButton />
     </div>
   );
 }
