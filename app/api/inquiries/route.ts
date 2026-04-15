@@ -29,16 +29,19 @@ export async function POST(request: Request) {
       property_id: propertyId,
       user_id: user?.id ?? null,
       name,
-      contact,
+      contact_info: contact,
       message: content || null,
     });
+
+    if (error) console.log("🚨 Supabase 真正死因：", error);
 
     if (error) {
       return NextResponse.json({ error: error.message || "提交失敗，請稍後再試。" }, { status: 500 });
     }
 
     return NextResponse.json({ ok: true });
-  } catch {
+  } catch (e) {
+    console.log("🚨 API 系統錯誤：", e);
     return NextResponse.json({ error: "提交失敗，請稍後再試。" }, { status: 500 });
   }
 }
