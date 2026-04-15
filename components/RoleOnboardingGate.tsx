@@ -63,14 +63,27 @@ export default function RoleOnboardingGate() {
 
       if (error) {
         console.error(error);
-        toast.error("無法載入帳戶資料，請重新整理頁面。");
+        await supabase.auth.signOut();
+        if (!mounted) return;
+        setUserId(null);
         setNeedsOnboarding(false);
         setChecking(false);
+        window.location.reload();
         return;
       }
 
-      // 第二道防線：僅在已確認登入時，依 profile.role 決定是否顯示 Modal
-      if (!data || !hasValidProfileRole(data.role)) {
+      if (!data) {
+        await supabase.auth.signOut();
+        if (!mounted) return;
+        setUserId(null);
+        setNeedsOnboarding(false);
+        setChecking(false);
+        window.location.reload();
+        return;
+      }
+
+      // 第二道防線：僅在已確認登入且 profile 存在時，依 profile.role 決定是否顯示 Modal
+      if (!hasValidProfileRole(data.role)) {
         setNeedsOnboarding(true);
       } else {
         setNeedsOnboarding(false);
@@ -227,3 +240,5 @@ export default function RoleOnboardingGate() {
     </Dialog>
   );
 }
+
+
