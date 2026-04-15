@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Noto_Sans_HK } from "next/font/google";
+import FloatingContact from "@/components/FloatingContact";
 import RoleOnboardingGate from "@/components/RoleOnboardingGate";
 import { Toaster } from "@/components/ui/sonner";
 import "./globals.css";
@@ -30,6 +31,7 @@ export default function RootLayout({
       <body className={`${notoSansHK.className} antialiased`} suppressHydrationWarning>
         <RoleOnboardingGate />
         {children}
+        <FloatingContact />
         <Toaster richColors position="top-center" closeButton />
       </body>
     </html>
