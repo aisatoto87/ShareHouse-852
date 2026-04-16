@@ -1,0 +1,189 @@
+import Link from "next/link";
+import { redirect } from "next/navigation";
+import Navbar from "@/components/Navbar";
+import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { markInquiryContacted } from "@/app/admin/inquiries/actions";
+
+export const dynamic = "force-dynamic";
+
+type InquiryRow = {
+  id: string;
+  created_at: string;
+  name: string | null;
+  contact_info: string | null;
+  message: string | null;
+  status: string | null;
+  property_id: string | null;
+  properties: { id: string; title: string | null } | null;
+};
+
+function formatDateTime(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "--";
+
+  const parts = new Intl.DateTimeFormat("zh-HK", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(date);
+
+  const pick = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((part) => part.type === type)?.value ?? "";
+
+  return `${pick("year")}-${pick("month")}-${pick("day")} ${pick("hour")}:${pick("minute")}`;
+}
+
+function normalizeStatus(status: string | null) {
+  const value = (status ?? "pending").toLowerCase();
+  if (value === "contacted") {
+    return {
+      label: "Contacted",
+      className: "border-emerald-200 bg-emerald-50 text-emerald-700",
+      isPending: false,
+    };
+  }
+  return {
+    label: "Pending",
+    className: "border-amber-200 bg-amber-50 text-amber-700",
+    isPending: true,
+  };
+}
+
+function propertyLabel(inquiry: InquiryRow) {
+  if (inquiry.properties?.title && inquiry.properties.title.trim()) {
+    return inquiry.properties.title.trim();
+  }
+  if (inquiry.property_id) return `租盤 #${inquiry.property_id.slice(0, 8)}`;
+  return "未關聯租盤";
+}
+
+export default async function AdminInquiriesPage() {
+  const supabase = await createSupabaseServerClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  const isAdmin =
+    Boolean(user) &&
+    (user?.app_metadata?.role === "admin" ||
+      user?.user_metadata?.role === "admin" ||
+      user?.app_metadata?.is_admin === true ||
+      user?.user_metadata?.is_admin === true);
+
+  if (!isAdmin) {
+    redirect("/");
+  }
+
+  const { data, error } = await supabase
+    .from("inquiries")
+    .select("id, created_at, name, contact_info, message, status, property_id, properties(id, title)")
+    .order("created_at", { ascending: false });
+
+    const inquiries = ((data ?? []) as unknown as InquiryRow[]).filter((row) => row.id);
+
+  return (
+    <div className="min-h-screen bg-zinc-50">
+      <Navbar />
+      <main className="mx-auto max-w-7xl space-y-6 px-4 py-8 sm:px-6 sm:py-10">
+        <section className="rounded-2xl border border-[#0f2540]/15 bg-white p-6 shadow-sm sm:p-8">
+          <h1 className="text-2xl font-bold tracking-tight text-[#0f2540]">管家預約查詢後台</h1>
+          <p className="mt-2 text-sm text-zinc-500">
+            集中管理客人預約與查詢，並快速標記跟進狀態。
+          </p>
+        </section>
+
+        <section className="overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-sm">
+          {error ? (
+            <div className="p-6 text-sm text-red-600">
+              讀取 inquiries 失敗：{error.message}
+            </div>
+          ) : inquiries.length === 0 ? (
+            <div className="p-10 text-center text-sm text-zinc-500">
+              目前尚未有任何預約或查詢紀錄。
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-zinc-200 text-sm">
+                <thead className="bg-zinc-50/80 text-left text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                  <tr>
+                    <th className="px-4 py-3">提交日期</th>
+                    <th className="px-4 py-3">客人姓名</th>
+                    <th className="px-4 py-3">聯絡方式</th>
+                    <th className="px-4 py-3">想看哪個盤</th>
+                    <th className="px-4 py-3">查詢內容</th>
+                    <th className="px-4 py-3">目前狀態</th>
+                    <th className="px-4 py-3 text-right">跟進行動</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-zinc-100 bg-white">
+                  {inquiries.map((inquiry) => {
+                    const status = normalizeStatus(inquiry.status);
+                    const propertyId = inquiry.properties?.id ?? inquiry.property_id;
+
+                    return (
+                      <tr key={inquiry.id} className="align-top">
+                        <td className="px-4 py-4 text-zinc-700 whitespace-nowrap">
+                          {formatDateTime(inquiry.created_at)}
+                        </td>
+                        <td className="px-4 py-4 font-medium text-zinc-900">
+                          {inquiry.name?.trim() || "--"}
+                        </td>
+                        <td className="px-4 py-4 text-zinc-700">
+                          {inquiry.contact_info?.trim() || "--"}
+                        </td>
+                        <td className="px-4 py-4">
+                          {propertyId ? (
+                            <Link
+                              href={`/property/${propertyId}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="font-medium text-[#0f2540] underline-offset-2 hover:underline"
+                            >
+                              {propertyLabel(inquiry)}
+                            </Link>
+                          ) : (
+                            <span className="text-zinc-500">{propertyLabel(inquiry)}</span>
+                          )}
+                        </td>
+                        <td className="max-w-sm px-4 py-4 text-zinc-700">
+                          <p className="whitespace-pre-wrap break-words">
+                            {inquiry.message?.trim() || "--"}
+                          </p>
+                        </td>
+                        <td className="px-4 py-4">
+                          <span
+                            className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold ${status.className}`}
+                          >
+                            {status.label}
+                          </span>
+                        </td>
+                        <td className="px-4 py-4 text-right">
+                          {status.isPending ? (
+                            <form action={markInquiryContacted}>
+                              <input type="hidden" name="inquiryId" value={inquiry.id} />
+                              <button
+                                type="submit"
+                                className="inline-flex h-9 items-center justify-center rounded-lg bg-[#0f2540] px-3 text-xs font-semibold text-white transition-colors hover:bg-[#1a3a5c]"
+                              >
+                                標記為已跟進
+                              </button>
+                            </form>
+                          ) : (
+                            <span className="text-xs font-medium text-zinc-400">已完成</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      </main>
+    </div>
+  );
+}
