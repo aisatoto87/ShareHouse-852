@@ -4,6 +4,7 @@ import Navbar from "@/components/Navbar";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { markInquiryContacted } from "@/app/admin/inquiries/actions";
 
+
 export const dynamic = "force-dynamic";
 
 type InquiryRow = {
@@ -52,14 +53,32 @@ function normalizeStatus(status: string | null) {
   };
 }
 
-function propertyLabel(inquiry: InquiryRow) {
-  if (inquiry.properties?.title && inquiry.properties.title.trim()) {
-    return inquiry.properties.title.trim();
-  }
-  if (inquiry.property_id) return `租盤 #${inquiry.property_id.slice(0, 8)}`;
-  return "未關聯租盤";
-}
+function propertyLabel(inquiry: any) {
+  let title = "未關聯租盤";
+  
+  // 🛡️ 防彈邏輯：無論 Supabase 畀 Array 定 Object 我哋都食得落！
+  const titleText = Array.isArray(inquiry.properties) 
+    ? inquiry.properties[0]?.title 
+    : inquiry.properties?.title;
 
+  // 安全檢查：確保 titleText 真係存在，而且係一段字
+  if (titleText && typeof titleText === "string" && titleText.trim()) {
+    title = titleText.trim();
+  } else if (inquiry.property_id) {
+    // 加個 String() 保障，萬一 id 唔係字串都唔會炒車
+    title = `租盤 #${String(inquiry.property_id).slice(0, 8)}`;
+  }
+
+  return (
+    <Link 
+      href={`/property/${inquiry.property_id}`} 
+      target="_blank" 
+      className="font-medium text-blue-600 transition-colors hover:text-blue-800 hover:underline"
+    >
+      {title} ↗
+    </Link>
+  );
+}
 export default async function AdminInquiriesPage() {
   const supabase = await createSupabaseServerClient();
   const {
