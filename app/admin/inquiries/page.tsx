@@ -82,7 +82,7 @@ export default async function AdminInquiriesPage() {
     .select("id, created_at, name, contact_info, message, status, property_id, properties(id, title)")
     .order("created_at", { ascending: false });
 
-  const inquiries = ((data ?? []) as InquiryRow[]).filter((row) => row.id);
+    const inquiries = ((data ?? []) as unknown as InquiryRow[]).filter((row) => row.id);
 
   return (
     <div className="min-h-screen bg-zinc-50">
