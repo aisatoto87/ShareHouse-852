@@ -66,14 +66,22 @@ export default async function AdminInquiriesPage() {
     data: { user },
   } = await supabase.auth.getUser();
 
-  const isAdmin =
-    Boolean(user) &&
-    (user?.app_metadata?.role === "admin" ||
+  const VIP_EMAILS = [
+    "aisatoto87@gmail.com", 
+    "mowangmw@gmail.com",
+    "yushinghei1021@gmail.com"
+  ];
+
+    const isAdmin = 
+    VIP_EMAILS.includes(user?.email || "") || 
+    (Boolean(user) && (
+      user?.app_metadata?.role === "admin" ||
       user?.user_metadata?.role === "admin" ||
       user?.app_metadata?.is_admin === true ||
-      user?.user_metadata?.is_admin === true);
-
-  if (!isAdmin) {
+      user?.user_metadata?.is_admin === true
+    ));  
+  
+    if (!isAdmin) {
     redirect("/");
   }
 
