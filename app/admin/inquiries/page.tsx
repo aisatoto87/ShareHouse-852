@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 import Navbar from "@/components/Navbar";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { markInquiryContacted } from "@/app/admin/inquiries/actions";
-
+import { revalidatePath } from "next/cache";
 
 export const dynamic = "force-dynamic";
 
@@ -80,6 +80,20 @@ function propertyLabel(inquiry: any) {
   );
 }
 export default async function AdminInquiriesPage() {
+  // 👇 將呢段靈魂神經線貼喺度！
+  async function markAsContacted(formData: FormData) {
+    "use server";
+    const id = formData.get("inquiryId") as string;
+    const supabase = await createSupabaseServerClient();
+    
+    // 將資料庫嘅 status 更新為 contacted
+    await supabase.from("inquiries").update({ status: "contacted" }).eq("id", id);
+    
+    // 叫 Next.js 即刻重新載入呢一頁嘅最新資料 (記得檔案最頂要有 import { revalidatePath } from "next/cache";)
+    revalidatePath("/admin/inquiries"); 
+  }
+
+  // ... 下面繼續係你原本嘅 const supabase = await createSupabaseServerClient(); 等等 ...
   const supabase = await createSupabaseServerClient();
   const {
     data: { user },
@@ -99,7 +113,7 @@ export default async function AdminInquiriesPage() {
       user?.app_metadata?.is_admin === true ||
       user?.user_metadata?.is_admin === true
     ));  
-  
+
     if (!isAdmin) {
     redirect("/");
   }
@@ -188,19 +202,22 @@ export default async function AdminInquiriesPage() {
                           </span>
                         </td>
                         <td className="px-4 py-4 text-right">
-                          {status.isPending ? (
-                            <form action={markInquiryContacted}>
-                              <input type="hidden" name="inquiryId" value={inquiry.id} />
-                              <button
-                                type="submit"
-                                className="inline-flex h-9 items-center justify-center rounded-lg bg-[#0f2540] px-3 text-xs font-semibold text-white transition-colors hover:bg-[#1a3a5c]"
-                              >
-                                標記為已跟進
-                              </button>
-                            </form>
-                          ) : (
-                            <span className="text-xs font-medium text-zinc-400">已完成</span>
-                          )}
+                        {(inquiry.status || "").toLowerCase() === "pending" ? (
+  <form action={markAsContacted}>
+    {/* 靜靜雞將個 ID 傳畀後台 */}
+    <input type="hidden" name="inquiryId" value={inquiry.id} />
+    <button 
+      type="submit" 
+      className="cursor-pointer rounded-full bg-amber-100 px-3 py-1 text-sm font-medium text-amber-700 transition-colors hover:bg-amber-200"
+    >
+      Pending (按此跟進)
+    </button>
+  </form>
+) : (
+  <span className="rounded-full bg-emerald-100 px-3 py-1 text-sm font-medium text-emerald-700">
+    Contacted
+  </span>
+)}
                         </td>
                       </tr>
                     );
