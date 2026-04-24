@@ -202,23 +202,20 @@ export default async function AdminInquiriesPage() {
                           </span>
                         </td>
                         <td className="px-4 py-4 text-right">
-                        {(inquiry.status || "").toLowerCase() === "pending" ? (
-  <form action={markAsContacted}>
-    {/* 靜靜雞將個 ID 傳畀後台 */}
-    <input type="hidden" name="inquiryId" value={inquiry.id} />
-    <button 
-      type="submit" 
-      className="cursor-pointer rounded-full bg-amber-100 px-3 py-1 text-sm font-medium text-amber-700 transition-colors hover:bg-amber-200"
-    >
-      Pending (按此跟進)
-    </button>
-  </form>
-) : (
-  <span className="rounded-full bg-emerald-100 px-3 py-1 text-sm font-medium text-emerald-700">
-    Contacted
-  </span>
-)}
-                        </td>
+  {status.isPending ? (
+    <form action={markAsContacted}>
+      <input type="hidden" name="inquiryId" value={inquiry.id} />
+      <button 
+        type="submit" 
+        className="inline-flex h-9 items-center justify-center rounded-lg bg-[#0f2540] px-3 text-xs font-semibold text-white transition-colors hover:bg-[#1a3a5c]"
+      >
+        標記為已跟進
+      </button>
+    </form>
+  ) : (
+    <span className="text-xs font-medium text-zinc-400">已完成</span>
+  )}
+</td>
                       </tr>
                     );
                   })}
