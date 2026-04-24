@@ -13,6 +13,22 @@ export default function Navbar() {
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
   const [user, setUser] = useState<User | null>(null);
 
+  // 👇 1. 放喺第 15 行 (即係 useState 同 useEffect 中間)
+  const VIP_EMAILS = [
+    "aisatoto87@gmail.com",
+    "mowangmw@gmail.com",
+    "yushinghei1021@gmail.com"
+  ];
+
+  const isAdmin = 
+    VIP_EMAILS.includes(user?.email || "") || 
+    (Boolean(user) && (
+      user?.app_metadata?.role === "admin" ||
+      user?.user_metadata?.role === "admin" ||
+      user?.app_metadata?.is_admin === true ||
+      user?.user_metadata?.is_admin === true
+    ));
+
   useEffect(() => {
     let mounted = true;
 
@@ -71,13 +87,15 @@ export default function Navbar() {
           </Link>
 {/* 👇 呢度就係管家後台嘅傳送門 */}
 
-<Link 
-        href="/admin/inquiries" 
-        className="text-sm font-medium text-zinc-700 transition-colors hover:text-[#0f2540]"
-      >
-        管家後台
-      </Link>
-      
+{/* 👇 2. 用 isAdmin 判斷包住佢，只有 Admin 先見到呢個掣！ */}
+      {isAdmin && (
+        <Link 
+          href="/admin/inquiries" 
+          className="text-sm font-medium text-zinc-700 transition-colors hover:text-[#0f2540]"
+        >
+          管家後台
+        </Link>
+      )}
           {user ? (
             <>
               <Link
