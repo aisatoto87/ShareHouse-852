@@ -69,7 +69,15 @@ export default function Navbar() {
               免費放盤
             </Button>
           </Link>
+{/* 👇 呢度就係管家後台嘅傳送門 */}
 
+<Link 
+        href="/admin/inquiries" 
+        className="text-sm font-medium text-zinc-700 transition-colors hover:text-[#0f2540]"
+      >
+        管家後台
+      </Link>
+      
           {user ? (
             <>
               <Link
