@@ -90,7 +90,7 @@ export default function Navbar() {
 {/* 👇 2. 用 isAdmin 判斷包住佢，只有 Admin 先見到呢個掣！ */}
       {isAdmin && (
         <Link 
-          href="/admin/inquiries" 
+          href="/admin" 
           className="text-sm font-medium text-zinc-700 transition-colors hover:text-[#0f2540]"
         >
           管家後台

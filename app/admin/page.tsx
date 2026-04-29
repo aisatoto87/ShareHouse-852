@@ -16,6 +16,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 
+
 const ADMIN_PASSCODE = "852852";
 const ADMIN_UNLOCK_KEY = "sharehouse-admin-unlocked";
 const DEFAULT_TAG_OPTIONS = ["免佣金", "近地鐵", "女生合租", "男生合租", "有電梯", "全新裝修", "可養寵物", "包寬頻"] as const;
@@ -494,10 +495,28 @@ export default function AdminPage() {
     <div className="min-h-screen bg-zinc-50">
       <Navbar />
       <main className="mx-auto max-w-6xl space-y-8 px-4 py-8 sm:px-6 sm:py-10">
-        <section className="rounded-2xl border border-[#0f2540]/15 bg-white p-6 shadow-sm sm:p-8">
-          <h1 className="text-2xl font-bold tracking-tight text-[#0f2540]">租盤管理後台</h1>
-          <p className="mt-2 text-sm text-zinc-500">可在此新增租盤、查看列表，及刪除舊租盤資料。</p>
-        </section>
+        <div className="mb-8 flex flex-col items-start justify-between gap-4 border-b border-zinc-200 pb-6 sm:flex-row sm:items-center">
+          <div>
+            <h1 className="text-3xl font-bold tracking-tight text-zinc-900">管家總指揮部</h1>
+            <p className="mt-2 text-sm text-zinc-500">歡迎返嚟！你可以在此管理租盤及跟進客人查詢。</p>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <Link
+              href="/list-property"
+              className="inline-flex items-center justify-center rounded-lg border border-zinc-300 bg-white px-4 py-2 text-sm font-semibold text-zinc-700 transition-colors hover:bg-zinc-50"
+            >
+              + 新增租盤
+            </Link>
+
+            <Link
+              href="/admin/inquiries"
+              className="inline-flex items-center justify-center rounded-lg bg-[#0f2540] px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-[#1a3a5c]"
+            >
+              📥 預約查詢收件箱
+            </Link>
+          </div>
+        </div>
 
         <section className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm sm:p-8">
           <h2 className="mb-4 flex items-center gap-2 text-lg font-semibold text-[#0f2540]"><PlusCircle className="h-5 w-5" />新增租盤</h2>
