@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Loader2, Save } from "lucide-react";
+import Link from "next/link";
 import { toast } from "sonner";
 import Navbar from "@/components/Navbar";
 import { Button } from "@/components/ui/button";
@@ -243,21 +244,55 @@ export default function DashboardPage() {
             <div className="p-8 text-center text-zinc-500">目前未有租盤資料。</div>
           ) : (
             <div className="grid gap-6 p-6 sm:grid-cols-2 lg:grid-cols-3">
-              {properties.map((property) => (
-                <article key={String(property.id)} className="rounded-xl border border-zinc-200 bg-zinc-50 p-4">
-                  <h3 className="line-clamp-2 text-base font-semibold text-zinc-900">
-                    {property.title || "未命名租盤"}
-                  </h3>
-                  <p className="mt-2 text-sm text-zinc-500">
-                    {(property.district || "未填地區") +
-                      (property.sub_district ? ` · ${property.sub_district}` : "")}
-                  </p>
-                  <p className="mt-3 text-lg font-bold text-[#0f2540]">
-                    HK${Number(property.price || 0).toLocaleString("zh-HK")}
-                    <span className="text-sm font-normal text-zinc-500"> / 月</span>
-                  </p>
-                </article>
-              ))}
+              {properties.map((property) => {
+                const coverImage =
+                  (typeof property.image_url === "string" && property.image_url) ||
+                  (typeof property.imageUrl === "string" && property.imageUrl) ||
+                  (Array.isArray(property.images) && typeof property.images[0] === "string" ? property.images[0] : "") ||
+                  "";
+
+                return (
+                  <article
+                    key={String(property.id)}
+                    className="flex flex-col overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm"
+                  >
+                    {coverImage ? (
+                      <img src={coverImage} alt={property.title || "租盤圖片"} className="h-48 w-full rounded-t-xl object-cover" />
+                    ) : (
+                      <div className="flex h-48 w-full items-center justify-center rounded-t-xl bg-zinc-100 text-sm text-zinc-500">
+                        暫無圖片
+                      </div>
+                    )}
+
+                    <div className="flex flex-1 flex-col p-4">
+                      <h3 className="line-clamp-2 text-base font-semibold text-zinc-900">
+                        {property.title || "未命名租盤"}
+                      </h3>
+                      <p className="mt-2 text-sm text-zinc-500">
+                        {(property.district || "未填地區") +
+                          (property.sub_district ? ` · ${property.sub_district}` : "")}
+                      </p>
+                      <p className="mt-3 text-lg font-bold text-[#0f2540]">
+                        HK${Number(property.price || 0).toLocaleString("zh-HK")}
+                        <span className="text-sm font-normal text-zinc-500"> / 月</span>
+                      </p>
+
+                      <hr className="my-4" />
+                      <div className="mt-auto flex items-center justify-between gap-3">
+                        <Link href={`/property/${property.id}`} className="text-sm font-medium text-zinc-700 hover:text-[#0f2540]">
+                          查看詳情
+                        </Link>
+                        <Link
+                          href={`/edit-property/${property.id}`}
+                          className="inline-flex items-center justify-center rounded-md bg-[#0f2540] px-3 py-2 text-sm font-semibold text-white transition-colors hover:bg-[#1a3a5c]"
+                        >
+                          修改放盤
+                        </Link>
+                      </div>
+                    </div>
+                  </article>
+                );
+              })}
             </div>
           )}
         </div>
