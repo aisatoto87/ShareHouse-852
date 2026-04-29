@@ -53,6 +53,7 @@ const HABIT_ITEMS: Array<{
 export default function DashboardPage() {
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
   const [userId, setUserId] = useState<string | null>(null);
+  const [properties, setProperties] = useState<any[]>([]);
   const [habits, setHabits] = useState<HabitState>(DEFAULT_HABITS);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -67,25 +68,42 @@ export default function DashboardPage() {
 
       if (!user) {
         setUserId(null);
+        setProperties([]);
         setIsLoading(false);
         return;
       }
 
       setUserId(user.id);
-      const { data } = await supabase
-        .from("profiles")
-        .select("habit_cleanliness, habit_ac_temp, habit_guests, habit_noise")
-        .eq("id", user.id)
-        .maybeSingle();
+      const [{ data: profileData }, { data: propertyRows, error: propertyError }] = await Promise.all([
+        supabase
+          .from("profiles")
+          .select("habit_cleanliness, habit_ac_temp, habit_guests, habit_noise")
+          .eq("id", user.id)
+          .maybeSingle(),
+        supabase.from("properties").select("*").order("created_at", { ascending: false }),
+      ]);
 
-      if (data) {
+      if (propertyError) {
+        setProperties([]);
+      } else {
+        const ownProperties = (propertyRows ?? []).filter((row) => {
+          const ownerId =
+            (typeof row.owner_id === "string" ? row.owner_id : null) ??
+            (typeof row.user_id === "string" ? row.user_id : null);
+          return ownerId ? ownerId === user.id : true;
+        });
+        setProperties(ownProperties);
+      }
+
+      if (profileData) {
         setHabits({
-          habit_cleanliness: Number(data.habit_cleanliness) || 3,
-          habit_ac_temp: Number(data.habit_ac_temp) || 3,
-          habit_guests: Number(data.habit_guests) || 3,
-          habit_noise: Number(data.habit_noise) || 3,
+          habit_cleanliness: Number(profileData.habit_cleanliness) || 3,
+          habit_ac_temp: Number(profileData.habit_ac_temp) || 3,
+          habit_guests: Number(profileData.habit_guests) || 3,
+          habit_noise: Number(profileData.habit_noise) || 3,
         });
       }
+
       setIsLoading(false);
     };
 
@@ -100,7 +118,7 @@ export default function DashboardPage() {
     if (!userId) return toast.error("請先登入再儲存設定。");
     setIsSaving(true);
     const { error } = await supabase
-      .from("profiles")
+        .from("profiles")
       .update({
         habit_cleanliness: habits.habit_cleanliness,
         habit_ac_temp: habits.habit_ac_temp,
@@ -216,9 +234,30 @@ export default function DashboardPage() {
                 </div>
               </div>
             </>
+          ) : isLoading ? (
+            <div className="flex items-center justify-center py-10 text-zinc-500">
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              讀取租盤中...
+            </div>
+          ) : properties.length === 0 ? (
+            <div className="p-8 text-center text-zinc-500">目前未有租盤資料。</div>
           ) : (
-            <div className="p-8 text-center text-zinc-500">
-              這裡將會顯示你上傳的租盤列表... (開發中)
+            <div className="grid gap-6 p-6 sm:grid-cols-2 lg:grid-cols-3">
+              {properties.map((property) => (
+                <article key={String(property.id)} className="rounded-xl border border-zinc-200 bg-zinc-50 p-4">
+                  <h3 className="line-clamp-2 text-base font-semibold text-zinc-900">
+                    {property.title || "未命名租盤"}
+                  </h3>
+                  <p className="mt-2 text-sm text-zinc-500">
+                    {(property.district || "未填地區") +
+                      (property.sub_district ? ` · ${property.sub_district}` : "")}
+                  </p>
+                  <p className="mt-3 text-lg font-bold text-[#0f2540]">
+                    HK${Number(property.price || 0).toLocaleString("zh-HK")}
+                    <span className="text-sm font-normal text-zinc-500"> / 月</span>
+                  </p>
+                </article>
+              ))}
             </div>
           )}
         </div>
