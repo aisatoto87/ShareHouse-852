@@ -5,7 +5,6 @@ import { Loader2, Save } from "lucide-react";
 import { toast } from "sonner";
 import Navbar from "@/components/Navbar";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 
 type HabitKey = "habit_cleanliness" | "habit_ac_temp" | "habit_guests" | "habit_noise";
@@ -122,15 +121,15 @@ export default function DashboardPage() {
     <div className="min-h-screen bg-zinc-50">
       <Navbar />
       <main className="mx-auto max-w-3xl px-4 py-8 sm:px-6 sm:py-10">
-        <Card className="rounded-2xl border-zinc-200 bg-white shadow-sm">
-          <CardHeader className="pb-3">
-            <CardTitle className="text-2xl font-bold tracking-tight text-zinc-900">
+        <div className="rounded-xl border border-zinc-200 bg-white text-zinc-950 shadow-sm">
+          <div className="flex flex-col space-y-1.5 p-6">
+            <h2 className="text-2xl font-semibold leading-none tracking-tight">
               我的室友配對檔案
-            </CardTitle>
+            </h2>
             <p className="text-sm text-zinc-500">調整生活習慣偏好，幫你搵到更夾嘅室友。</p>
-          </CardHeader>
+          </div>
 
-          <CardContent className="space-y-6">
+          <div className="space-y-6 p-6 pt-0">
             {isLoading ? (
               <div className="flex items-center justify-center py-10 text-zinc-500">
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -184,8 +183,8 @@ export default function DashboardPage() {
                 )}
               </Button>
             </div>
-          </CardContent>
-        </Card>
+          </div>
+        </div>
       </main>
     </div>
   );
