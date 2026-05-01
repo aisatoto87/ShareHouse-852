@@ -34,9 +34,22 @@ function buildWhatsAppUrl(title: string, phone: string): string {
 
 interface PropertyCardProps {
   property: Property;
+  tenantHabits?: {
+    cleanliness?: number;
+    ac_temp?: number;
+    guests?: number;
+    noise?: number;
+  };
 }
 
-export default function PropertyCard({ property }: PropertyCardProps) {
+function toHabitNumber(value: unknown): number | null {
+  if (value == null) return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return null;
+  return parsed;
+}
+
+export default function PropertyCard({ property, tenantHabits }: PropertyCardProps) {
   const { id, title, district, sub_district, price, size_sqft, imageUrl, tags, contact_whatsapp } =
     property;
   const formattedPrice = new Intl.NumberFormat("zh-HK").format(price);
@@ -46,6 +59,33 @@ export default function PropertyCard({ property }: PropertyCardProps) {
     e.preventDefault();
     e.stopPropagation();
   };
+  const propertyHabitSource = property as unknown as Record<string, unknown>;
+  const propertyHabits = {
+    cleanliness: toHabitNumber(propertyHabitSource.habit_cleanliness),
+    ac_temp: toHabitNumber(propertyHabitSource.habit_ac_temp),
+    guests: toHabitNumber(propertyHabitSource.habit_guests),
+    noise: toHabitNumber(propertyHabitSource.habit_noise),
+  };
+  const tenantHabitValues = {
+    cleanliness: toHabitNumber(tenantHabits?.cleanliness),
+    ac_temp: toHabitNumber(tenantHabits?.ac_temp),
+    guests: toHabitNumber(tenantHabits?.guests),
+    noise: toHabitNumber(tenantHabits?.noise),
+  };
+
+  const hasAllHabits = Object.values(propertyHabits).every((value) => value !== null)
+    && Object.values(tenantHabitValues).every((value) => value !== null);
+  const matchPercentage = hasAllHabits
+    ? Math.round(
+        ((16
+          - (Math.abs((tenantHabitValues.cleanliness as number) - (propertyHabits.cleanliness as number))
+            + Math.abs((tenantHabitValues.ac_temp as number) - (propertyHabits.ac_temp as number))
+            + Math.abs((tenantHabitValues.guests as number) - (propertyHabits.guests as number))
+            + Math.abs((tenantHabitValues.noise as number) - (propertyHabits.noise as number))))
+          / 16)
+          * 100
+      )
+    : null;
 
   return (
     <Card className="group overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-sm transition-shadow duration-300 hover:shadow-lg">
@@ -80,6 +120,25 @@ export default function PropertyCard({ property }: PropertyCardProps) {
             ))}
           </div>
         )}
+
+        {matchPercentage !== null ? (
+          <div
+            className={cn(
+              "absolute right-14 top-3 z-10 rounded-full px-2.5 py-1 text-[11px] font-semibold",
+              matchPercentage >= 80
+                ? "bg-emerald-500 text-white shadow-[0_0_10px_rgba(16,185,129,0.5)]"
+                : matchPercentage <= 40
+                  ? "bg-red-500 text-white"
+                  : "bg-slate-100 text-slate-700"
+            )}
+          >
+            {matchPercentage >= 80
+              ? `✨ ${matchPercentage}% 神仙契合`
+              : matchPercentage <= 40
+                ? `⚠️ ${matchPercentage}% 習慣互斥`
+                : `🤝 ${matchPercentage}% 契合`}
+          </div>
+        ) : null}
 
         <div
           className="absolute right-3 top-3 z-10 rounded-full bg-black/40 p-0.5 backdrop-blur-sm"
