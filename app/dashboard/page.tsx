@@ -54,6 +54,7 @@ const HABIT_ITEMS: Array<{
 export default function DashboardPage() {
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
   const [userId, setUserId] = useState<string | null>(null);
+  const [userRole, setUserRole] = useState<string>("");
   const [properties, setProperties] = useState<any[]>([]);
   const [habits, setHabits] = useState<HabitState>(DEFAULT_HABITS);
   const [isLoading, setIsLoading] = useState(true);
@@ -69,6 +70,7 @@ export default function DashboardPage() {
 
       if (!user) {
         setUserId(null);
+        setUserRole("");
         setProperties([]);
         setIsLoading(false);
         return;
@@ -78,7 +80,7 @@ export default function DashboardPage() {
       const [{ data: profileData }, { data: propertyRows, error: propertyError }] = await Promise.all([
         supabase
           .from("profiles")
-          .select("habit_cleanliness, habit_ac_temp, habit_guests, habit_noise")
+          .select("habit_cleanliness, habit_ac_temp, habit_guests, habit_noise, role")
           .eq("id", user.id)
           .maybeSingle(),
         supabase.from("properties").select("*").order("created_at", { ascending: false }),
@@ -103,6 +105,9 @@ export default function DashboardPage() {
           habit_guests: Number(profileData.habit_guests) || 3,
           habit_noise: Number(profileData.habit_noise) || 3,
         });
+        setUserRole(profileData.role || "tenant");
+      } else {
+        setUserRole("tenant");
       }
 
       setIsLoading(false);
@@ -142,7 +147,12 @@ export default function DashboardPage() {
       <Navbar />
       <main className="mx-auto max-w-3xl px-4 py-8 sm:px-6 sm:py-10">
         <div className="mb-6">
-          <h1 className="text-3xl font-bold tracking-tight text-zinc-900">我的帳號</h1>
+          <div className="flex items-center">
+            <h1 className="text-3xl font-bold tracking-tight text-zinc-900">我的帳號</h1>
+            <span className="ml-4 inline-flex items-center rounded-full bg-blue-50 px-3 py-1 text-sm font-medium text-blue-700 ring-1 ring-inset ring-blue-700/10">
+              {userRole === "admin" ? "🛡️ 管家" : userRole === "tenant" ? "👤 租客" : "🏠 業主/租客"}
+            </span>
+          </div>
           <div className="mt-4 flex items-center gap-6 border-b border-zinc-200">
             <button
               type="button"
@@ -155,17 +165,19 @@ export default function DashboardPage() {
             >
               室友配對檔案
             </button>
-            <button
-              type="button"
-              onClick={() => setActiveTab("properties")}
-              className={`border-b-2 px-1 pb-3 text-sm font-semibold transition-colors ${
-                activeTab === "properties"
-                  ? "border-[#0f2540] text-[#0f2540]"
-                  : "border-transparent text-zinc-500 hover:text-zinc-700"
-              }`}
-            >
-              我的放盤管理
-            </button>
+            {userRole !== "tenant" && (
+              <button
+                type="button"
+                onClick={() => setActiveTab("properties")}
+                className={`border-b-2 px-1 pb-3 text-sm font-semibold transition-colors ${
+                  activeTab === "properties"
+                    ? "border-[#0f2540] text-[#0f2540]"
+                    : "border-transparent text-zinc-500 hover:text-zinc-700"
+                }`}
+              >
+                我的放盤管理
+              </button>
+            )}
           </div>
         </div>
 
