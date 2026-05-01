@@ -32,6 +32,10 @@ type FormState = {
   size_sqft: string;
   description: string;
   contact_whatsapp: string;
+  habit_cleanliness: number;
+  habit_ac_temp: number;
+  habit_guests: number;
+  habit_noise: number;
 };
 type GalleryUploadItem = {
   id: string;
@@ -52,6 +56,10 @@ const initialForm: FormState = {
   size_sqft: "",
   description: "",
   contact_whatsapp: "",
+  habit_cleanliness: 3,
+  habit_ac_temp: 3,
+  habit_guests: 3,
+  habit_noise: 3,
 };
 
 export default function EditPropertyPage() {
@@ -139,6 +147,10 @@ export default function EditPropertyPage() {
         size_sqft: String(data.size_sqft ?? ""),
         description: data.description ?? "",
         contact_whatsapp: data.contact_whatsapp ?? "",
+        habit_cleanliness: data.habit_cleanliness == null ? 3 : Number(data.habit_cleanliness) || 3,
+        habit_ac_temp: data.habit_ac_temp == null ? 3 : Number(data.habit_ac_temp) || 3,
+        habit_guests: data.habit_guests == null ? 3 : Number(data.habit_guests) || 3,
+        habit_noise: data.habit_noise == null ? 3 : Number(data.habit_noise) || 3,
       });
       setSelectedTags(Array.isArray(data.tags) ? data.tags : []);
       setSelectedAmenities(Array.isArray(data.amenities) ? data.amenities : []);
@@ -316,6 +328,10 @@ export default function EditPropertyPage() {
       imageUrl: mainUrl,
       description: form.description.trim(),
       contact_whatsapp: form.contact_whatsapp.trim(),
+      habit_cleanliness: form.habit_cleanliness,
+      habit_ac_temp: form.habit_ac_temp,
+      habit_guests: form.habit_guests,
+      habit_noise: form.habit_noise,
       amenities: selectedAmenities,
       roommates_req: selectedRoommateReqs,
       tags: selectedTags,
@@ -386,6 +402,98 @@ export default function EditPropertyPage() {
             <div className="sm:col-span-2"><label className="mb-1 block text-sm font-medium text-zinc-700">WhatsApp *</label><Input value={form.contact_whatsapp} onChange={(e) => updateForm("contact_whatsapp", e.target.value)} /></div>
 
             <TagInputField label="設施" selectedItems={selectedAmenities} query={amenityQuery} setQuery={setAmenityQuery} open={amenityComboboxOpen} setOpen={setAmenityComboboxOpen} filteredOptions={filteredAmenityOptions} emptyText="找不到設施" placeholder="輸入設施後按 Enter" heading="常用設施" onToggle={toggleAmenity} onRemove={removeAmenity} onAddCustom={() => addCustom(amenityQuery, setAmenityQuery, selectedAmenities, setSelectedAmenities)} canAddCustom={canAddCustomAmenity} />
+            <div className="sm:col-span-2 rounded-xl border border-zinc-200 bg-zinc-50/70 p-4">
+              <h3 className="text-sm font-semibold text-[#0f2540]">✨ 單位專屬 Vibe (配對神仙室友必填)</h3>
+              <div className="mt-3 space-y-4">
+                <section className="rounded-xl border border-zinc-200 bg-white p-4">
+                  <div className="mb-2 flex items-center justify-between gap-3">
+                    <h4 className="text-sm font-semibold text-zinc-800">洗碗習慣</h4>
+                    <span className="inline-flex min-w-9 items-center justify-center rounded-full bg-[#0f2540] px-2 py-0.5 text-xs font-bold text-white">
+                      {form.habit_cleanliness}
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min="1"
+                    max="5"
+                    step="1"
+                    value={form.habit_cleanliness}
+                    onChange={(e) => updateForm("habit_cleanliness", Number(e.target.value))}
+                    className="w-full accent-[#0f2540]"
+                  />
+                  <div className="mt-2 flex items-center justify-between text-xs text-zinc-500">
+                    <span>食完即洗(1)</span>
+                    <span>隔夜先洗(5)</span>
+                  </div>
+                </section>
+
+                <section className="rounded-xl border border-zinc-200 bg-white p-4">
+                  <div className="mb-2 flex items-center justify-between gap-3">
+                    <h4 className="text-sm font-semibold text-zinc-800">冷氣偏好</h4>
+                    <span className="inline-flex min-w-9 items-center justify-center rounded-full bg-[#0f2540] px-2 py-0.5 text-xs font-bold text-white">
+                      {form.habit_ac_temp}
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min="1"
+                    max="5"
+                    step="1"
+                    value={form.habit_ac_temp}
+                    onChange={(e) => updateForm("habit_ac_temp", Number(e.target.value))}
+                    className="w-full accent-[#0f2540]"
+                  />
+                  <div className="mt-2 flex items-center justify-between text-xs text-zinc-500">
+                    <span>18度雪房(1)</span>
+                    <span>25度環保(5)</span>
+                  </div>
+                </section>
+
+                <section className="rounded-xl border border-zinc-200 bg-white p-4">
+                  <div className="mb-2 flex items-center justify-between gap-3">
+                    <h4 className="text-sm font-semibold text-zinc-800">訪客政策</h4>
+                    <span className="inline-flex min-w-9 items-center justify-center rounded-full bg-[#0f2540] px-2 py-0.5 text-xs font-bold text-white">
+                      {form.habit_guests}
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min="1"
+                    max="5"
+                    step="1"
+                    value={form.habit_guests}
+                    onChange={(e) => updateForm("habit_guests", Number(e.target.value))}
+                    className="w-full accent-[#0f2540]"
+                  />
+                  <div className="mt-2 flex items-center justify-between text-xs text-zinc-500">
+                    <span>絕對唔得(1)</span>
+                    <span>當自己屋企(5)</span>
+                  </div>
+                </section>
+
+                <section className="rounded-xl border border-zinc-200 bg-white p-4">
+                  <div className="mb-2 flex items-center justify-between gap-3">
+                    <h4 className="text-sm font-semibold text-zinc-800">噪音容忍</h4>
+                    <span className="inline-flex min-w-9 items-center justify-center rounded-full bg-[#0f2540] px-2 py-0.5 text-xs font-bold text-white">
+                      {form.habit_noise}
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min="1"
+                    max="5"
+                    step="1"
+                    value={form.habit_noise}
+                    onChange={(e) => updateForm("habit_noise", Number(e.target.value))}
+                    className="w-full accent-[#0f2540]"
+                  />
+                  <div className="mt-2 flex items-center justify-between text-xs text-zinc-500">
+                    <span>絕對安靜(1)</span>
+                    <span>開Party都得(5)</span>
+                  </div>
+                </section>
+              </div>
+            </div>
             <TagInputField label="室友要求" selectedItems={selectedRoommateReqs} query={roommateReqQuery} setQuery={setRoommateReqQuery} open={roommateReqComboboxOpen} setOpen={setRoommateReqComboboxOpen} filteredOptions={filteredReqOptions} emptyText="找不到室友要求" placeholder="輸入要求後按 Enter" heading="常用室友要求" onToggle={toggleReq} onRemove={removeReq} onAddCustom={() => addCustom(roommateReqQuery, setRoommateReqQuery, selectedRoommateReqs, setSelectedRoommateReqs)} canAddCustom={canAddCustomReq} />
             <TagInputField label="標籤" selectedItems={selectedTags} query={tagQuery} setQuery={setTagQuery} open={tagComboboxOpen} setOpen={setTagComboboxOpen} filteredOptions={filteredTagOptions} emptyText="找不到標籤" placeholder="輸入標籤後按 Enter" heading="常用標籤" onToggle={toggleTag} onRemove={removeTag} onAddCustom={() => addCustom(tagQuery, setTagQuery, selectedTags, setSelectedTags)} canAddCustom={canAddCustomTag} />
 
