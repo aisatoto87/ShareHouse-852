@@ -4,6 +4,7 @@ import { type FormEvent, type KeyboardEvent, useEffect, useMemo, useState } from
 import { Loader2, PlusCircle, UploadCloud, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
+import HabitInput from "@/components/HabitInput";
 import Navbar from "@/components/Navbar";
 import { TagInputField } from "@/components/TagInputField";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
@@ -626,93 +627,34 @@ export default function ListPropertyPage() {
             <div className="sm:col-span-2 rounded-xl border border-zinc-200 bg-zinc-50/70 p-4">
               <h3 className="text-sm font-semibold text-[#0f2540]">✨ 單位專屬 Vibe (配對神仙室友必填)</h3>
               <div className="mt-3 space-y-4">
-                <section className="rounded-xl border border-zinc-200 bg-white p-4">
-                  <div className="mb-2 flex items-center justify-between gap-3">
-                    <h4 className="text-sm font-semibold text-zinc-800">洗碗習慣</h4>
-                    <span className="inline-flex min-w-9 items-center justify-center rounded-full bg-[#0f2540] px-2 py-0.5 text-xs font-bold text-white">
-                      {form.habit_cleanliness}
-                    </span>
-                  </div>
-                  <input
-                    type="range"
-                    min="1"
-                    max="5"
-                    step="1"
-                    value={form.habit_cleanliness}
-                    onChange={(e) => updateForm("habit_cleanliness", Number(e.target.value))}
-                    className="w-full accent-[#0f2540]"
-                  />
-                  <div className="mt-2 flex items-center justify-between text-xs text-zinc-500">
-                    <span>食完即洗(1)</span>
-                    <span>隔夜先洗(5)</span>
-                  </div>
-                </section>
-
-                <section className="rounded-xl border border-zinc-200 bg-white p-4">
-                  <div className="mb-2 flex items-center justify-between gap-3">
-                    <h4 className="text-sm font-semibold text-zinc-800">冷氣偏好</h4>
-                    <span className="inline-flex min-w-9 items-center justify-center rounded-full bg-[#0f2540] px-2 py-0.5 text-xs font-bold text-white">
-                      {form.habit_ac_temp}
-                    </span>
-                  </div>
-                  <input
-                    type="range"
-                    min="1"
-                    max="5"
-                    step="1"
-                    value={form.habit_ac_temp}
-                    onChange={(e) => updateForm("habit_ac_temp", Number(e.target.value))}
-                    className="w-full accent-[#0f2540]"
-                  />
-                  <div className="mt-2 flex items-center justify-between text-xs text-zinc-500">
-                    <span>18度雪房(1)</span>
-                    <span>25度環保(5)</span>
-                  </div>
-                </section>
-
-                <section className="rounded-xl border border-zinc-200 bg-white p-4">
-                  <div className="mb-2 flex items-center justify-between gap-3">
-                    <h4 className="text-sm font-semibold text-zinc-800">訪客政策</h4>
-                    <span className="inline-flex min-w-9 items-center justify-center rounded-full bg-[#0f2540] px-2 py-0.5 text-xs font-bold text-white">
-                      {form.habit_guests}
-                    </span>
-                  </div>
-                  <input
-                    type="range"
-                    min="1"
-                    max="5"
-                    step="1"
-                    value={form.habit_guests}
-                    onChange={(e) => updateForm("habit_guests", Number(e.target.value))}
-                    className="w-full accent-[#0f2540]"
-                  />
-                  <div className="mt-2 flex items-center justify-between text-xs text-zinc-500">
-                    <span>絕對唔得(1)</span>
-                    <span>當自己屋企(5)</span>
-                  </div>
-                </section>
-
-                <section className="rounded-xl border border-zinc-200 bg-white p-4">
-                  <div className="mb-2 flex items-center justify-between gap-3">
-                    <h4 className="text-sm font-semibold text-zinc-800">噪音容忍</h4>
-                    <span className="inline-flex min-w-9 items-center justify-center rounded-full bg-[#0f2540] px-2 py-0.5 text-xs font-bold text-white">
-                      {form.habit_noise}
-                    </span>
-                  </div>
-                  <input
-                    type="range"
-                    min="1"
-                    max="5"
-                    step="1"
-                    value={form.habit_noise}
-                    onChange={(e) => updateForm("habit_noise", Number(e.target.value))}
-                    className="w-full accent-[#0f2540]"
-                  />
-                  <div className="mt-2 flex items-center justify-between text-xs text-zinc-500">
-                    <span>絕對安靜(1)</span>
-                    <span>開Party都得(5)</span>
-                  </div>
-                </section>
+                <HabitInput
+                  label="洗碗習慣"
+                  value={form.habit_cleanliness}
+                  onChange={(nextValue) => updateForm("habit_cleanliness", nextValue)}
+                  leftText="食完即洗(1)"
+                  rightText="隔夜先洗(5)"
+                />
+                <HabitInput
+                  label="冷氣偏好"
+                  value={form.habit_ac_temp}
+                  onChange={(nextValue) => updateForm("habit_ac_temp", nextValue)}
+                  leftText="18度雪房(1)"
+                  rightText="25度環保(5)"
+                />
+                <HabitInput
+                  label="訪客政策"
+                  value={form.habit_guests}
+                  onChange={(nextValue) => updateForm("habit_guests", nextValue)}
+                  leftText="絕對唔得(1)"
+                  rightText="當自己屋企(5)"
+                />
+                <HabitInput
+                  label="噪音容忍"
+                  value={form.habit_noise}
+                  onChange={(nextValue) => updateForm("habit_noise", nextValue)}
+                  leftText="絕對安靜(1)"
+                  rightText="開Party都得(5)"
+                />
               </div>
             </div>
             <TagInputField

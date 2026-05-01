@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Loader2, Save } from "lucide-react";
 import Link from "next/link";
 import { toast } from "sonner";
+import HabitInput from "@/components/HabitInput";
 import Navbar from "@/components/Navbar";
 import { Button } from "@/components/ui/button";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
@@ -199,29 +200,14 @@ export default function DashboardPage() {
                   </div>
                 ) : (
                   HABIT_ITEMS.map((item) => (
-                    <section key={item.key} className="rounded-xl border border-zinc-200 bg-zinc-50/70 p-4">
-                      <div className="mb-2 flex items-center justify-between gap-3">
-                        <h2 className="text-sm font-semibold text-zinc-800">{item.title}</h2>
-                        <span className="inline-flex min-w-9 items-center justify-center rounded-full bg-[#0f2540] px-2 py-0.5 text-xs font-bold text-white">
-                          {habits[item.key]}
-                        </span>
-                      </div>
-
-                      <input
-                        type="range"
-                        min="1"
-                        max="5"
-                        step="1"
-                        value={habits[item.key]}
-                        onChange={(e) => updateHabit(item.key, Number(e.target.value))}
-                        className="w-full accent-[#0f2540]"
-                      />
-
-                      <div className="mt-2 flex items-center justify-between text-xs text-zinc-500">
-                        <span>{item.leftLabel}</span>
-                        <span>{item.rightLabel}</span>
-                      </div>
-                    </section>
+                    <HabitInput
+                      key={item.key}
+                      label={item.title}
+                      value={habits[item.key]}
+                      onChange={(nextValue) => updateHabit(item.key, nextValue)}
+                      leftText={item.leftLabel}
+                      rightText={item.rightLabel}
+                    />
                   ))
                 )}
 
