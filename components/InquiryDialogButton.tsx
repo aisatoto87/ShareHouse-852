@@ -1,13 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import { Loader2 } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 
 type InquiryDialogButtonProps = {
   propertyId: string;
@@ -15,11 +17,49 @@ type InquiryDialogButtonProps = {
 };
 
 export default function InquiryDialogButton({ propertyId, className }: InquiryDialogButtonProps) {
+  const router = useRouter();
+  const supabase = useMemo(() => createSupabaseBrowserClient(), []);
   const [open, setOpen] = useState(false);
+  const [showProfileAlert, setShowProfileAlert] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [name, setName] = useState("");
   const [contact, setContact] = useState("");
   const [content, setContent] = useState("");
+
+  async function handleApplyClick() {
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser();
+
+    if (authError) {
+      toast.error("讀取登入狀態失敗，請稍後再試。");
+      return;
+    }
+
+    if (!user) {
+      toast.error("請先登入後再申請合租或預約查詢。");
+      return;
+    }
+
+    const { data: profile, error: profileError } = await supabase
+      .from("profiles")
+      .select("habit_cleanliness")
+      .eq("id", user.id)
+      .maybeSingle();
+
+    if (profileError) {
+      toast.error("讀取配對檔案失敗，請稍後再試。");
+      return;
+    }
+
+    if (profile?.habit_cleanliness == null) {
+      setShowProfileAlert(true);
+      return;
+    }
+
+    setOpen(true);
+  }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -69,7 +109,7 @@ export default function InquiryDialogButton({ propertyId, className }: InquiryDi
     <>
       <Button
         type="button"
-        onClick={() => setOpen(true)}
+        onClick={() => void handleApplyClick()}
         className={className}
       >
         預約睇樓
@@ -144,6 +184,32 @@ export default function InquiryDialogButton({ propertyId, className }: InquiryDi
           </form>
         </DialogContent>
       </Dialog>
+
+      {showProfileAlert && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm px-4">
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
+            <h3 className="text-xl font-bold text-zinc-900">配對神仙室友的第一步！✨</h3>
+            <p className="mt-3 text-sm leading-relaxed text-zinc-600">
+              為了幫你精準避開生活習慣不合的地獄室友，請先花 30 秒設定你的生活習慣標籤，我們才能為你啟動配對演算法喔！
+            </p>
+            <div className="mt-6 flex items-center justify-end gap-3">
+              <Button type="button" variant="outline" onClick={() => setShowProfileAlert(false)}>
+                稍後再說
+              </Button>
+              <Button
+                type="button"
+                className="bg-[#0f2540] text-white hover:bg-[#1a3a5c]"
+                onClick={() => {
+                  setShowProfileAlert(false);
+                  router.push("/dashboard");
+                }}
+              >
+                立即去設定 ➔
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }
