@@ -66,6 +66,10 @@ type FormState = {
   size_sqft: string;
   description: string;
   contact_whatsapp: string;
+  habit_cleanliness: number;
+  habit_ac_temp: number;
+  habit_guests: number;
+  habit_noise: number;
 };
 
 type GalleryUploadItem = {
@@ -83,6 +87,10 @@ const initialForm: FormState = {
   size_sqft: "",
   description: "",
   contact_whatsapp: "",
+  habit_cleanliness: 3,
+  habit_ac_temp: 3,
+  habit_guests: 3,
+  habit_noise: 3,
 };
 
 export default function ListPropertyPage() {
@@ -381,6 +389,10 @@ export default function ListPropertyPage() {
       imageUrl: publicUrl,
       description: form.description.trim(),
       contact_whatsapp: form.contact_whatsapp.trim(),
+      habit_cleanliness: form.habit_cleanliness,
+      habit_ac_temp: form.habit_ac_temp,
+      habit_guests: form.habit_guests,
+      habit_noise: form.habit_noise,
       amenities: selectedAmenities,
       roommates_req: selectedRoommateReqs,
       tags: selectedTags,
@@ -611,6 +623,98 @@ export default function ListPropertyPage() {
               onAddCustom={addCustomAmenity}
               canAddCustom={canAddCustomAmenity}
             />
+            <div className="sm:col-span-2 rounded-xl border border-zinc-200 bg-zinc-50/70 p-4">
+              <h3 className="text-sm font-semibold text-[#0f2540]">✨ 單位專屬 Vibe (配對神仙室友必填)</h3>
+              <div className="mt-3 space-y-4">
+                <section className="rounded-xl border border-zinc-200 bg-white p-4">
+                  <div className="mb-2 flex items-center justify-between gap-3">
+                    <h4 className="text-sm font-semibold text-zinc-800">洗碗習慣</h4>
+                    <span className="inline-flex min-w-9 items-center justify-center rounded-full bg-[#0f2540] px-2 py-0.5 text-xs font-bold text-white">
+                      {form.habit_cleanliness}
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min="1"
+                    max="5"
+                    step="1"
+                    value={form.habit_cleanliness}
+                    onChange={(e) => updateForm("habit_cleanliness", Number(e.target.value))}
+                    className="w-full accent-[#0f2540]"
+                  />
+                  <div className="mt-2 flex items-center justify-between text-xs text-zinc-500">
+                    <span>食完即洗(1)</span>
+                    <span>隔夜先洗(5)</span>
+                  </div>
+                </section>
+
+                <section className="rounded-xl border border-zinc-200 bg-white p-4">
+                  <div className="mb-2 flex items-center justify-between gap-3">
+                    <h4 className="text-sm font-semibold text-zinc-800">冷氣偏好</h4>
+                    <span className="inline-flex min-w-9 items-center justify-center rounded-full bg-[#0f2540] px-2 py-0.5 text-xs font-bold text-white">
+                      {form.habit_ac_temp}
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min="1"
+                    max="5"
+                    step="1"
+                    value={form.habit_ac_temp}
+                    onChange={(e) => updateForm("habit_ac_temp", Number(e.target.value))}
+                    className="w-full accent-[#0f2540]"
+                  />
+                  <div className="mt-2 flex items-center justify-between text-xs text-zinc-500">
+                    <span>18度雪房(1)</span>
+                    <span>25度環保(5)</span>
+                  </div>
+                </section>
+
+                <section className="rounded-xl border border-zinc-200 bg-white p-4">
+                  <div className="mb-2 flex items-center justify-between gap-3">
+                    <h4 className="text-sm font-semibold text-zinc-800">訪客政策</h4>
+                    <span className="inline-flex min-w-9 items-center justify-center rounded-full bg-[#0f2540] px-2 py-0.5 text-xs font-bold text-white">
+                      {form.habit_guests}
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min="1"
+                    max="5"
+                    step="1"
+                    value={form.habit_guests}
+                    onChange={(e) => updateForm("habit_guests", Number(e.target.value))}
+                    className="w-full accent-[#0f2540]"
+                  />
+                  <div className="mt-2 flex items-center justify-between text-xs text-zinc-500">
+                    <span>絕對唔得(1)</span>
+                    <span>當自己屋企(5)</span>
+                  </div>
+                </section>
+
+                <section className="rounded-xl border border-zinc-200 bg-white p-4">
+                  <div className="mb-2 flex items-center justify-between gap-3">
+                    <h4 className="text-sm font-semibold text-zinc-800">噪音容忍</h4>
+                    <span className="inline-flex min-w-9 items-center justify-center rounded-full bg-[#0f2540] px-2 py-0.5 text-xs font-bold text-white">
+                      {form.habit_noise}
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min="1"
+                    max="5"
+                    step="1"
+                    value={form.habit_noise}
+                    onChange={(e) => updateForm("habit_noise", Number(e.target.value))}
+                    className="w-full accent-[#0f2540]"
+                  />
+                  <div className="mt-2 flex items-center justify-between text-xs text-zinc-500">
+                    <span>絕對安靜(1)</span>
+                    <span>開Party都得(5)</span>
+                  </div>
+                </section>
+              </div>
+            </div>
             <TagInputField
               label="室友要求 (roommates_req，多選可自訂)"
               selectedItems={selectedRoommateReqs}
