@@ -37,38 +37,33 @@ export default function ListingsClient({ allProperties }: ListingsClientProps) {
         data: { user },
       } = await supabase.auth.getUser();
 
-      if (!active || !user) {
-        if (active) setTenantHabits(null);
+      if (!active) return;
+      if (!user) {
+        setTenantHabits(null);
         return;
       }
 
-      const { data: profileData } = await supabase
+      const { data } = await supabase
         .from("profiles")
         .select("habit_cleanliness, habit_ac_temp, habit_guests, habit_noise")
         .eq("id", user.id)
-        .maybeSingle();
+        .single();
 
-      if (!active || !profileData) {
-        if (active) setTenantHabits(null);
+      if (!active) return;
+
+      if (data && data.habit_cleanliness !== null) {
+        setTenantHabits({
+          cleanliness: Number(data.habit_cleanliness),
+          ac_temp: Number(data.habit_ac_temp),
+          guests: Number(data.habit_guests),
+          noise: Number(data.habit_noise),
+        });
         return;
       }
 
-      const cleanliness = Number(profileData.habit_cleanliness);
-      const ac_temp = Number(profileData.habit_ac_temp);
-      const guests = Number(profileData.habit_guests);
-      const noise = Number(profileData.habit_noise);
-      const hasAllHabits = [cleanliness, ac_temp, guests, noise].every((value) => Number.isFinite(value));
-
-      setTenantHabits(
-        hasAllHabits
-          ? {
-              cleanliness,
-              ac_temp,
-              guests,
-              noise,
-            }
-          : null
-      );
+      if (active) {
+        setTenantHabits(null);
+      }
     }
 
     void loadTenantHabits();
