@@ -64,7 +64,7 @@ export default function ListingGrid({ properties, total, sortByMatch, tenantHabi
       ) : (
         <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
           {displayProperties.map((property) => (
-            <PropertyCard key={property.id} property={property} tenantHabits={tenantHabits} />
+            <PropertyCard key={property.id} property={property} tenantHabits={tenantHabits || undefined} />
           ))}
         </div>
       )}
