@@ -392,6 +392,7 @@ export default function AdminPage() {
     setDeletingId(null);
     if (error) return toast.error(`刪除失敗：${error.message}`);
     toast.success("已刪除租盤");
+    setProperties((prev) => prev.filter((p) => p.id !== id));
     await fetchProperties();
   }
 
