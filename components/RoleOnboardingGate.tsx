@@ -82,7 +82,13 @@ export default function RoleOnboardingGate() {
         return;
       }
 
-      // 第二道防線：僅在已確認登入且 profile 存在時，依 profile.role 決定是否顯示 Modal
+      // 第二道防線：admin / 已有合法 role 一律放行，不顯示 Modal
+      if (data.role === "admin") {
+        setNeedsOnboarding(false);
+        setChecking(false);
+        return;
+      }
+
       if (!hasValidProfileRole(data.role)) {
         setNeedsOnboarding(true);
       } else {
