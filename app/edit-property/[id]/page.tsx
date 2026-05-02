@@ -119,6 +119,13 @@ export default function EditPropertyPage() {
         return;
       }
 
+      const { data: userProfile } = await supabase
+        .from("profiles")
+        .select("role")
+        .eq("id", user.id)
+        .maybeSingle();
+      const userIsAdmin = userProfile?.role === "admin";
+
       const { data, error } = await supabase.from("properties").select("*").eq("id", propertyId).single();
 
       if (cancelled) return;
@@ -132,7 +139,7 @@ export default function EditPropertyPage() {
       }
 
       const ownerId = data.owner_id as string | null | undefined;
-      if (!ownerId || ownerId !== user.id) {
+      if (!ownerId || (ownerId !== user.id && !userIsAdmin)) {
         toast.error("無權限存取");
         router.replace("/dashboard");
         setAuthChecking(false);
@@ -278,7 +285,13 @@ export default function EditPropertyPage() {
       .select("owner_id")
       .eq("id", propertyId)
       .single();
-    if (accessError || !accessRow || accessRow.owner_id !== user.id) {
+    const { data: userProfile } = await supabase
+      .from("profiles")
+      .select("role")
+      .eq("id", user.id)
+      .maybeSingle();
+    const userIsAdmin = userProfile?.role === "admin";
+    if (accessError || !accessRow || (accessRow.owner_id !== user.id && !userIsAdmin)) {
       toast.error("無權限存取");
       router.replace("/dashboard");
       return;
@@ -338,12 +351,14 @@ export default function EditPropertyPage() {
       tags: selectedTags,
       gallery: mergedGallery,
     };
-    const { data: updatedRows, error } = await supabase
+    const updateQuery = supabase
       .from("properties")
       .update(payload)
-      .eq("id", propertyId)
-      .eq("owner_id", user.id)
-      .select("id");
+      .eq("id", propertyId);
+    if (!userIsAdmin) {
+      updateQuery.eq("owner_id", user.id);
+    }
+    const { data: updatedRows, error } = await updateQuery.select("id");
     setIsSaving(false);
     if (error) return toast.error(`更新失敗：${error.message}`);
     if (!updatedRows?.length) {
