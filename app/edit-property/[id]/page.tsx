@@ -71,6 +71,7 @@ export default function EditPropertyPage() {
 
   const [authChecking, setAuthChecking] = useState(true);
   const [loadingProperty, setLoadingProperty] = useState(true);
+  const [accessDenied, setAccessDenied] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isUploadingGallery, setIsUploadingGallery] = useState(false);
   const [deletingGalleryEntry, setDeletingGalleryEntry] = useState<string | null>(null);
@@ -103,6 +104,7 @@ export default function EditPropertyPage() {
     async function loadPropertyWithAccess() {
       setAuthChecking(true);
       setLoadingProperty(true);
+      setAccessDenied(false);
 
       const {
         data: { user },
@@ -119,12 +121,11 @@ export default function EditPropertyPage() {
         return;
       }
 
-      const { data: userProfile } = await supabase
+      const { data: profile } = await supabase
         .from("profiles")
         .select("role")
         .eq("id", user.id)
-        .maybeSingle();
-      const userIsAdmin = userProfile?.role === "admin";
+        .single();
 
       const { data, error } = await supabase.from("properties").select("*").eq("id", propertyId).single();
 
@@ -139,9 +140,8 @@ export default function EditPropertyPage() {
       }
 
       const ownerId = data.owner_id as string | null | undefined;
-      if (!ownerId || (ownerId !== user.id && !userIsAdmin)) {
-        toast.error("無權限存取");
-        router.replace("/dashboard");
+      if (ownerId !== user?.id && profile?.role !== "admin") {
+        setAccessDenied(true);
         setAuthChecking(false);
         setLoadingProperty(false);
         return;
@@ -285,13 +285,12 @@ export default function EditPropertyPage() {
       .select("owner_id")
       .eq("id", propertyId)
       .single();
-    const { data: userProfile } = await supabase
+    const { data: profile } = await supabase
       .from("profiles")
       .select("role")
       .eq("id", user.id)
-      .maybeSingle();
-    const userIsAdmin = userProfile?.role === "admin";
-    if (accessError || !accessRow || (accessRow.owner_id !== user.id && !userIsAdmin)) {
+      .single();
+    if (accessError || !accessRow || (accessRow.owner_id !== user?.id && profile?.role !== "admin")) {
       toast.error("無權限存取");
       router.replace("/dashboard");
       return;
@@ -355,7 +354,7 @@ export default function EditPropertyPage() {
       .from("properties")
       .update(payload)
       .eq("id", propertyId);
-    if (!userIsAdmin) {
+    if (profile?.role !== "admin") {
       updateQuery.eq("owner_id", user.id);
     }
     const { data: updatedRows, error } = await updateQuery.select("id");
@@ -380,6 +379,19 @@ export default function EditPropertyPage() {
             <Loader2 className="h-4 w-4 animate-spin" />
             載入編輯資料中...
           </p>
+        </main>
+      </div>
+    );
+  }
+
+  if (accessDenied) {
+    return (
+      <div className="min-h-screen bg-zinc-50">
+        <Navbar />
+        <main className="mx-auto max-w-6xl px-4 py-12 sm:px-6">
+          <div className="rounded-2xl border border-zinc-200 bg-white p-6 text-sm text-zinc-700 shadow-sm">
+            沒有權限存取此租盤。
+          </div>
         </main>
       </div>
     );
