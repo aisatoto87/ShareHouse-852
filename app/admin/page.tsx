@@ -388,11 +388,16 @@ export default function AdminPage() {
     const ok = window.confirm("確定要刪除這筆租盤嗎？此操作無法還原。");
     if (!ok) return;
     setDeletingId(propertyId);
-    const { error } = await supabase.from("properties").delete().eq("id", propertyId);
+    const { data, error } = await supabase.from("properties").delete().eq("id", propertyId).select();
     setDeletingId(null);
     if (error) {
       console.error("刪除失敗詳情:", error);
       toast.error(`刪除失敗：${error.message}`);
+      return;
+    }
+    if (!data || data.length === 0) {
+      console.error("刪除失敗：權限不足或找不到該租盤 (被 RLS 擋下)");
+      toast.error("刪除失敗：權限不足，請確定你是該租盤擁有者或 Admin");
       return;
     }
 
