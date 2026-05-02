@@ -17,9 +17,16 @@ import {
 interface FilterBarProps {
   filters: Filters;
   onChange: (filters: Filters) => void;
+  sortByMatch: boolean;
+  onToggleSortByMatch: () => void;
 }
 
-export default function FilterBar({ filters, onChange }: FilterBarProps) {
+export default function FilterBar({
+  filters,
+  onChange,
+  sortByMatch,
+  onToggleSortByMatch,
+}: FilterBarProps) {
   return (
     <div className="sticky top-[57px] z-40 border-b border-zinc-200 bg-white/95 backdrop-blur-sm">
       <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-2.5 px-4 py-2.5 sm:px-6">
@@ -76,6 +83,18 @@ export default function FilterBar({ filters, onChange }: FilterBarProps) {
             <SelectItem value="large">200 呎以上</SelectItem>
           </SelectContent>
         </Select>
+
+        <button
+          type="button"
+          onClick={onToggleSortByMatch}
+          className={`h-9 shrink-0 rounded-md border px-3 text-sm font-medium transition-colors ${
+            sortByMatch
+              ? "border-[#0f2540] bg-[#0f2540] text-white hover:bg-[#1a3a5c]"
+              : "border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-100"
+          }`}
+        >
+          ✨ 幫我搵神仙室友
+        </button>
       </div>
     </div>
   );
