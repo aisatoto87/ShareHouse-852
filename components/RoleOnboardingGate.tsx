@@ -14,7 +14,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { hasValidProfileRole, type ProfileRole } from "@/types/profile";
+import { hasValidProfileRole } from "@/types/profile";
 
 export default function RoleOnboardingGate() {
   const router = useRouter();
@@ -128,7 +128,7 @@ export default function RoleOnboardingGate() {
     [needsOnboarding]
   );
 
-  async function selectRole(role: ProfileRole) {
+  async function selectRole(role: "landlord" | "tenant") {
     if (!userId || submitting) return;
     setSubmitting(true);
 
@@ -221,19 +221,6 @@ export default function RoleOnboardingGate() {
             <span className="text-left">我要搵樓</span>
           </Button>
 
-          <Button
-            type="button"
-            size="lg"
-            variant="secondary"
-            disabled={submitting}
-            onClick={() => void selectRole("both")}
-            className="h-auto min-h-14 flex-col gap-1 rounded-xl border border-zinc-200 bg-zinc-100 py-4 text-base font-semibold text-zinc-900 shadow-sm hover:bg-zinc-200/90 sm:flex-row sm:justify-start sm:gap-3 sm:px-5"
-          >
-            <span className="text-2xl leading-none" aria-hidden>
-              🤝
-            </span>
-            <span className="text-left">兩樣都想</span>
-          </Button>
         </div>
 
         {submitting ? (
