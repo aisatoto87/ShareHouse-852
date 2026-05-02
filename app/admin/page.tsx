@@ -384,15 +384,20 @@ export default function AdminPage() {
     await fetchProperties();
   }
 
-  async function handleDelete(id: string) {
+  async function handleDelete(propertyId: string) {
     const ok = window.confirm("確定要刪除這筆租盤嗎？此操作無法還原。");
     if (!ok) return;
-    setDeletingId(id);
-    const { error } = await supabase.from("properties").delete().eq("id", id);
+    setDeletingId(propertyId);
+    const { error } = await supabase.from("properties").delete().eq("id", propertyId);
     setDeletingId(null);
-    if (error) return toast.error(`刪除失敗：${error.message}`);
+    if (error) {
+      console.error("刪除失敗詳情:", error);
+      toast.error(`刪除失敗：${error.message}`);
+      return;
+    }
+
+    setProperties((prev) => prev.filter((p) => p.id !== propertyId));
     toast.success("已刪除租盤");
-    setProperties((prev) => prev.filter((p) => p.id !== id));
     await fetchProperties();
   }
 
