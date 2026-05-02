@@ -1,3 +1,4 @@
+import { toFiniteHabit } from "@/lib/habit-match";
 import type { Property } from "@/types/property";
 
 const DISTRICTS: readonly Property["district"][] = ["港島", "九龍", "新界"];
@@ -54,6 +55,11 @@ function parseDistrict(v: unknown): Property["district"] {
   return isDistrict(s) ? s : "九龍";
 }
 
+function optionalHabitField(v: unknown): number | undefined {
+  const n = toFiniteHabit(v);
+  return n === null ? undefined : n;
+}
+
 /**
  * Maps a Supabase `properties` row to the app `Property` shape.
  * Accepts snake_case (Postgres) or camelCase keys for easier migration.
@@ -77,5 +83,9 @@ export function mapRowToProperty(row: Record<string, unknown>): Property {
     roommates_req: toStringArray(row.roommates_req ?? row.roommatesReq),
     tags: toStringArray(row.tags),
     contact_whatsapp: pickString(row, "contact_whatsapp", "contactWhatsapp"),
+    habit_cleanliness: optionalHabitField(row.habit_cleanliness),
+    habit_ac_temp: optionalHabitField(row.habit_ac_temp),
+    habit_guests: optionalHabitField(row.habit_guests),
+    habit_noise: optionalHabitField(row.habit_noise),
   };
 }

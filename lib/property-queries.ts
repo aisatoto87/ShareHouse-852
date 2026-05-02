@@ -4,6 +4,7 @@ import type { Property } from "@/types/property";
 
 export async function fetchAllProperties(): Promise<Property[]> {
   const supabase = createSupabaseServerClient();
+  // `*` 包含 habit_* 等所有欄位；室友配對必須能讀到四個習慣分數
   const { data, error } = await supabase.from("properties").select("*");
 
   if (error) {
