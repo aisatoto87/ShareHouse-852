@@ -7,6 +7,11 @@ import { CheckCircle, MapPin, Maximize2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardFooter } from "@/components/ui/card";
 import WishlistHeartButton from "@/components/WishlistHeartButton";
+import {
+  habitMatchScorePercent,
+  parsePropertyHabitsFromRecord,
+  parseTenantHabits,
+} from "@/lib/habit-match";
 import { cn } from "@/lib/utils";
 import type { Property } from "@/types/property";
 
@@ -42,13 +47,6 @@ interface PropertyCardProps {
   };
 }
 
-function toHabitNumber(value: unknown): number | null {
-  if (value == null) return null;
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return null;
-  return parsed;
-}
-
 export default function PropertyCard({ property, tenantHabits }: PropertyCardProps) {
   const { id, title, district, sub_district, price, size_sqft, imageUrl, tags, contact_whatsapp } =
     property;
@@ -59,33 +57,15 @@ export default function PropertyCard({ property, tenantHabits }: PropertyCardPro
     e.preventDefault();
     e.stopPropagation();
   };
-  const propertyHabitSource = property as unknown as Record<string, unknown>;
-  const propertyHabits = {
-    cleanliness: toHabitNumber(propertyHabitSource.habit_cleanliness),
-    ac_temp: toHabitNumber(propertyHabitSource.habit_ac_temp),
-    guests: toHabitNumber(propertyHabitSource.habit_guests),
-    noise: toHabitNumber(propertyHabitSource.habit_noise),
-  };
-  const tenantHabitValues = {
-    cleanliness: toHabitNumber(tenantHabits?.cleanliness),
-    ac_temp: toHabitNumber(tenantHabits?.ac_temp),
-    guests: toHabitNumber(tenantHabits?.guests),
-    noise: toHabitNumber(tenantHabits?.noise),
-  };
 
-  const hasAllHabits = Object.values(propertyHabits).every((value) => value !== null)
-    && Object.values(tenantHabitValues).every((value) => value !== null);
-  const matchPercentage = hasAllHabits
-    ? Math.round(
-        ((16
-          - (Math.abs((tenantHabitValues.cleanliness as number) - (propertyHabits.cleanliness as number))
-            + Math.abs((tenantHabitValues.ac_temp as number) - (propertyHabits.ac_temp as number))
-            + Math.abs((tenantHabitValues.guests as number) - (propertyHabits.guests as number))
-            + Math.abs((tenantHabitValues.noise as number) - (propertyHabits.noise as number))))
-          / 16)
-          * 100
-      )
-    : null;
+  const propertyHabitSource = property as unknown as Record<string, unknown>;
+  const tenantQuartet = parseTenantHabits(tenantHabits);
+  const propertyQuartet = parsePropertyHabitsFromRecord(propertyHabitSource);
+
+  const matchPercentage =
+    tenantQuartet && propertyQuartet
+      ? Math.round(habitMatchScorePercent(tenantQuartet, propertyQuartet))
+      : null;
 
   return (
     <Card className="group overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-sm transition-shadow duration-300 hover:shadow-lg">
