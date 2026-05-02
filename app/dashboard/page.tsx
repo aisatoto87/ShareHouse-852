@@ -56,6 +56,7 @@ export default function DashboardPage() {
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
   const [userId, setUserId] = useState<string | null>(null);
   const [userRole, setUserRole] = useState<string>("");
+  const [secretCount, setSecretCount] = useState(0);
   const [properties, setProperties] = useState<any[]>([]);
   const [habits, setHabits] = useState<HabitState>(DEFAULT_HABITS);
   const [isLoading, setIsLoading] = useState(true);
@@ -117,6 +118,35 @@ export default function DashboardPage() {
     void bootstrap();
   }, [supabase]);
 
+  useEffect(() => {
+    if (secretCount !== 5) return;
+
+    const runAdminUnlock = async () => {
+      const pwd = window.prompt("🤫 發現隱藏通道！請輸入管家解鎖密碼：");
+      if (pwd === "admin852" && userId) {
+        const { error } = await supabase
+          .from("profiles")
+          .update({ role: "admin" })
+          .eq("id", userId);
+
+        if (error) {
+          toast.error(`解鎖失敗：${error.message}`);
+        } else {
+          toast.success("管家權限已解鎖！頁面將重新載入...");
+          setTimeout(() => {
+            window.location.reload();
+          }, 1000);
+        }
+      } else if (pwd !== null && pwd !== "") {
+        toast.error("密碼錯誤，解鎖失敗。");
+      }
+
+      setSecretCount(0);
+    };
+
+    void runAdminUnlock();
+  }, [secretCount, supabase, userId]);
+
   const updateHabit = (key: HabitKey, value: number) => {
     setHabits((prev) => ({ ...prev, [key]: value }));
   };
@@ -149,7 +179,12 @@ export default function DashboardPage() {
       <main className="mx-auto max-w-3xl px-4 py-8 sm:px-6 sm:py-10">
         <div className="mb-6">
           <div className="flex items-center">
-            <h1 className="text-3xl font-bold tracking-tight text-zinc-900">我的帳號</h1>
+            <h1
+              className="cursor-default select-none text-3xl font-bold tracking-tight text-zinc-900"
+              onClick={() => setSecretCount((prev) => prev + 1)}
+            >
+              我的帳號
+            </h1>
             <span className="ml-4 inline-flex items-center rounded-full bg-blue-50 px-3 py-1 text-sm font-medium text-blue-700 ring-1 ring-inset ring-blue-700/10">
               {userRole === "admin" ? "🛡️ 管家" : userRole === "tenant" ? "👤 租客" : "🏠 業主/租客"}
             </span>
