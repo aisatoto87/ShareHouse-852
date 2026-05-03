@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowLeft, MapPin, Maximize2, MessageCircle } from "lucide-react";
+import { ArrowLeft, MapPin, Maximize2, MessageCircle, User } from "lucide-react";
 import InquiryDialogButton from "@/components/InquiryDialogButton";
 import Navbar from "@/components/Navbar";
 import PropertyBentoGallery from "@/components/PropertyBentoGallery";
@@ -75,7 +75,39 @@ export default async function PropertyDetailPage({ params }: PageProps) {
 
   const property = mapRowToProperty(row as Record<string, unknown>);
   if (!property) notFound();
-  const ownerId = typeof row.owner_id === "string" ? row.owner_id : "";
+  const rowRec = row as Record<string, unknown>;
+  const ownerId =
+    (typeof rowRec.owner_id === "string" && rowRec.owner_id.trim() !== "" ? rowRec.owner_id : null) ??
+    (typeof rowRec.user_id === "string" && rowRec.user_id.trim() !== "" ? rowRec.user_id : null) ??
+    "";
+
+  let ownerDisplayName: string | null = null;
+  let ownerAvatarUrl: string | null = null;
+  if (ownerId) {
+    const { data: ownerProfile } = await supabase
+      .from("profiles")
+      .select("display_name, avatar_url")
+      .eq("id", ownerId)
+      .maybeSingle();
+    if (ownerProfile) {
+      ownerDisplayName =
+        typeof ownerProfile.display_name === "string" && ownerProfile.display_name.trim() !== ""
+          ? ownerProfile.display_name.trim()
+          : null;
+      ownerAvatarUrl =
+        typeof ownerProfile.avatar_url === "string" && ownerProfile.avatar_url.trim() !== ""
+          ? ownerProfile.avatar_url.trim()
+          : null;
+    }
+  }
+
+  const ownerCardLabel =
+    ownerDisplayName ?? (ownerId ? "熱心業主" : "放盤人");
+  const ownerAvatarSrc =
+    ownerAvatarUrl && (ownerAvatarUrl.startsWith("http://") || ownerAvatarUrl.startsWith("https://"))
+      ? ownerAvatarUrl
+      : null;
+
   const {
     data: { user },
   } = await supabase.auth.getUser();
@@ -190,6 +222,26 @@ export default async function PropertyDetailPage({ params }: PageProps) {
             <div className="sticky top-24 rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm">
               <p className="text-sm text-zinc-500">立即聯絡</p>
               <p className="mt-1 text-2xl font-bold text-[#0f2540]">HK$ {formattedPrice}/月</p>
+              <div className="my-4 flex items-center gap-3 rounded-lg bg-zinc-50 p-3">
+                {ownerAvatarSrc ? (
+                  <img
+                    src={ownerAvatarSrc}
+                    alt=""
+                    className="h-12 w-12 shrink-0 rounded-full object-cover"
+                  />
+                ) : (
+                  <div
+                    className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-zinc-200"
+                    aria-hidden
+                  >
+                    <User className="h-6 w-6 text-zinc-400" />
+                  </div>
+                )}
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs text-zinc-500">此租盤由以下人士發佈：</p>
+                  <p className="text-sm font-semibold text-zinc-800">{ownerCardLabel}</p>
+                </div>
+              </div>
               <a
                 href={waUrl}
                 target="_blank"
