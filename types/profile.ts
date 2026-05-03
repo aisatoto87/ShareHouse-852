@@ -14,4 +14,9 @@ export type ProfileRow = {
   id: string;
   role: ProfileRole | null;
   display_name: string | null;
+  last_name_zh?: string | null;
+  last_name_en?: string | null;
+  nickname?: string | null;
+  phone?: string | null;
+  avatar_url?: string | null;
 };

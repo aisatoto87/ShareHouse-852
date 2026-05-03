@@ -1,13 +1,90 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { Loader2, Save } from "lucide-react";
+import { useEffect, useMemo, useState, type ChangeEvent } from "react";
+import { Loader2, Save, UserRound } from "lucide-react";
 import Link from "next/link";
 import { toast } from "sonner";
 import HabitInput from "@/components/HabitInput";
 import Navbar from "@/components/Navbar";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
+import { cn } from "@/lib/utils";
+
+type SalutationMode = "chinese" | "english" | "nickname";
+
+const ZH_SUFFIX_OPTIONS = ["先生", "小姐", "女士"] as const;
+const EN_TITLE_OPTIONS = ["Mr.", "Ms.", "Mrs.", "Miss"] as const;
+
+function inferSalutationMode(
+  displayName: string,
+  lastZh: string,
+  lastEn: string,
+  nick: string
+): SalutationMode {
+  const dn = displayName.trim();
+  if (!dn) return "chinese";
+  const nz = nick.trim();
+  if (nz && dn === nz) return "nickname";
+  const zh = lastZh.trim();
+  if (zh && dn.startsWith(zh)) return "chinese";
+  const en = lastEn.trim();
+  if (en) {
+    const escaped = en.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const titleAlt = EN_TITLE_OPTIONS.map((t) => t.replace(/\./g, "\\.")).join("|");
+    const re = new RegExp(`^(${titleAlt})\\s*${escaped}$`, "i");
+    if (re.test(dn)) return "english";
+  }
+  return "chinese";
+}
+
+function inferZhSuffix(displayName: string, lastZh: string): string {
+  const zh = lastZh.trim();
+  if (!zh || !displayName.startsWith(zh)) return "先生";
+  const rest = displayName.slice(zh.length).trim();
+  if (ZH_SUFFIX_OPTIONS.includes(rest as (typeof ZH_SUFFIX_OPTIONS)[number])) return rest;
+  return "先生";
+}
+
+function inferEnTitle(displayName: string, lastEn: string): string {
+  const en = lastEn.trim();
+  if (!en) return "Mr.";
+  const idx = displayName.indexOf(en);
+  if (idx <= 0) return "Mr.";
+  const prefix = displayName.slice(0, idx).trim();
+  if (EN_TITLE_OPTIONS.includes(prefix as (typeof EN_TITLE_OPTIONS)[number])) return prefix;
+  return "Mr.";
+}
+
+function assembleDisplayName(
+  mode: SalutationMode,
+  lastZh: string,
+  zhSuffix: string,
+  lastEn: string,
+  enTitle: string,
+  nick: string
+): string {
+  if (mode === "chinese") {
+    const z = lastZh.trim();
+    if (!z) return "";
+    return `${z}${zhSuffix.trim() || "先生"}`;
+  }
+  if (mode === "english") {
+    const e = lastEn.trim();
+    if (!e) return "";
+    return `${enTitle.trim()} ${e}`.replace(/\s+/g, " ").trim();
+  }
+  return nick.trim();
+}
 
 type HabitKey = "habit_cleanliness" | "habit_ac_temp" | "habit_guests" | "habit_noise";
 
@@ -61,7 +138,20 @@ export default function DashboardPage() {
   const [habits, setHabits] = useState<HabitState>(DEFAULT_HABITS);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
-  const [activeTab, setActiveTab] = useState("profile");
+  const [isSavingPersonal, setIsSavingPersonal] = useState(false);
+  const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
+  const [activeTab, setActiveTab] = useState<"personal" | "profile" | "properties">("personal");
+
+  const [email, setEmail] = useState("");
+  const [lastNameZh, setLastNameZh] = useState("");
+  const [lastNameEn, setLastNameEn] = useState("");
+  const [nickname, setNickname] = useState("");
+  const [phone, setPhone] = useState("");
+  const [avatarUrl, setAvatarUrl] = useState("");
+  const [displayName, setDisplayName] = useState("");
+  const [salutationMode, setSalutationMode] = useState<SalutationMode>("chinese");
+  const [zhHonorificSuffix, setZhHonorificSuffix] = useState<string>("先生");
+  const [enEnglishTitle, setEnEnglishTitle] = useState<string>("Mr.");
 
   useEffect(() => {
     const bootstrap = async () => {
@@ -79,10 +169,14 @@ export default function DashboardPage() {
       }
 
       setUserId(user.id);
+      setEmail(typeof user.email === "string" ? user.email : "");
+
       const [{ data: profileData }, { data: propertyRows, error: propertyError }] = await Promise.all([
         supabase
           .from("profiles")
-          .select("habit_cleanliness, habit_ac_temp, habit_guests, habit_noise, role")
+          .select(
+            "habit_cleanliness, habit_ac_temp, habit_guests, habit_noise, role, last_name_zh, last_name_en, nickname, phone, avatar_url, display_name"
+          )
           .eq("id", user.id)
           .maybeSingle(),
         supabase.from("properties").select("*").order("created_at", { ascending: false }),
@@ -108,8 +202,34 @@ export default function DashboardPage() {
           habit_noise: Number(profileData.habit_noise) || 3,
         });
         setUserRole(profileData.role || "tenant");
+
+        const lnZh = typeof profileData.last_name_zh === "string" ? profileData.last_name_zh : "";
+        const lnEn = typeof profileData.last_name_en === "string" ? profileData.last_name_en : "";
+        const nn = typeof profileData.nickname === "string" ? profileData.nickname : "";
+        const ph = typeof profileData.phone === "string" ? profileData.phone : "";
+        const av = typeof profileData.avatar_url === "string" ? profileData.avatar_url : "";
+        const dn = typeof profileData.display_name === "string" ? profileData.display_name : "";
+
+        setLastNameZh(lnZh);
+        setLastNameEn(lnEn);
+        setNickname(nn);
+        setPhone(ph);
+        setAvatarUrl(av);
+
+        const mode = inferSalutationMode(dn, lnZh, lnEn, nn);
+        setSalutationMode(mode);
+        if (mode === "chinese") setZhHonorificSuffix(inferZhSuffix(dn, lnZh));
+        if (mode === "english") setEnEnglishTitle(inferEnTitle(dn, lnEn));
       } else {
         setUserRole("tenant");
+        setLastNameZh("");
+        setLastNameEn("");
+        setNickname("");
+        setPhone("");
+        setAvatarUrl("");
+        setSalutationMode("chinese");
+        setZhHonorificSuffix("先生");
+        setEnEnglishTitle("Mr.");
       }
 
       setIsLoading(false);
@@ -147,6 +267,16 @@ export default function DashboardPage() {
     void runAdminUnlock();
   }, [secretCount, supabase, userId]);
 
+  useEffect(() => {
+    setDisplayName(
+      assembleDisplayName(salutationMode, lastNameZh, zhHonorificSuffix, lastNameEn, enEnglishTitle, nickname)
+    );
+  }, [salutationMode, lastNameZh, lastNameEn, nickname, zhHonorificSuffix, enEnglishTitle]);
+
+  useEffect(() => {
+    if (userRole === "tenant" && activeTab === "properties") setActiveTab("personal");
+  }, [userRole, activeTab]);
+
   const updateHabit = (key: HabitKey, value: number) => {
     setHabits((prev) => ({ ...prev, [key]: value }));
   };
@@ -173,6 +303,76 @@ export default function DashboardPage() {
     toast.success("✅ 習慣設定已更新，助你配對完美室友！");
   };
 
+  const handleAvatarFileChange = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file || !userId) {
+      if (!userId) toast.error("請先登入再上傳頭像。");
+      return;
+    }
+    if (!file.type.startsWith("image/")) {
+      toast.error("請選擇圖片檔案。");
+      return;
+    }
+    setIsUploadingAvatar(true);
+    const ext = file.name.includes(".") ? (file.name.split(".").pop()?.toLowerCase() ?? "jpg") : "jpg";
+    const path = `${userId}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+    const { error } = await supabase.storage.from("avatars").upload(path, file, {
+      upsert: true,
+      contentType: file.type || "image/jpeg",
+    });
+    setIsUploadingAvatar(false);
+    if (error) {
+      toast.error(`頭像上傳失敗：${error.message}`);
+      return;
+    }
+    const {
+      data: { publicUrl },
+    } = supabase.storage.from("avatars").getPublicUrl(path);
+    setAvatarUrl(publicUrl);
+    toast.success("頭像已上傳，記得按下方儲存以寫入個人檔案。");
+  };
+
+  const handleSavePersonal = async () => {
+    if (!userId) return toast.error("請先登入再儲存。");
+    const assembled = assembleDisplayName(
+      salutationMode,
+      lastNameZh,
+      zhHonorificSuffix,
+      lastNameEn,
+      enEnglishTitle,
+      nickname
+    );
+    if (salutationMode === "chinese" && !lastNameZh.trim()) {
+      return toast.error("選擇中文稱呼時請填寫中文姓氏。");
+    }
+    if (salutationMode === "english" && !lastNameEn.trim()) {
+      return toast.error("選擇英文稱呼時請填寫英文姓氏。");
+    }
+    if (salutationMode === "nickname" && !nickname.trim()) {
+      return toast.error("選擇網名直呼時請填寫暱稱／網名。");
+    }
+    setIsSavingPersonal(true);
+    const { error } = await supabase
+      .from("profiles")
+      .update({
+        last_name_zh: lastNameZh.trim() || null,
+        last_name_en: lastNameEn.trim() || null,
+        nickname: nickname.trim() || null,
+        phone: phone.trim() || null,
+        avatar_url: avatarUrl.trim() || null,
+        display_name: assembled.trim() || null,
+      })
+      .eq("id", userId);
+    setIsSavingPersonal(false);
+    if (error) {
+      toast.error(`儲存失敗：${error.message}`);
+      return;
+    }
+    setDisplayName(assembled);
+    toast.success("個人資料已儲存。");
+  };
+
   return (
     <div className="min-h-screen bg-zinc-50">
       <Navbar />
@@ -189,7 +389,18 @@ export default function DashboardPage() {
               {userRole === "admin" ? "🛡️ 管家" : userRole === "tenant" ? "👤 租客" : "🏠 業主/租客"}
             </span>
           </div>
-          <div className="mt-4 flex items-center gap-6 border-b border-zinc-200">
+          <div className="mt-4 flex flex-wrap items-center gap-4 border-b border-zinc-200 sm:gap-6">
+            <button
+              type="button"
+              onClick={() => setActiveTab("personal")}
+              className={`border-b-2 px-1 pb-3 text-sm font-semibold transition-colors ${
+                activeTab === "personal"
+                  ? "border-[#0f2540] text-[#0f2540]"
+                  : "border-transparent text-zinc-500 hover:text-zinc-700"
+              }`}
+            >
+              個人簡介
+            </button>
             <button
               type="button"
               onClick={() => setActiveTab("profile")}
@@ -218,7 +429,259 @@ export default function DashboardPage() {
         </div>
 
         <div className="rounded-xl border border-zinc-200 bg-white text-zinc-950 shadow-sm">
-          {activeTab === "profile" ? (
+          {activeTab === "personal" ? (
+            <>
+              <div className="flex flex-col space-y-1.5 p-6">
+                <h2 className="text-2xl font-semibold leading-none tracking-tight">個人簡介</h2>
+                <p className="text-sm text-zinc-500">管理頭像與稱呼，讓室友與平台以你喜歡的方式稱呼你。</p>
+              </div>
+              <div className="space-y-6 p-6 pt-0">
+                {isLoading ? (
+                  <div className="flex items-center justify-center py-10 text-zinc-500">
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    讀取個人資料中...
+                  </div>
+                ) : (
+                  <Card className="border-zinc-200/80 bg-gradient-to-br from-white to-zinc-50/80 shadow-md">
+                    <CardContent className="space-y-8 p-6 sm:p-8">
+                      <div className="grid gap-8 lg:grid-cols-[auto,1fr] lg:items-start">
+                        <div className="flex flex-col items-center gap-4 sm:flex-row sm:items-center lg:flex-col lg:items-center">
+                          <div className="relative h-28 w-28 shrink-0 overflow-hidden rounded-full border-2 border-zinc-200 bg-zinc-100 shadow-inner ring-4 ring-white">
+                            {avatarUrl ? (
+                              <img src={avatarUrl} alt="頭像" className="h-full w-full object-cover" />
+                            ) : (
+                              <div className="flex h-full w-full items-center justify-center text-zinc-400">
+                                <UserRound className="h-14 w-14" aria-hidden />
+                              </div>
+                            )}
+                            {isUploadingAvatar && (
+                              <div className="absolute inset-0 flex items-center justify-center bg-zinc-900/40">
+                                <Loader2 className="h-8 w-8 animate-spin text-white" />
+                              </div>
+                            )}
+                          </div>
+                          <div className="flex max-w-xs flex-col gap-2 text-center sm:text-left lg:text-center">
+                            <Label htmlFor="avatar-upload" className="text-zinc-600">
+                              上傳頭像
+                            </Label>
+                            <Input
+                              id="avatar-upload"
+                              type="file"
+                              accept="image/*"
+                              disabled={!userId || isUploadingAvatar}
+                              onChange={(ev) => void handleAvatarFileChange(ev)}
+                              className="cursor-pointer text-sm file:mr-3 file:rounded-md file:bg-[#0f2540] file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-white hover:file:bg-[#1a3a5c]"
+                            />
+                            <p className="text-xs text-zinc-500">圖片會上傳至雲端儲存，上傳後請按下方儲存。</p>
+                          </div>
+                        </div>
+
+                        <div className="grid gap-6 sm:grid-cols-2">
+                          <div className="sm:col-span-2">
+                            <Label htmlFor="dash-email">登入 Email</Label>
+                            <Input
+                              id="dash-email"
+                              readOnly
+                              value={email}
+                              className="mt-1.5 border-zinc-200 bg-zinc-100 text-zinc-600"
+                            />
+                          </div>
+                          <div>
+                            <Label htmlFor="last-zh">中文姓氏</Label>
+                            <Input
+                              id="last-zh"
+                              value={lastNameZh}
+                              onChange={(e) => setLastNameZh(e.target.value)}
+                              placeholder="例如：陳"
+                              className="mt-1.5"
+                            />
+                          </div>
+                          <div>
+                            <Label htmlFor="last-en">英文姓氏</Label>
+                            <Input
+                              id="last-en"
+                              value={lastNameEn}
+                              onChange={(e) => setLastNameEn(e.target.value)}
+                              placeholder="例如：Chan"
+                              className="mt-1.5"
+                            />
+                          </div>
+                          <div>
+                            <Label htmlFor="nickname">暱稱／網名</Label>
+                            <Input
+                              id="nickname"
+                              value={nickname}
+                              onChange={(e) => setNickname(e.target.value)}
+                              placeholder="顯示用暱稱"
+                              className="mt-1.5"
+                            />
+                          </div>
+                          <div>
+                            <Label htmlFor="phone">聯絡電話</Label>
+                            <Input
+                              id="phone"
+                              value={phone}
+                              onChange={(e) => setPhone(e.target.value)}
+                              placeholder="手提或 WhatsApp"
+                              className="mt-1.5"
+                            />
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="rounded-xl border border-zinc-200 bg-white/90 p-5 shadow-sm">
+                        <p className="text-sm font-semibold text-zinc-900">請選擇別人如何稱呼你</p>
+                        <p className="mt-1 text-xs text-zinc-500">選擇後會自動組合為「最終稱呼」，並於儲存時寫入個人檔案。</p>
+
+                        <div className="mt-5 space-y-4">
+                          <label
+                            className={cn(
+                              "flex cursor-pointer gap-3 rounded-lg border p-4 transition-colors",
+                              salutationMode === "chinese"
+                                ? "border-[#0f2540] bg-blue-50/60 ring-1 ring-[#0f2540]/20"
+                                : "border-zinc-200 hover:border-zinc-300"
+                            )}
+                          >
+                            <input
+                              type="radio"
+                              name="salutation"
+                              checked={salutationMode === "chinese"}
+                              onChange={() => setSalutationMode("chinese")}
+                              className="mt-1"
+                            />
+                            <div className="min-w-0 flex-1 space-y-3">
+                              <div>
+                                <span className="font-medium text-zinc-900">中文稱呼</span>
+                                <span className="ml-2 text-sm text-zinc-500">中文姓氏 + 稱謂</span>
+                              </div>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="text-sm text-zinc-600">後綴</span>
+                                <Select value={zhHonorificSuffix} onValueChange={setZhHonorificSuffix}>
+                                  <SelectTrigger className="h-9 w-[7.5rem] border-zinc-200 bg-white">
+                                    <SelectValue placeholder="稱謂" />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    {ZH_SUFFIX_OPTIONS.map((s) => (
+                                      <SelectItem key={s} value={s}>
+                                        {s}
+                                      </SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                              <p className="text-sm text-zinc-600">
+                                預覽：<span className="font-medium text-[#0f2540]">{lastNameZh.trim() ? `${lastNameZh.trim()}${zhHonorificSuffix}` : "（請填中文姓氏）"}</span>
+                              </p>
+                            </div>
+                          </label>
+
+                          <label
+                            className={cn(
+                              "flex cursor-pointer gap-3 rounded-lg border p-4 transition-colors",
+                              salutationMode === "english"
+                                ? "border-[#0f2540] bg-blue-50/60 ring-1 ring-[#0f2540]/20"
+                                : "border-zinc-200 hover:border-zinc-300"
+                            )}
+                          >
+                            <input
+                              type="radio"
+                              name="salutation"
+                              checked={salutationMode === "english"}
+                              onChange={() => setSalutationMode("english")}
+                              className="mt-1"
+                            />
+                            <div className="min-w-0 flex-1 space-y-3">
+                              <div>
+                                <span className="font-medium text-zinc-900">英文稱呼</span>
+                                <span className="ml-2 text-sm text-zinc-500">Mr. / Ms. 等 + 英文姓氏</span>
+                              </div>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <Select value={enEnglishTitle} onValueChange={setEnEnglishTitle}>
+                                  <SelectTrigger className="h-9 w-[7.5rem] border-zinc-200 bg-white">
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    {EN_TITLE_OPTIONS.map((s) => (
+                                      <SelectItem key={s} value={s}>
+                                        {s}
+                                      </SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                              <p className="text-sm text-zinc-600">
+                                預覽：
+                                <span className="font-medium text-[#0f2540]">
+                                  {lastNameEn.trim()
+                                    ? `${enEnglishTitle} ${lastNameEn.trim()}`.replace(/\s+/g, " ").trim()
+                                    : "（請填英文姓氏）"}
+                                </span>
+                              </p>
+                            </div>
+                          </label>
+
+                          <label
+                            className={cn(
+                              "flex cursor-pointer gap-3 rounded-lg border p-4 transition-colors",
+                              salutationMode === "nickname"
+                                ? "border-[#0f2540] bg-blue-50/60 ring-1 ring-[#0f2540]/20"
+                                : "border-zinc-200 hover:border-zinc-300"
+                            )}
+                          >
+                            <input
+                              type="radio"
+                              name="salutation"
+                              checked={salutationMode === "nickname"}
+                              onChange={() => setSalutationMode("nickname")}
+                              className="mt-1"
+                            />
+                            <div className="min-w-0 flex-1 space-y-2">
+                              <div>
+                                <span className="font-medium text-zinc-900">網名直呼</span>
+                                <span className="ml-2 text-sm text-zinc-500">使用上方暱稱／網名</span>
+                              </div>
+                              <p className="text-sm text-zinc-600">
+                                預覽：
+                                <span className="font-medium text-[#0f2540]">
+                                  {nickname.trim() || "（請填暱稱／網名）"}
+                                </span>
+                              </p>
+                            </div>
+                          </label>
+                        </div>
+
+                        <div className="mt-5 rounded-lg bg-zinc-100 px-4 py-3 text-sm">
+                          <span className="text-zinc-500">最終稱呼（將儲存）：</span>{" "}
+                          <span className="font-semibold text-[#0f2540]">{displayName || "—"}</span>
+                        </div>
+                      </div>
+
+                      <div className="flex justify-end border-t border-zinc-200/80 pt-2">
+                        <Button
+                          type="button"
+                          onClick={() => void handleSavePersonal()}
+                          disabled={isLoading || isSavingPersonal || !userId}
+                          className="min-w-[10rem] bg-[#0f2540] text-white hover:bg-[#1a3a5c]"
+                        >
+                          {isSavingPersonal ? (
+                            <>
+                              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                              儲存中...
+                            </>
+                          ) : (
+                            <>
+                              <Save className="mr-2 h-4 w-4" />
+                              儲存個人資料
+                            </>
+                          )}
+                        </Button>
+                      </div>
+                    </CardContent>
+                  </Card>
+                )}
+              </div>
+            </>
+          ) : activeTab === "profile" ? (
             <>
               <div className="flex flex-col space-y-1.5 p-6">
                 <h2 className="text-2xl font-semibold leading-none tracking-tight">
