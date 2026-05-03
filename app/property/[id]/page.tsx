@@ -83,12 +83,15 @@ export default async function PropertyDetailPage({ params }: PageProps) {
 
   let ownerDisplayName: string | null = null;
   let ownerAvatarUrl: string | null = null;
+  let ownerAvgRating = 3;
+  let ownerReviewCount = 0;
+
   if (ownerId) {
-    const { data: ownerProfile } = await supabase
-      .from("profiles")
-      .select("display_name, avatar_url")
-      .eq("id", ownerId)
-      .maybeSingle();
+    const [{ data: ownerProfile }, reviewsQuery] = await Promise.all([
+      supabase.from("profiles").select("display_name, avatar_url").eq("id", ownerId).maybeSingle(),
+      supabase.from("reviews").select("rating").eq("reviewee_id", ownerId),
+    ]);
+
     if (ownerProfile) {
       ownerDisplayName =
         typeof ownerProfile.display_name === "string" && ownerProfile.display_name.trim() !== ""
@@ -99,10 +102,26 @@ export default async function PropertyDetailPage({ params }: PageProps) {
           ? ownerProfile.avatar_url.trim()
           : null;
     }
+
+    const { data: reviews, error: reviewsError } = reviewsQuery;
+    if (reviewsError) {
+      console.error("[property detail] reviews query", reviewsError);
+    }
+    const reviewRows = !reviewsError && Array.isArray(reviews) ? reviews : [];
+    ownerReviewCount = reviewRows.length;
+    if (ownerReviewCount > 0) {
+      const sum = reviewRows.reduce((acc, row) => acc + (typeof row.rating === "number" ? row.rating : Number(row.rating) || 0), 0);
+      ownerAvgRating = Math.round((sum / ownerReviewCount) * 10) / 10;
+    } else {
+      ownerAvgRating = 3;
+    }
   }
 
   const ownerCardLabel =
     ownerDisplayName ?? (ownerId ? "熱心業主" : "放盤人");
+  const ownerRatingLabel = ownerAvgRating.toFixed(1);
+  const ownerRatingBracket =
+    ownerReviewCount === 0 ? "(新加入)" : `(${ownerReviewCount} 則評價)`;
   const ownerAvatarSrc =
     ownerAvatarUrl && (ownerAvatarUrl.startsWith("http://") || ownerAvatarUrl.startsWith("https://"))
       ? ownerAvatarUrl
@@ -240,6 +259,13 @@ export default async function PropertyDetailPage({ params }: PageProps) {
                 <div className="min-w-0 flex-1">
                   <p className="text-xs text-zinc-500">此租盤由以下人士發佈：</p>
                   <p className="text-sm font-semibold text-zinc-800">{ownerCardLabel}</p>
+                  <p className="mt-1 flex flex-wrap items-center gap-1 text-sm text-zinc-600">
+                    <span className="text-amber-500" aria-hidden>
+                      ⭐
+                    </span>
+                    <span>{ownerRatingLabel}</span>
+                    <span>{ownerRatingBracket}</span>
+                  </p>
                 </div>
               </div>
               <a
