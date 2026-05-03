@@ -34,7 +34,7 @@ import {
 } from "@/lib/profile-display-name";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
-import { hasValidProfileRole } from "@/types/profile";
+import { needsProfileRoleOnboarding } from "@/types/profile";
 
 type HabitKey = "habit_cleanliness" | "habit_ac_temp" | "habit_guests" | "habit_noise";
 type HabitState = Record<HabitKey, number>;
@@ -125,53 +125,83 @@ export default function RoleOnboardingGate() {
     let cancelled = false;
     void (async () => {
       setProfileStepLoading(true);
-      const [{ data: profile }, { data: authData }] = await Promise.all([
-        supabase
-          .from("profiles")
-          .select(
-            "last_name_zh, last_name_en, nickname, phone, avatar_url, display_name, habit_cleanliness, habit_ac_temp, habit_guests, habit_noise"
-          )
-          .eq("id", userId)
-          .maybeSingle(),
-        supabase.auth.getUser(),
-      ]);
-      if (cancelled) return;
-      const u = authData.user;
-      setEmail(typeof u?.email === "string" ? u.email : "");
-      if (profile) {
-        const lnZh = typeof profile.last_name_zh === "string" ? profile.last_name_zh : "";
-        const lnEn = typeof profile.last_name_en === "string" ? profile.last_name_en : "";
-        const nn = typeof profile.nickname === "string" ? profile.nickname : "";
-        const ph = typeof profile.phone === "string" ? profile.phone : "";
-        const av = typeof profile.avatar_url === "string" ? profile.avatar_url : "";
-        const dn = typeof profile.display_name === "string" ? profile.display_name : "";
-        setLastNameZh(lnZh);
-        setLastNameEn(lnEn);
-        setNickname(nn);
-        setPhone(ph);
-        setAvatarUrl(av);
-        const mode = inferSalutationMode(dn, lnZh, lnEn, nn);
-        setSalutationMode(mode);
-        if (mode === "chinese") setZhHonorificSuffix(inferZhSuffix(dn, lnZh));
-        if (mode === "english") setEnEnglishTitle(inferEnTitle(dn, lnEn));
-        setWizardHabits({
-          habit_cleanliness: Number(profile.habit_cleanliness) || 3,
-          habit_ac_temp: Number(profile.habit_ac_temp) || 3,
-          habit_guests: Number(profile.habit_guests) || 3,
-          habit_noise: Number(profile.habit_noise) || 3,
-        });
-      } else {
-        setLastNameZh("");
-        setLastNameEn("");
-        setNickname("");
-        setPhone("");
-        setAvatarUrl("");
-        setSalutationMode("chinese");
-        setZhHonorificSuffix("先生");
-        setEnEnglishTitle("Mr.");
-        setWizardHabits(DEFAULT_HABITS);
+      try {
+        const [{ data: profile, error: profileError }, { data: authData }] = await Promise.all([
+          supabase
+            .from("profiles")
+            .select(
+              "last_name_zh, last_name_en, nickname, phone, avatar_url, display_name, habit_cleanliness, habit_ac_temp, habit_guests, habit_noise"
+            )
+            .eq("id", userId)
+            .maybeSingle(),
+          supabase.auth.getUser(),
+        ]);
+        if (cancelled) return;
+        const u = authData.user;
+        setEmail(typeof u?.email === "string" ? u.email : "");
+
+        if (profileError) {
+          console.error("[RoleOnboardingGate] step2 profile query", profileError);
+          toast.error("無法讀取個人資料，你可稍後於「我的帳號」再填寫。");
+          setLastNameZh("");
+          setLastNameEn("");
+          setNickname("");
+          setPhone("");
+          setAvatarUrl("");
+          setSalutationMode("chinese");
+          setZhHonorificSuffix("先生");
+          setEnEnglishTitle("Mr.");
+          setWizardHabits(DEFAULT_HABITS);
+          return;
+        }
+
+        if (profile) {
+          const lnZh = typeof profile.last_name_zh === "string" ? profile.last_name_zh : "";
+          const lnEn = typeof profile.last_name_en === "string" ? profile.last_name_en : "";
+          const nn = typeof profile.nickname === "string" ? profile.nickname : "";
+          const ph = typeof profile.phone === "string" ? profile.phone : "";
+          const av = typeof profile.avatar_url === "string" ? profile.avatar_url : "";
+          const dn = typeof profile.display_name === "string" ? profile.display_name : "";
+          setLastNameZh(lnZh);
+          setLastNameEn(lnEn);
+          setNickname(nn);
+          setPhone(ph);
+          setAvatarUrl(av);
+          const mode = inferSalutationMode(dn, lnZh, lnEn, nn);
+          setSalutationMode(mode);
+          if (mode === "chinese") setZhHonorificSuffix(inferZhSuffix(dn, lnZh));
+          if (mode === "english") setEnEnglishTitle(inferEnTitle(dn, lnEn));
+          setWizardHabits({
+            habit_cleanliness: Number(profile.habit_cleanliness) || 3,
+            habit_ac_temp: Number(profile.habit_ac_temp) || 3,
+            habit_guests: Number(profile.habit_guests) || 3,
+            habit_noise: Number(profile.habit_noise) || 3,
+          });
+        } else {
+          setLastNameZh("");
+          setLastNameEn("");
+          setNickname("");
+          setPhone("");
+          setAvatarUrl("");
+          setSalutationMode("chinese");
+          setZhHonorificSuffix("先生");
+          setEnEnglishTitle("Mr.");
+          setWizardHabits(DEFAULT_HABITS);
+        }
+      } catch (e) {
+        console.error("[RoleOnboardingGate] step2 profile load", e);
+        toast.error("讀取個人資料時發生問題，你可稍後於「我的帳號」再填寫。");
+        if (!cancelled) {
+          setLastNameZh("");
+          setLastNameEn("");
+          setNickname("");
+          setPhone("");
+          setAvatarUrl("");
+          setWizardHabits(DEFAULT_HABITS);
+        }
+      } finally {
+        if (!cancelled) setProfileStepLoading(false);
       }
-      setProfileStepLoading(false);
     })();
     return () => {
       cancelled = true;
@@ -195,64 +225,83 @@ export default function RoleOnboardingGate() {
       if (!mounted) return;
       setUserId(uid);
 
-      const { data, error } = await supabase.from("profiles").select("role").eq("id", uid).maybeSingle();
-
-      if (!mounted) return;
-
-      const {
-        data: { session: latest },
-      } = await supabase.auth.getSession();
-      if (!latest?.user?.id || latest.user.id !== uid) {
-        if (!mounted) return;
-        setUserId(null);
-        midOnboardingWizardRef.current = false;
-        setShowWizard(false);
-        setChecking(false);
-        return;
-      }
-
-      if (error) {
-        console.error(error);
-        await supabase.auth.signOut();
-        if (!mounted) return;
-        setUserId(null);
-        midOnboardingWizardRef.current = false;
-        setShowWizard(false);
-        setChecking(false);
-        window.location.reload();
-        return;
-      }
-
-      if (!data) {
-        await supabase.auth.signOut();
-        if (!mounted) return;
-        setUserId(null);
-        midOnboardingWizardRef.current = false;
-        setShowWizard(false);
-        setChecking(false);
-        window.location.reload();
-        return;
-      }
-
-      if (data.role === "admin") {
-        midOnboardingWizardRef.current = false;
-        setShowWizard(false);
-        setChecking(false);
-        return;
-      }
-
-      const roleValid = hasValidProfileRole(data.role);
-      if (!roleValid) {
-        setShowWizard(true);
-        if (!midOnboardingWizardRef.current) {
-          setStep(1);
+      try {
+        const {
+          data: { session: latest },
+        } = await supabase.auth.getSession();
+        if (!latest?.user?.id || latest.user.id !== uid) {
+          if (!mounted) return;
+          setUserId(null);
+          midOnboardingWizardRef.current = false;
+          setShowWizard(false);
+          setChecking(false);
+          return;
         }
-      } else if (midOnboardingWizardRef.current) {
-        setShowWizard(true);
-      } else {
-        setShowWizard(false);
+
+        const first = await supabase.from("profiles").select("role").eq("id", uid).maybeSingle();
+        let profile = first.data;
+
+        if (first.error != null || profile == null) {
+          const { data: newProfile, error: insertError } = await supabase
+            .from("profiles")
+            .insert({ id: uid, role: null })
+            .select()
+            .single();
+
+          if (insertError != null || newProfile == null) {
+            const retry = await supabase.from("profiles").select("role").eq("id", uid).maybeSingle();
+            if (retry.error != null || retry.data == null) {
+              console.error(
+                "[RoleOnboardingGate] profile missing and heal failed",
+                first.error ?? "no row",
+                insertError ?? "insert failed",
+                retry.error ?? "retry failed"
+              );
+              toast.error("無法載入或建立會員資料，請稍後再試。你已保持登入狀態。");
+              if (!mounted) return;
+              setChecking(false);
+              return;
+            }
+            profile = retry.data;
+          } else {
+            profile = newProfile;
+          }
+        }
+
+        if (!mounted) return;
+
+        if (profile == null) {
+          console.error("[RoleOnboardingGate] profile still null after heal");
+          toast.error("無法載入會員資料，請稍後再試。你已保持登入狀態。");
+          setChecking(false);
+          return;
+        }
+
+        if (profile.role === "admin") {
+          midOnboardingWizardRef.current = false;
+          setShowWizard(false);
+          setChecking(false);
+          return;
+        }
+
+        const mustShowRoleOnboarding = needsProfileRoleOnboarding(profile.role);
+        if (mustShowRoleOnboarding) {
+          setShowWizard(true);
+          if (!midOnboardingWizardRef.current) {
+            setStep(1);
+          }
+        } else if (midOnboardingWizardRef.current) {
+          setShowWizard(true);
+        } else {
+          setShowWizard(false);
+        }
+        setChecking(false);
+      } catch (e) {
+        console.error("[RoleOnboardingGate] applySession", e);
+        toast.error("載入登入狀態時發生問題，請重新整理頁面或稍後再試。你已保持登入狀態。");
+        if (!mounted) return;
+        setChecking(false);
       }
-      setChecking(false);
     }
 
     void supabase.auth.getSession().then(({ data: { session } }) => {

@@ -10,6 +10,11 @@ export function hasValidProfileRole(role: string | null | undefined): role is Pr
   return (PROFILE_ROLES as readonly string[]).includes(v);
 }
 
+/** `role` 為 null／undefined／空字串，或非合法列舉值時，應顯示身分迎新（不含 admin，admin 須另先排除）。 */
+export function needsProfileRoleOnboarding(role: string | null | undefined): boolean {
+  return !hasValidProfileRole(role);
+}
+
 export type ProfileRow = {
   id: string;
   role: ProfileRole | null;
