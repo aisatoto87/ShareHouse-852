@@ -1,7 +1,8 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowLeft, MapPin, Maximize2, MessageCircle, User } from "lucide-react";
+import { ArrowLeft, MapPin, Maximize2, MessageCircle } from "lucide-react";
 import InquiryDialogButton from "@/components/InquiryDialogButton";
+import PropertyLandlordRatingCard from "@/components/PropertyLandlordRatingCard";
 import Navbar from "@/components/Navbar";
 import PropertyBentoGallery from "@/components/PropertyBentoGallery";
 import ShareListingButton from "@/components/ShareListingButton";
@@ -119,6 +120,7 @@ export default async function PropertyDetailPage({ params }: PageProps) {
 
   const ownerCardLabel =
     ownerDisplayName ?? (ownerId ? "熱心業主" : "放盤人");
+  const ownerTitleName = ownerDisplayName ?? ownerCardLabel;
   const ownerRatingLabel = ownerAvgRating.toFixed(1);
   const ownerRatingBracket =
     ownerReviewCount === 0 ? "(新加入)" : `(${ownerReviewCount} 則評價)`;
@@ -241,33 +243,15 @@ export default async function PropertyDetailPage({ params }: PageProps) {
             <div className="sticky top-24 rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm">
               <p className="text-sm text-zinc-500">立即聯絡</p>
               <p className="mt-1 text-2xl font-bold text-[#0f2540]">HK$ {formattedPrice}/月</p>
-              <div className="my-4 flex items-center gap-3 rounded-lg bg-zinc-50 p-3">
-                {ownerAvatarSrc ? (
-                  <img
-                    src={ownerAvatarSrc}
-                    alt=""
-                    className="h-12 w-12 shrink-0 rounded-full object-cover"
-                  />
-                ) : (
-                  <div
-                    className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-zinc-200"
-                    aria-hidden
-                  >
-                    <User className="h-6 w-6 text-zinc-400" />
-                  </div>
-                )}
-                <div className="min-w-0 flex-1">
-                  <p className="text-xs text-zinc-500">此租盤由以下人士發佈：</p>
-                  <p className="text-sm font-semibold text-zinc-800">{ownerCardLabel}</p>
-                  <p className="mt-1 flex flex-wrap items-center gap-1 text-sm text-zinc-600">
-                    <span className="text-amber-500" aria-hidden>
-                      ⭐
-                    </span>
-                    <span>{ownerRatingLabel}</span>
-                    <span>{ownerRatingBracket}</span>
-                  </p>
-                </div>
-              </div>
+              <PropertyLandlordRatingCard
+                ownerId={ownerId}
+                viewerUserId={user?.id ?? null}
+                ownerCardLabel={ownerCardLabel}
+                ownerTitleName={ownerTitleName}
+                ownerAvatarSrc={ownerAvatarSrc}
+                ownerRatingLabel={ownerRatingLabel}
+                ownerRatingBracket={ownerRatingBracket}
+              />
               <a
                 href={waUrl}
                 target="_blank"
