@@ -95,6 +95,7 @@ export default function DashboardPage() {
   const [salutationMode, setSalutationMode] = useState<SalutationMode>("chinese");
   const [zhHonorificSuffix, setZhHonorificSuffix] = useState<string>("先生");
   const [enEnglishTitle, setEnEnglishTitle] = useState<string>("Mr.");
+  const [myRating, setMyRating] = useState<{ average: number; count: number }>({ average: 3, count: 0 });
 
   useEffect(() => {
     const bootstrap = async () => {
@@ -107,6 +108,7 @@ export default function DashboardPage() {
         setUserId(null);
         setUserRole("");
         setProperties([]);
+        setMyRating({ average: 3, count: 0 });
         setIsLoading(false);
         return;
       }
@@ -114,7 +116,11 @@ export default function DashboardPage() {
       setUserId(user.id);
       setEmail(typeof user.email === "string" ? user.email : "");
 
-      const [{ data: profileData }, { data: propertyRows, error: propertyError }] = await Promise.all([
+      const [
+        { data: profileData },
+        { data: propertyRows, error: propertyError },
+        { data: myReviews, error: reviewsError },
+      ] = await Promise.all([
         supabase
           .from("profiles")
           .select(
@@ -123,7 +129,28 @@ export default function DashboardPage() {
           .eq("id", user.id)
           .maybeSingle(),
         supabase.from("properties").select("*").order("created_at", { ascending: false }),
+        supabase.from("reviews").select("rating").eq("reviewee_id", user.id),
       ]);
+
+      if (reviewsError) {
+        console.error("[dashboard] my reviews", reviewsError);
+        setMyRating({ average: 3, count: 0 });
+      } else {
+        const reviewRows = Array.isArray(myReviews) ? myReviews : [];
+        const count = reviewRows.length;
+        if (count === 0) {
+          setMyRating({ average: 3, count: 0 });
+        } else {
+          const sum = reviewRows.reduce(
+            (acc, row) => acc + (typeof row.rating === "number" ? row.rating : Number(row.rating) || 0),
+            0
+          );
+          setMyRating({
+            average: Math.round((sum / count) * 10) / 10,
+            count,
+          });
+        }
+      }
 
       if (propertyError) {
         setProperties([]);
@@ -420,6 +447,25 @@ export default function DashboardPage() {
                         </div>
 
                         <div className="grid gap-6 sm:grid-cols-2">
+                          <div
+                            className="sm:col-span-2 rounded-xl border border-amber-200/70 bg-gradient-to-br from-amber-50/90 via-white to-zinc-50/50 p-4 shadow-sm ring-1 ring-amber-100/80"
+                            title="根據其他會員給你的評價計算，反映你在平台上的互動信譽。"
+                          >
+                            <p className="text-xs font-semibold uppercase tracking-wide text-amber-900/75">
+                              你的社群信譽評分
+                            </p>
+                            <div className="mt-2 flex flex-wrap items-end gap-2 sm:items-center">
+                              <span className="text-2xl leading-none text-amber-500" aria-hidden>
+                                ⭐
+                              </span>
+                              <span className="text-3xl font-bold tabular-nums tracking-tight text-[#0f2540]">
+                                {myRating.average.toFixed(1)}
+                              </span>
+                              <span className="pb-0.5 text-sm text-zinc-500">
+                                {myRating.count === 0 ? "(新加入)" : `(${myRating.count} 則評價)`}
+                              </span>
+                            </div>
+                          </div>
                           <div className="sm:col-span-2">
                             <Label htmlFor="dash-email">登入 Email</Label>
                             <Input
