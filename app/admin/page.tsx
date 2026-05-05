@@ -180,11 +180,9 @@ export default function AdminPage() {
 
   async function fetchProperties() {
     setIsLoadingList(true);
-    const { data, error } = await supabase
-      .from("properties")
-      .select("*, profiles!owner_id(display_name)")
-      .order("created_at", { ascending: false });
+    const { data, error } = await supabase.from("properties").select("*, profiles(*)").order("created_at", { ascending: false });
     setIsLoadingList(false);
+    if (error) console.error("Fetch 錯誤:", error);
     if (error) return toast.error(`讀取租盤失敗：${error.message}`);
     setProperties((data ?? []).map((row) => mapRowToProperty(row as Record<string, unknown>)));
   }
@@ -296,25 +294,33 @@ export default function AdminPage() {
     [properties, selectedManagePropertyId]
   );
   const filteredProperties = useMemo(() => {
-    const landlordKeyword = searchLandlord.trim().toLowerCase();
-
     return properties.filter((property) => {
-      if (filterRegion !== "all" && property.district !== filterRegion) return false;
+      const matchRegion = filterRegion === "all" || filterRegion === "" || property.district === filterRegion;
 
-      if (filterRent === "low" && property.price >= 4000) return false;
-      if (filterRent === "mid" && (property.price < 4000 || property.price > 6000)) return false;
-      if (filterRent === "high" && property.price <= 6000) return false;
+      const matchRent =
+        filterRent === "all" ||
+        filterRent === "" ||
+        (filterRent === "low" && property.price < 4000) ||
+        (filterRent === "mid" && property.price >= 4000 && property.price <= 6000) ||
+        (filterRent === "high" && property.price > 6000);
 
-      if (filterArea === "small" && property.size_sqft >= 100) return false;
-      if (filterArea === "med" && (property.size_sqft < 100 || property.size_sqft > 200)) return false;
-      if (filterArea === "large" && property.size_sqft <= 200) return false;
+      const matchArea =
+        filterArea === "all" ||
+        filterArea === "" ||
+        (filterArea === "small" && property.size_sqft < 100) ||
+        (filterArea === "med" && property.size_sqft >= 100 && property.size_sqft <= 200) ||
+        (filterArea === "large" && property.size_sqft > 200);
 
-      if (landlordKeyword) {
-        const ownerDisplayName = (property.owner_display_name ?? "").toLowerCase();
-        if (!ownerDisplayName.includes(landlordKeyword)) return false;
-      }
+      const profileData = (property as Property & {
+        profiles?: { display_name?: string | null } | Array<{ display_name?: string | null }>;
+        owner_display_name?: string;
+      }).profiles;
+      const profileDisplayName = Array.isArray(profileData) ? (profileData[0]?.display_name ?? "") : (profileData?.display_name ?? "");
+      const landlordName = profileDisplayName || (property as Property & { owner_display_name?: string }).owner_display_name || "";
+      const normalizedSearch = searchLandlord.trim().toLowerCase();
+      const matchLandlord = normalizedSearch === "" || landlordName.toLowerCase().includes(normalizedSearch);
 
-      return true;
+      return matchRegion && matchRent && matchArea && matchLandlord;
     });
   }, [filterArea, filterRegion, filterRent, properties, searchLandlord]);
 
