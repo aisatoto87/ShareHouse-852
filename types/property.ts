@@ -17,6 +17,8 @@ export interface Property {
   habit_ac_temp?: number;
   habit_guests?: number;
   habit_noise?: number;
+  /** 業主 display_name（由關聯 profiles 帶出） */
+  owner_display_name?: string;
 }
 
 export type DistrictFilter = "" | "港島" | "九龍" | "新界";

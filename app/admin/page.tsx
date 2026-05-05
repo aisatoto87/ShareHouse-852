@@ -108,6 +108,10 @@ export default function AdminPage() {
   const [isLoadingList, setIsLoadingList] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [filterRegion, setFilterRegion] = useState("all");
+  const [filterRent, setFilterRent] = useState("all");
+  const [filterArea, setFilterArea] = useState("all");
+  const [searchLandlord, setSearchLandlord] = useState("");
 
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [tagQuery, setTagQuery] = useState("");
@@ -176,7 +180,10 @@ export default function AdminPage() {
 
   async function fetchProperties() {
     setIsLoadingList(true);
-    const { data, error } = await supabase.from("properties").select("*").order("created_at", { ascending: false });
+    const { data, error } = await supabase
+      .from("properties")
+      .select("*, profiles!owner_id(display_name)")
+      .order("created_at", { ascending: false });
     setIsLoadingList(false);
     if (error) return toast.error(`讀取租盤失敗：${error.message}`);
     setProperties((data ?? []).map((row) => mapRowToProperty(row as Record<string, unknown>)));
@@ -288,6 +295,28 @@ export default function AdminPage() {
     () => properties.find((property) => property.id === selectedManagePropertyId) ?? null,
     [properties, selectedManagePropertyId]
   );
+  const filteredProperties = useMemo(() => {
+    const landlordKeyword = searchLandlord.trim().toLowerCase();
+
+    return properties.filter((property) => {
+      if (filterRegion !== "all" && property.district !== filterRegion) return false;
+
+      if (filterRent === "low" && property.price >= 4000) return false;
+      if (filterRent === "mid" && (property.price < 4000 || property.price > 6000)) return false;
+      if (filterRent === "high" && property.price <= 6000) return false;
+
+      if (filterArea === "small" && property.size_sqft >= 100) return false;
+      if (filterArea === "med" && (property.size_sqft < 100 || property.size_sqft > 200)) return false;
+      if (filterArea === "large" && property.size_sqft <= 200) return false;
+
+      if (landlordKeyword) {
+        const ownerDisplayName = (property.owner_display_name ?? "").toLowerCase();
+        if (!ownerDisplayName.includes(landlordKeyword)) return false;
+      }
+
+      return true;
+    });
+  }, [filterArea, filterRegion, filterRent, properties, searchLandlord]);
 
   const existingGalleryItems: StoredGalleryItem[] = useMemo(() => {
     if (!selectedManagedProperty?.gallery?.length) return [];
@@ -793,13 +822,56 @@ export default function AdminPage() {
               {isLoadingList ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />讀取中...</> : <><RefreshCw className="mr-2 h-4 w-4" />重新整理</>}
             </Button>
           </div>
+          <div className="mb-5 grid gap-3 rounded-xl border border-zinc-200 bg-zinc-50/70 p-4 md:grid-cols-2 xl:grid-cols-4">
+            <Select value={filterRegion} onValueChange={setFilterRegion}>
+              <SelectTrigger className="bg-white">
+                <SelectValue placeholder="全部地區" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">全部地區</SelectItem>
+                <SelectItem value="港島">港島</SelectItem>
+                <SelectItem value="九龍">九龍</SelectItem>
+                <SelectItem value="新界">新界</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={filterRent} onValueChange={setFilterRent}>
+              <SelectTrigger className="bg-white">
+                <SelectValue placeholder="全部租金" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">全部租金</SelectItem>
+                <SelectItem value="low">HK$4,000 以下</SelectItem>
+                <SelectItem value="mid">HK$4,000 - $6,000</SelectItem>
+                <SelectItem value="high">HK$6,000 以上</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={filterArea} onValueChange={setFilterArea}>
+              <SelectTrigger className="bg-white">
+                <SelectValue placeholder="全部面積" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">全部面積</SelectItem>
+                <SelectItem value="small">100 呎以下</SelectItem>
+                <SelectItem value="med">100 - 200 呎</SelectItem>
+                <SelectItem value="large">200 呎以上</SelectItem>
+              </SelectContent>
+            </Select>
+            <Input
+              value={searchLandlord}
+              onChange={(e) => setSearchLandlord(e.target.value)}
+              placeholder="🔍 輸入業主名稱/稱呼搜尋..."
+              className="bg-white"
+            />
+          </div>
           {isLoadingList ? (
             <p className="text-sm text-zinc-500">正在讀取資料...</p>
           ) : properties.length === 0 ? (
             <p className="text-sm text-zinc-500">目前沒有租盤資料</p>
+          ) : filteredProperties.length === 0 ? (
+            <p className="text-sm text-zinc-500">沒有符合篩選條件的租盤</p>
           ) : (
             <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
-              {properties.map((property) => (
+              {filteredProperties.map((property) => (
                 <div key={property.id} className="relative">
                   <PropertyCard property={property} />
                   <div className="absolute inset-x-3 bottom-3 z-30 flex gap-2">

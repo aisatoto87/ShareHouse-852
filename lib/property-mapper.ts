@@ -60,6 +60,22 @@ function optionalHabitField(v: unknown): number | undefined {
   return n === null ? undefined : n;
 }
 
+function pickOwnerDisplayName(row: Record<string, unknown>): string | undefined {
+  const profiles = row.profiles;
+  if (profiles && typeof profiles === "object" && !Array.isArray(profiles)) {
+    const displayName = (profiles as Record<string, unknown>).display_name;
+    if (typeof displayName === "string" && displayName.trim() !== "") return displayName.trim();
+  }
+  if (Array.isArray(profiles)) {
+    const first = profiles[0];
+    if (first && typeof first === "object") {
+      const displayName = (first as Record<string, unknown>).display_name;
+      if (typeof displayName === "string" && displayName.trim() !== "") return displayName.trim();
+    }
+  }
+  return undefined;
+}
+
 /**
  * Maps a Supabase `properties` row to the app `Property` shape.
  * Accepts snake_case (Postgres) or camelCase keys for easier migration.
@@ -87,5 +103,6 @@ export function mapRowToProperty(row: Record<string, unknown>): Property {
     habit_ac_temp: optionalHabitField(row.habit_ac_temp),
     habit_guests: optionalHabitField(row.habit_guests),
     habit_noise: optionalHabitField(row.habit_noise),
+    owner_display_name: pickOwnerDisplayName(row),
   };
 }
