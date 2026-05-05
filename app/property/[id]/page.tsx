@@ -84,12 +84,13 @@ export default async function PropertyDetailPage({ params }: PageProps) {
 
   let ownerDisplayName: string | null = null;
   let ownerAvatarUrl: string | null = null;
+  let ownerIsVerified = false;
   let ownerAvgRating = 3;
   let ownerReviewCount = 0;
 
   if (ownerId) {
     const [{ data: ownerProfile }, reviewsQuery] = await Promise.all([
-      supabase.from("profiles").select("display_name, avatar_url").eq("id", ownerId).maybeSingle(),
+      supabase.from("profiles").select("display_name, avatar_url, is_verified").eq("id", ownerId).maybeSingle(),
       supabase.from("reviews").select("rating").eq("reviewee_id", ownerId),
     ]);
 
@@ -102,6 +103,7 @@ export default async function PropertyDetailPage({ params }: PageProps) {
         typeof ownerProfile.avatar_url === "string" && ownerProfile.avatar_url.trim() !== ""
           ? ownerProfile.avatar_url.trim()
           : null;
+      ownerIsVerified = ownerProfile.is_verified === true;
     }
 
     const { data: reviews, error: reviewsError } = reviewsQuery;
@@ -251,6 +253,7 @@ export default async function PropertyDetailPage({ params }: PageProps) {
                 ownerAvatarSrc={ownerAvatarSrc}
                 ownerRatingLabel={ownerRatingLabel}
                 ownerRatingBracket={ownerRatingBracket}
+                ownerIsVerified={ownerIsVerified}
               />
               <a
                 href={waUrl}
