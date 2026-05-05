@@ -19,6 +19,10 @@ export interface Property {
   habit_noise?: number;
   /** 業主 display_name（由關聯 profiles 帶出） */
   owner_display_name?: string;
+  /** 關聯查詢回來的 profile（Admin filter 用） */
+  profiles?: {
+    display_name?: string | null;
+  } | null;
 }
 
 export type DistrictFilter = "" | "港島" | "九龍" | "新界";
