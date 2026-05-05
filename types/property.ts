@@ -12,6 +12,9 @@ export interface Property {
   roommates_req: string[];
   tags: string[];
   contact_whatsapp: string;
+  room_count?: number;
+  pricing_mode?: "average" | "custom";
+  room_prices?: number[];
   /** 室友配對用：來自 `properties` 表，可能未填 */
   habit_cleanliness?: number;
   habit_ac_temp?: number;
