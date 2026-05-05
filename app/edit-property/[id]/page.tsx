@@ -184,7 +184,7 @@ export default function EditPropertyPage() {
       const nextPricingMode = data.pricing_mode === "custom" ? "custom" : "average";
       const roomPricesObj: Record<string, string> = {};
       if (Array.isArray(data.room_prices)) {
-        data.room_prices.forEach((value, index) => {
+        data.room_prices.forEach((value: any, index: number) => {
           const key = `room${index + 1}`;
           const parsed = typeof value === "number" ? value : Number(value);
           roomPricesObj[key] = Number.isFinite(parsed) && parsed >= 0 ? String(parsed) : "";
