@@ -90,12 +90,26 @@ export default function EditPropertyPage() {
   const [existingGalleryItems, setExistingGalleryItems] = useState<StoredGalleryItem[]>([]);
   const [appendGalleryItems, setAppendGalleryItems] = useState<GalleryUploadItem[]>([]);
   const [currentImageUrl, setCurrentImageUrl] = useState("");
+  const [roomCount, setRoomCount] = useState(1);
+  const [pricingMode, setPricingMode] = useState<"average" | "custom">("average");
+  const [roomPrices, setRoomPrices] = useState<Record<string, string>>({});
 
   useEffect(() => {
     return () => {
       for (const item of appendGalleryItems) URL.revokeObjectURL(item.previewUrl);
     };
   }, [appendGalleryItems]);
+
+  useEffect(() => {
+    setRoomPrices((prev) => {
+      const next: Record<string, string> = {};
+      for (let i = 1; i <= roomCount; i += 1) {
+        const key = `room${i}`;
+        next[key] = prev[key] ?? "";
+      }
+      return next;
+    });
+  }, [roomCount]);
 
   useEffect(() => {
     if (!propertyId) return;
@@ -164,6 +178,30 @@ export default function EditPropertyPage() {
       setSelectedAmenities(Array.isArray(data.amenities) ? data.amenities : []);
       setSelectedRoommateReqs(Array.isArray(data.roommates_req) ? data.roommates_req : []);
       setCurrentImageUrl(data.imageUrl ?? "");
+      const nextRoomCount = Number.isFinite(Number(data.room_count)) && Number(data.room_count) >= 1
+        ? Math.trunc(Number(data.room_count))
+        : 1;
+      const nextPricingMode = data.pricing_mode === "custom" ? "custom" : "average";
+      const roomPricesObj: Record<string, string> = {};
+      if (Array.isArray(data.room_prices)) {
+        data.room_prices.forEach((value: any, index: number) => {
+          const key = `room${index + 1}`;
+          const parsed = typeof value === "number" ? value : Number(value);
+          roomPricesObj[key] = Number.isFinite(parsed) && parsed >= 0 ? String(parsed) : "";
+        });
+      } else if (data.room_prices && typeof data.room_prices === "object") {
+        Object.entries(data.room_prices as Record<string, unknown>).forEach(([key, value]) => {
+          const parsed = typeof value === "number" ? value : Number(value);
+          roomPricesObj[key] = Number.isFinite(parsed) && parsed >= 0 ? String(parsed) : "";
+        });
+      }
+      for (let i = 1; i <= nextRoomCount; i += 1) {
+        const key = `room${i}`;
+        if (!(key in roomPricesObj)) roomPricesObj[key] = "";
+      }
+      setRoomCount(nextRoomCount);
+      setPricingMode(nextPricingMode);
+      setRoomPrices(roomPricesObj);
 
       const gallery = Array.isArray(data.gallery) ? data.gallery : [];
       const parsed: StoredGalleryItem[] = gallery
@@ -304,6 +342,17 @@ export default function EditPropertyPage() {
     if (!Number.isFinite(priceNum) || !Number.isFinite(sizeNum) || priceNum < 0 || sizeNum < 0) {
       return toast.error("租金與面積必須是大於或等於 0 的有效數字。");
     }
+    if (!Number.isInteger(roomCount) || roomCount < 1) {
+      return toast.error("出租房間數量必須為 1 或以上。");
+    }
+    const normalizedRoomPrices = Array.from({ length: roomCount }).map((_, index) => {
+      const key = `room${index + 1}`;
+      return Number(roomPrices[key] ?? "");
+    });
+    if (pricingMode === "custom") {
+      const hasInvalid = normalizedRoomPrices.some((price) => !Number.isFinite(price) || price < 0);
+      if (hasInvalid) return toast.error("自訂每房價錢必須為有效數字。");
+    }
 
     setIsSaving(true);
     setIsUploadingGallery(true);
@@ -349,6 +398,9 @@ export default function EditPropertyPage() {
       roommates_req: selectedRoommateReqs,
       tags: selectedTags,
       gallery: mergedGallery,
+      room_count: roomCount,
+      pricing_mode: pricingMode,
+      room_prices: pricingMode === "custom" ? normalizedRoomPrices : null,
     };
     const updateQuery = supabase
       .from("properties")
@@ -425,6 +477,79 @@ export default function EditPropertyPage() {
             </div>
             {usingOtherSubDistrict ? <div className="sm:col-span-2"><label className="mb-1 block text-sm font-medium text-zinc-700">自訂分區名稱 *</label><Input value={customSubDistrict} onChange={(e) => setCustomSubDistrict(e.target.value)} /></div> : null}
             <div><label className="mb-1 block text-sm font-medium text-zinc-700">租金 *</label><Input type="number" min={0} value={form.price} onKeyDown={handleNonNegativeNumberKeyDown} onChange={(e) => { const value = e.target.value; if (value === "") { updateForm("price", value); return; } const parsed = Number(value); if (Number.isFinite(parsed) && parsed >= 0) { updateForm("price", value); } }} /></div>
+            <div className="sm:col-span-2 rounded-xl border border-zinc-200 bg-zinc-50/70 p-4">
+              <label className="mb-1 block text-sm font-medium text-zinc-700">出租房間數量 *</label>
+              <Input
+                type="number"
+                min={1}
+                value={roomCount}
+                onKeyDown={handleNonNegativeNumberKeyDown}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  if (value === "") return;
+                  const parsed = Number(value);
+                  if (Number.isInteger(parsed) && parsed >= 1) setRoomCount(parsed);
+                }}
+                className="max-w-xs bg-white"
+              />
+              <div className="mt-4">
+                <p className="mb-2 text-sm font-medium text-zinc-700">分租定價模式 *</p>
+                <div className="flex flex-wrap gap-4 text-sm text-zinc-700">
+                  <label className="inline-flex items-center gap-2">
+                    <input
+                      type="radio"
+                      name="pricing-mode"
+                      checked={pricingMode === "average"}
+                      onChange={() => setPricingMode("average")}
+                    />
+                    平均計算
+                  </label>
+                  <label className="inline-flex items-center gap-2">
+                    <input
+                      type="radio"
+                      name="pricing-mode"
+                      checked={pricingMode === "custom"}
+                      onChange={() => setPricingMode("custom")}
+                    />
+                    自訂每房價錢
+                  </label>
+                </div>
+              </div>
+              {pricingMode === "custom" ? (
+                <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                  {Array.from({ length: roomCount }).map((_, index) => {
+                    const key = `room${index + 1}`;
+                    return (
+                      <div key={key}>
+                        <label className="mb-1 block text-sm font-medium text-zinc-700">房間 {index + 1} 租金</label>
+                        <Input
+                          type="number"
+                          min={0}
+                          value={roomPrices[key] ?? ""}
+                          onKeyDown={handleNonNegativeNumberKeyDown}
+                          onChange={(e) => {
+                            const value = e.target.value;
+                            setRoomPrices((prev) => ({ ...prev, [key]: value }));
+                          }}
+                          className="bg-white"
+                          placeholder="例如：4500"
+                        />
+                      </div>
+                    );
+                  })}
+                  <p className="sm:col-span-2 text-xs text-zinc-500">
+                    目前各房總和 HK$
+                    {Array.from({ length: Number(roomCount) || 1 }).reduce((sum: number, _, index: number) => {
+    const key = `room${index + 1}`;
+    // @ts-ignore
+    const parsed = Number(roomPrices[key] ?? "");
+    return Number.isFinite(parsed) && parsed >= 0 ? sum + parsed : sum;
+}, 0)}
+                    / 總銀碼 HK${(Number(form.price) || 0).toLocaleString("zh-HK")}
+                  </p>
+                </div>
+              ) : null}
+            </div>
             <div><label className="mb-1 block text-sm font-medium text-zinc-700">面積 *</label><Input type="number" min={0} value={form.size_sqft} onKeyDown={handleNonNegativeNumberKeyDown} onChange={(e) => { const value = e.target.value; if (value === "") { updateForm("size_sqft", value); return; } const parsed = Number(value); if (Number.isFinite(parsed) && parsed >= 0) { updateForm("size_sqft", value); } }} /></div>
             <div className="sm:col-span-2"><label className="mb-1 block text-sm font-medium text-zinc-700">描述 *</label><Textarea rows={5} value={form.description} onChange={(e) => updateForm("description", e.target.value)} /></div>
             <div className="sm:col-span-2"><label className="mb-1 block text-sm font-medium text-zinc-700">WhatsApp *</label><Input value={form.contact_whatsapp} onChange={(e) => updateForm("contact_whatsapp", e.target.value)} /></div>
