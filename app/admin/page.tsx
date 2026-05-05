@@ -13,6 +13,8 @@ import { mapRowToProperty } from "@/lib/property-mapper";
 import type { Property } from "@/types/property";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
@@ -83,6 +85,19 @@ type StoredGalleryItem = {
   url: string;
 };
 
+type LandlordRow = {
+  id: string;
+  display_name: string;
+  avatar_url: string;
+  is_verified: boolean;
+  avg_rating: number;
+};
+
+type SortConfig = {
+  key: "name" | "rating";
+  direction: "asc" | "desc";
+};
+
 const initialForm: FormState = {
   title: "",
   district: "",
@@ -131,6 +146,11 @@ export default function AdminPage() {
   const [appendGalleryItems, setAppendGalleryItems] = useState<GalleryUploadItem[]>([]);
   const [isAppendingGallery, setIsAppendingGallery] = useState(false);
   const [pendingCount, setPendingCount] = useState(0);
+  const [showLandlordModal, setShowLandlordModal] = useState(false);
+  const [landlords, setLandlords] = useState<LandlordRow[]>([]);
+  const [isLoadingLandlords, setIsLoadingLandlords] = useState(false);
+  const [sortConfig, setSortConfig] = useState<SortConfig>({ key: "name", direction: "asc" });
+  const [updatingVerificationId, setUpdatingVerificationId] = useState<string | null>(null);
 
   useEffect(() => {
     const unlockedFlag = window.sessionStorage.getItem(ADMIN_UNLOCK_KEY);
@@ -178,6 +198,11 @@ export default function AdminPage() {
     });
   }, [selectedManagePropertyId]);
 
+  useEffect(() => {
+    if (!showLandlordModal) return;
+    void fetchLandlords();
+  }, [showLandlordModal]);
+
   async function fetchProperties() {
     setIsLoadingList(true);
     const { data, error } = await supabase.from("properties").select("*, profiles!owner_id(*)").order("created_at", { ascending: false });
@@ -185,6 +210,76 @@ export default function AdminPage() {
     if (error) console.error("Fetch 錯誤:", error);
     if (error) return toast.error(`讀取租盤失敗：${error.message}`);
     setProperties((data ?? []).map((row) => mapRowToProperty(row as Record<string, unknown>)));
+  }
+
+  async function fetchLandlords() {
+    setIsLoadingLandlords(true);
+    const { data: profileRows, error: profileError } = await supabase
+      .from("profiles")
+      .select("id, display_name, avatar_url, is_verified");
+    if (profileError) {
+      setIsLoadingLandlords(false);
+      toast.error(`讀取業主名單失敗：${profileError.message}`);
+      return;
+    }
+
+    const { data: reviewRows, error: reviewError } = await supabase
+      .from("reviews")
+      .select("reviewee_id, rating");
+    setIsLoadingLandlords(false);
+    if (reviewError) {
+      toast.error(`讀取評分資料失敗：${reviewError.message}`);
+      return;
+    }
+
+    const ratingMap = new Map<string, { sum: number; count: number }>();
+    for (const row of reviewRows ?? []) {
+      const revieweeId = typeof row.reviewee_id === "string" ? row.reviewee_id : "";
+      if (!revieweeId) continue;
+      const rating =
+        typeof row.rating === "number" ? row.rating : (typeof row.rating === "string" ? Number(row.rating) : NaN);
+      if (!Number.isFinite(rating)) continue;
+      const prev = ratingMap.get(revieweeId) ?? { sum: 0, count: 0 };
+      ratingMap.set(revieweeId, { sum: prev.sum + rating, count: prev.count + 1 });
+    }
+
+    const nextLandlords: LandlordRow[] = (profileRows ?? []).map((row) => {
+      const stats = ratingMap.get(row.id);
+      const avg = stats && stats.count > 0 ? stats.sum / stats.count : 0;
+      return {
+        id: row.id,
+        display_name: row.display_name?.trim() || "未設定名稱",
+        avatar_url: row.avatar_url || "",
+        is_verified: Boolean(row.is_verified),
+        avg_rating: Number(avg.toFixed(1)),
+      };
+    });
+    setLandlords(nextLandlords);
+  }
+
+  async function toggleLandlordVerified(landlordId: string, nextValue: boolean) {
+    setUpdatingVerificationId(landlordId);
+    const { error } = await supabase
+      .from("profiles")
+      .update({ is_verified: nextValue })
+      .eq("id", landlordId);
+    setUpdatingVerificationId(null);
+    if (error) {
+      toast.error(`更新認證狀態失敗：${error.message}`);
+      return;
+    }
+
+    setLandlords((prev) => prev.map((item) => (item.id === landlordId ? { ...item, is_verified: nextValue } : item)));
+    toast.success(nextValue ? "已設為官方認證" : "已取消官方認證");
+  }
+
+  function toggleLandlordSort(key: SortConfig["key"]) {
+    setSortConfig((prev) => {
+      if (prev.key === key) {
+        return { key, direction: prev.direction === "asc" ? "desc" : "asc" };
+      }
+      return { key, direction: key === "rating" ? "desc" : "asc" };
+    });
   }
 
   function handleUnlock() {
@@ -318,6 +413,18 @@ export default function AdminPage() {
       return matchRegion && matchRent && matchArea && matchLandlord;
     });
   }, [filterArea, filterRegion, filterRent, properties, searchLandlord]);
+  const sortedLandlords = useMemo(() => {
+    const list = [...landlords];
+    list.sort((a, b) => {
+      if (sortConfig.key === "name") {
+        const compared = a.display_name.localeCompare(b.display_name, "zh-Hant");
+        return sortConfig.direction === "asc" ? compared : -compared;
+      }
+      const compared = a.avg_rating - b.avg_rating;
+      return sortConfig.direction === "asc" ? compared : -compared;
+    });
+    return list;
+  }, [landlords, sortConfig]);
 
   const existingGalleryItems: StoredGalleryItem[] = useMemo(() => {
     if (!selectedManagedProperty?.gallery?.length) return [];
@@ -578,6 +685,14 @@ export default function AdminPage() {
           </div>
 
           <div className="flex items-center gap-3">
+            <Button
+              type="button"
+              variant="outline"
+              className="bg-white text-zinc-700 hover:bg-zinc-50"
+              onClick={() => setShowLandlordModal(true)}
+            >
+              🛡️ 管理業主名單
+            </Button>
             <Link
               href="/list-property"
               className="inline-flex items-center justify-center rounded-lg border border-zinc-300 bg-white px-4 py-2 text-sm font-semibold text-zinc-700 transition-colors hover:bg-zinc-50"
@@ -902,6 +1017,71 @@ export default function AdminPage() {
           )}
         </section>
       </main>
+      <Dialog open={showLandlordModal} onOpenChange={setShowLandlordModal}>
+        <DialogContent className="max-h-[85vh] max-w-4xl overflow-hidden p-0">
+          <DialogHeader className="border-b border-zinc-200 p-5">
+            <DialogTitle>現有業主名單</DialogTitle>
+            <DialogDescription>
+              管理業主官方認證狀態，並按姓名或平均星數排序查看。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="overflow-auto p-5">
+            {isLoadingLandlords ? (
+              <p className="text-sm text-zinc-500">正在讀取業主資料...</p>
+            ) : sortedLandlords.length === 0 ? (
+              <p className="text-sm text-zinc-500">目前未有可管理的業主資料。</p>
+            ) : (
+              <table className="min-w-full border-collapse text-sm">
+                <thead>
+                  <tr className="border-b border-zinc-200 text-left text-zinc-600">
+                    <th className="px-3 py-2 font-medium">頭像</th>
+                    <th className="px-3 py-2 font-medium">
+                      <button type="button" className="inline-flex items-center gap-1 hover:text-zinc-900" onClick={() => toggleLandlordSort("name")}>
+                        姓名
+                        {sortConfig.key === "name" ? (sortConfig.direction === "asc" ? "↑" : "↓") : ""}
+                      </button>
+                    </th>
+                    <th className="px-3 py-2 font-medium">
+                      <button type="button" className="inline-flex items-center gap-1 hover:text-zinc-900" onClick={() => toggleLandlordSort("rating")}>
+                        平均星數
+                        {sortConfig.key === "rating" ? (sortConfig.direction === "asc" ? "↑" : "↓") : ""}
+                      </button>
+                    </th>
+                    <th className="px-3 py-2 font-medium">官方認證</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sortedLandlords.map((landlord) => (
+                    <tr key={landlord.id} className="border-b border-zinc-100">
+                      <td className="px-3 py-2">
+                        {landlord.avatar_url ? (
+                          <img src={landlord.avatar_url} alt={landlord.display_name} className="h-9 w-9 rounded-full object-cover" />
+                        ) : (
+                          <div className="flex h-9 w-9 items-center justify-center rounded-full bg-zinc-200 text-xs text-zinc-600">N/A</div>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 font-medium text-zinc-800">{landlord.display_name}</td>
+                      <td className="px-3 py-2 text-zinc-700">
+                        {landlord.avg_rating > 0 ? `${landlord.avg_rating.toFixed(1)} ⭐` : "未有評分"}
+                      </td>
+                      <td className="px-3 py-2">
+                        <label className="inline-flex items-center gap-2">
+                          <Checkbox
+                            checked={landlord.is_verified}
+                            disabled={updatingVerificationId === landlord.id}
+                            onCheckedChange={(checked) => void toggleLandlordVerified(landlord.id, Boolean(checked))}
+                          />
+                          <span className="text-zinc-700">{landlord.is_verified ? "已認證" : "未認證"}</span>
+                        </label>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
