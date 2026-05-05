@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Loader2, User } from "lucide-react";
+import { BadgeCheck, Loader2, User } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -18,6 +18,7 @@ type PropertyLandlordRatingCardProps = {
   ownerAvatarSrc: string | null;
   ownerRatingLabel: string;
   ownerRatingBracket: string;
+  ownerIsVerified: boolean;
 };
 
 export default function PropertyLandlordRatingCard({
@@ -28,6 +29,7 @@ export default function PropertyLandlordRatingCard({
   ownerAvatarSrc,
   ownerRatingLabel,
   ownerRatingBracket,
+  ownerIsVerified,
 }: PropertyLandlordRatingCardProps) {
   const router = useRouter();
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
@@ -79,7 +81,14 @@ export default function PropertyLandlordRatingCard({
         )}
         <div className="min-w-0 flex-1">
           <p className="text-xs text-zinc-500">此租盤由以下人士發佈：</p>
-          <p className="text-sm font-semibold text-zinc-800">{ownerCardLabel}</p>
+          <p className="flex items-center gap-1.5 text-sm font-semibold text-zinc-800">
+            <span>{ownerCardLabel}</span>
+            {ownerIsVerified ? (
+              <span title="已通過管家真實性核實" aria-label="已通過管家真實性核實">
+                <BadgeCheck className="h-5 w-5 text-blue-500" />
+              </span>
+            ) : null}
+          </p>
           <p className="mt-1 flex flex-wrap items-center gap-1 text-sm text-zinc-600">
             <span className="text-amber-500" aria-hidden>
               ⭐
