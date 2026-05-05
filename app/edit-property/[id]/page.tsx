@@ -539,11 +539,12 @@ export default function EditPropertyPage() {
                   })}
                   <p className="sm:col-span-2 text-xs text-zinc-500">
                     目前各房總和 HK$
-                    {Array.from({ length: roomCount }).reduce((sum, _, index) => {
-                      const key = `room${index + 1}`;
-                      const parsed = Number(roomPrices[key] ?? "");
-                      return Number.isFinite(parsed) && parsed >= 0 ? sum + parsed : sum;
-                    }, 0).toLocaleString("zh-HK")}{" "}
+                    {Array.from({ length: Number(roomCount) || 1 }).reduce((sum: number, _, index: number) => {
+    const key = `room${index + 1}`;
+    // @ts-ignore
+    const parsed = Number(roomPrices[key] ?? "");
+    return Number.isFinite(parsed) && parsed >= 0 ? sum + parsed : sum;
+}, 0)}
                     / 總銀碼 HK${(Number(form.price) || 0).toLocaleString("zh-HK")}
                   </p>
                 </div>
