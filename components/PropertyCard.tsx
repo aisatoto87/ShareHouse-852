@@ -51,6 +51,10 @@ export default function PropertyCard({ property, tenantHabits }: PropertyCardPro
   const { id, title, district, sub_district, price, size_sqft, imageUrl, tags, contact_whatsapp } =
     property;
   const formattedPrice = new Intl.NumberFormat("zh-HK").format(price);
+  const roomCount = Math.max(1, property.room_count ?? 1);
+  const averagePrice = Math.round(price / roomCount);
+  const formattedAveragePrice = new Intl.NumberFormat("zh-HK").format(averagePrice);
+  const customRoomPrices = (property.room_prices ?? []).filter((item) => Number.isFinite(item) && item >= 0);
   const waUrl = buildWhatsAppUrl(title, contact_whatsapp);
   const detailHref = `/property/${id}`;
   const blockCardNavigation = (e: MouseEvent<HTMLDivElement>) => {
@@ -145,6 +149,19 @@ export default function PropertyCard({ property, tenantHabits }: PropertyCardPro
             HK$ {formattedPrice}
             <span className="ml-1 text-sm font-normal text-zinc-400">/月</span>
           </p>
+          <div className="mt-2">
+            {property.pricing_mode === "custom" && customRoomPrices.length > 0 && roomCount > 1 ? (
+              <div className="flex flex-wrap gap-1.5">
+                {customRoomPrices.map((item, index) => (
+                  <Badge key={`${id}-room-${index}`} className="bg-blue-50 text-blue-700">
+                    房間 {index + 1}: HK$ {new Intl.NumberFormat("zh-HK").format(item)}
+                  </Badge>
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs font-medium text-zinc-500">平均每房 HK$ {formattedAveragePrice} /月</p>
+            )}
+          </div>
         </Link>
       </CardContent>
 

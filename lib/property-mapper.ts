@@ -96,6 +96,18 @@ function pickProfile(row: Record<string, unknown>): Property["profiles"] {
   return null;
 }
 
+function parsePricingMode(v: unknown): Property["pricing_mode"] {
+  if (v === "average" || v === "custom") return v;
+  return undefined;
+}
+
+function toNumberArray(v: unknown): number[] {
+  if (!Array.isArray(v)) return [];
+  return v
+    .map((item) => (typeof item === "number" ? item : Number(item)))
+    .filter((item) => Number.isFinite(item) && item >= 0);
+}
+
 /**
  * Maps a Supabase `properties` row to the app `Property` shape.
  * Accepts snake_case (Postgres) or camelCase keys for easier migration.
@@ -119,6 +131,9 @@ export function mapRowToProperty(row: Record<string, unknown>): Property {
     roommates_req: toStringArray(row.roommates_req ?? row.roommatesReq),
     tags: toStringArray(row.tags),
     contact_whatsapp: pickString(row, "contact_whatsapp", "contactWhatsapp"),
+    room_count: Math.max(1, Math.trunc(toNumber(row.room_count ?? row.roomCount, 1))),
+    pricing_mode: parsePricingMode(row.pricing_mode ?? row.pricingMode),
+    room_prices: toNumberArray(row.room_prices ?? row.roomPrices),
     habit_cleanliness: optionalHabitField(row.habit_cleanliness),
     habit_ac_temp: optionalHabitField(row.habit_ac_temp),
     habit_guests: optionalHabitField(row.habit_guests),

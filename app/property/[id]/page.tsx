@@ -50,7 +50,11 @@ function buildWhatsAppUrl(phone: string, title: string): string {
 
 async function fetchProperty(id: string) {
   const supabase = await createSupabaseServerClient();
-  const { data, error } = await supabase.from("properties").select("*").eq("id", id).single();
+  const { data, error } = await supabase
+    .from("properties")
+    .select("*, room_count, pricing_mode, room_prices")
+    .eq("id", id)
+    .single();
   if (error || !data) return null;
   return mapRowToProperty(data as Record<string, unknown>);
 }
@@ -71,7 +75,11 @@ export async function generateMetadata({ params }: PageProps) {
 export default async function PropertyDetailPage({ params }: PageProps) {
   const { id } = await params;
   const supabase = await createSupabaseServerClient();
-  const { data: row, error } = await supabase.from("properties").select("*").eq("id", id).single();
+  const { data: row, error } = await supabase
+    .from("properties")
+    .select("*, room_count, pricing_mode, room_prices")
+    .eq("id", id)
+    .single();
   if (error || !row) notFound();
 
   const property = mapRowToProperty(row as Record<string, unknown>);
@@ -145,6 +153,10 @@ export default async function PropertyDetailPage({ params }: PageProps) {
     .filter((item) => item.url !== mainImage)
     .slice(0, 4);
   const formattedPrice = new Intl.NumberFormat("zh-HK").format(property.price);
+  const roomCount = Math.max(1, property.room_count ?? 1);
+  const averagePrice = Math.round(property.price / roomCount);
+  const formattedAveragePrice = new Intl.NumberFormat("zh-HK").format(averagePrice);
+  const customRoomPrices = (property.room_prices ?? []).filter((item) => Number.isFinite(item) && item >= 0);
   const waUrl = buildWhatsAppUrl(property.contact_whatsapp, property.title);
 
   return (
@@ -185,10 +197,25 @@ export default async function PropertyDetailPage({ params }: PageProps) {
                 </span>
               </div>
             </div>
-            <p className="text-3xl font-extrabold tracking-tight text-[#0f2540] sm:text-4xl">
-              HK$ {formattedPrice}
-              <span className="ml-1 text-base font-normal text-zinc-400">/月</span>
-            </p>
+            <div className="rounded-xl border border-zinc-200 bg-white px-4 py-3 shadow-sm">
+              <p className="text-3xl font-extrabold tracking-tight text-[#0f2540] sm:text-4xl">
+                HK$ {formattedPrice}
+                <span className="ml-1 text-base font-normal text-zinc-400">/月</span>
+              </p>
+              <div className="mt-2">
+                {property.pricing_mode === "custom" && customRoomPrices.length > 0 && roomCount > 1 ? (
+                  <div className="flex flex-wrap gap-2">
+                    {customRoomPrices.map((item, index) => (
+                      <Badge key={`detail-room-${index}`} className="bg-blue-50 text-blue-700">
+                        房間 {index + 1}: HK$ {new Intl.NumberFormat("zh-HK").format(item)}
+                      </Badge>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm font-medium text-zinc-500">平均每房 HK$ {formattedAveragePrice} /月</p>
+                )}
+              </div>
+            </div>
           </div>
         </div>
 
@@ -245,6 +272,17 @@ export default async function PropertyDetailPage({ params }: PageProps) {
             <div className="sticky top-24 rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm">
               <p className="text-sm text-zinc-500">立即聯絡</p>
               <p className="mt-1 text-2xl font-bold text-[#0f2540]">HK$ {formattedPrice}/月</p>
+              {property.pricing_mode === "custom" && customRoomPrices.length > 0 && roomCount > 1 ? (
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {customRoomPrices.map((item, index) => (
+                    <Badge key={`aside-room-${index}`} className="bg-blue-50 text-blue-700">
+                      房間 {index + 1}: HK$ {new Intl.NumberFormat("zh-HK").format(item)}
+                    </Badge>
+                  ))}
+                </div>
+              ) : (
+                <p className="mt-1 text-xs font-medium text-zinc-500">平均每房 HK$ {formattedAveragePrice}/月</p>
+              )}
               <PropertyLandlordRatingCard
                 ownerId={ownerId}
                 viewerUserId={user?.id ?? null}
