@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState, type ChangeEvent } from "react";
-import { Loader2, Save, UserRound } from "lucide-react";
+import { BadgeCheck, Loader2, Save, UserRound } from "lucide-react";
 import Link from "next/link";
 import { toast } from "sonner";
 import HabitInput from "@/components/HabitInput";
@@ -92,6 +92,7 @@ export default function DashboardPage() {
   const [phone, setPhone] = useState("");
   const [avatarUrl, setAvatarUrl] = useState("");
   const [displayName, setDisplayName] = useState("");
+  const [isVerified, setIsVerified] = useState(false);
   const [salutationMode, setSalutationMode] = useState<SalutationMode>("chinese");
   const [zhHonorificSuffix, setZhHonorificSuffix] = useState<string>("先生");
   const [enEnglishTitle, setEnEnglishTitle] = useState<string>("Mr.");
@@ -124,7 +125,7 @@ export default function DashboardPage() {
         supabase
           .from("profiles")
           .select(
-            "habit_cleanliness, habit_ac_temp, habit_guests, habit_noise, role, last_name_zh, last_name_en, nickname, phone, avatar_url, display_name"
+            "habit_cleanliness, habit_ac_temp, habit_guests, habit_noise, role, last_name_zh, last_name_en, nickname, phone, avatar_url, display_name, is_verified"
           )
           .eq("id", user.id)
           .maybeSingle(),
@@ -179,12 +180,14 @@ export default function DashboardPage() {
         const ph = typeof profileData.phone === "string" ? profileData.phone : "";
         const av = typeof profileData.avatar_url === "string" ? profileData.avatar_url : "";
         const dn = typeof profileData.display_name === "string" ? profileData.display_name : "";
+        const verified = profileData.is_verified === true;
 
         setLastNameZh(lnZh);
         setLastNameEn(lnEn);
         setNickname(nn);
         setPhone(ph);
         setAvatarUrl(av);
+        setIsVerified(verified);
 
         const mode = inferSalutationMode(dn, lnZh, lnEn, nn);
         setSalutationMode(mode);
@@ -197,6 +200,7 @@ export default function DashboardPage() {
         setNickname("");
         setPhone("");
         setAvatarUrl("");
+        setIsVerified(false);
         setSalutationMode("chinese");
         setZhHonorificSuffix("先生");
         setEnEnglishTitle("Mr.");
@@ -639,10 +643,22 @@ export default function DashboardPage() {
                           </label>
                         </div>
 
-                        <div className="mt-5 rounded-lg bg-zinc-100 px-4 py-3 text-sm">
-                          <span className="text-zinc-500">最終稱呼（將儲存）：</span>{" "}
-                          <span className="font-semibold text-[#0f2540]">{displayName || "—"}</span>
+                      <div className="mt-5 rounded-lg bg-zinc-100 px-4 py-3 text-sm">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-zinc-500">最終稱呼（將儲存）：</span>
+                          <span className="flex items-center gap-2 font-semibold text-[#0f2540]">
+                            {displayName || "—"}
+                            {isVerified ? (
+                              <span title="已通過管家真實性核實" aria-label="已通過管家真實性核實">
+                                <BadgeCheck className="h-5 w-5 text-blue-500" />
+                              </span>
+                            ) : null}
+                          </span>
                         </div>
+                        {isVerified ? (
+                          <p className="mt-1 text-xs font-medium text-blue-600">✅ 你的帳號已獲得管家真實性核實</p>
+                        ) : null}
+                      </div>
                       </div>
 
                       <div className="flex justify-end border-t border-zinc-200/80 pt-2">
