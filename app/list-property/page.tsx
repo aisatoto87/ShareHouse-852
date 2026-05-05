@@ -116,6 +116,9 @@ export default function ListPropertyPage() {
   const [isUploadingImage, setIsUploadingImage] = useState(false);
   const [galleryItems, setGalleryItems] = useState<GalleryUploadItem[]>([]);
   const [isUploadingGallery, setIsUploadingGallery] = useState(false);
+  const [roomCount, setRoomCount] = useState(1);
+  const [pricingMode, setPricingMode] = useState<"average" | "custom">("average");
+  const [roomPrices, setRoomPrices] = useState<string[]>([""]);
 
   useEffect(() => {
     let mounted = true;
@@ -189,6 +192,17 @@ export default function ListPropertyPage() {
       }
     };
   }, [galleryItems]);
+
+  useEffect(() => {
+    setRoomPrices((prev) => {
+      const safeCount = Math.max(1, roomCount);
+      if (prev.length === safeCount) return prev;
+      if (prev.length < safeCount) {
+        return [...prev, ...Array.from({ length: safeCount - prev.length }, () => "")];
+      }
+      return prev.slice(0, safeCount);
+    });
+  }, [roomCount]);
 
   const normalizedSelectedTags = useMemo(
     () => selectedTags.map((tag) => tag.trim().toLowerCase()),
@@ -325,6 +339,19 @@ export default function ListPropertyPage() {
       toast.error("租金與面積必須是大於或等於 0 的有效數字。");
       return;
     }
+    if (!Number.isInteger(roomCount) || roomCount < 1) {
+      toast.error("出租房間數量必須為 1 或以上。");
+      return;
+    }
+    let normalizedRoomPrices: number[] | null = null;
+    if (pricingMode === "custom") {
+      normalizedRoomPrices = roomPrices.map((item) => Number(item));
+      const hasInvalid = normalizedRoomPrices.some((item) => !Number.isFinite(item) || item < 0);
+      if (hasInvalid) {
+        toast.error("自訂每間房價錢必須為有效數字。");
+        return;
+      }
+    }
 
     setIsSubmitting(true);
     setIsUploadingImage(true);
@@ -399,6 +426,9 @@ export default function ListPropertyPage() {
       tags: selectedTags,
       gallery: galleryUploads,
       owner_id: ownerUserId,
+      room_count: roomCount,
+      pricing_mode: pricingMode,
+      room_prices: pricingMode === "custom" ? normalizedRoomPrices : null,
     };
 
     const { error } = await supabase.from("properties").insert(payload);
@@ -420,6 +450,9 @@ export default function ListPropertyPage() {
     setTagQuery("");
     setSelectedImageFile(null);
     setImagePreviewUrl(null);
+    setRoomCount(1);
+    setPricingMode("average");
+    setRoomPrices([""]);
     setGalleryItems((prev) => {
       for (const item of prev) URL.revokeObjectURL(item.previewUrl);
       return [];
@@ -540,6 +573,83 @@ export default function ListPropertyPage() {
                 }}
                 placeholder="9500"
               />
+            </div>
+            <div className="sm:col-span-2 rounded-xl border border-zinc-200 bg-zinc-50/70 p-4">
+              <label className="mb-1 block text-sm font-medium text-zinc-700">出租房間數量 *</label>
+              <Input
+                type="number"
+                min={1}
+                value={roomCount}
+                onKeyDown={handleNonNegativeNumberKeyDown}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  if (value === "") return;
+                  const parsed = Number(value);
+                  if (Number.isInteger(parsed) && parsed >= 1) {
+                    setRoomCount(parsed);
+                  }
+                }}
+                placeholder="1"
+                className="max-w-xs bg-white"
+              />
+              <div className="mt-4">
+                <p className="mb-2 text-sm font-medium text-zinc-700">分租定價模式 *</p>
+                <div className="flex flex-wrap gap-4 text-sm text-zinc-700">
+                  <label className="inline-flex items-center gap-2">
+                    <input
+                      type="radio"
+                      name="pricing-mode"
+                      checked={pricingMode === "average"}
+                      onChange={() => setPricingMode("average")}
+                    />
+                    平均計算 (Average)
+                  </label>
+                  <label className="inline-flex items-center gap-2">
+                    <input
+                      type="radio"
+                      name="pricing-mode"
+                      checked={pricingMode === "custom"}
+                      onChange={() => setPricingMode("custom")}
+                    />
+                    自訂每間房價錢 (Custom)
+                  </label>
+                </div>
+              </div>
+              {pricingMode === "custom" ? (
+                <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                  {Array.from({ length: roomCount }).map((_, index) => (
+                    <div key={`room-price-${index}`}>
+                      <label className="mb-1 block text-sm font-medium text-zinc-700">
+                        房間 {index + 1} 租金 (HKD)
+                      </label>
+                      <Input
+                        type="number"
+                        min={0}
+                        value={roomPrices[index] ?? ""}
+                        onKeyDown={handleNonNegativeNumberKeyDown}
+                        onChange={(e) => {
+                          const value = e.target.value;
+                          setRoomPrices((prev) => {
+                            const next = [...prev];
+                            next[index] = value;
+                            return next;
+                          });
+                        }}
+                        placeholder="例如：4500"
+                        className="bg-white"
+                      />
+                    </div>
+                  ))}
+                  <p className="sm:col-span-2 text-xs text-zinc-500">
+                    目前各房總和 HK$
+                    {roomPrices.reduce((sum, item) => {
+                      const parsed = Number(item);
+                      return Number.isFinite(parsed) && parsed >= 0 ? sum + parsed : sum;
+                    }, 0).toLocaleString("zh-HK")}{" "}
+                    / 總銀碼 HK${(Number(form.price) || 0).toLocaleString("zh-HK")}
+                  </p>
+                </div>
+              ) : null}
             </div>
             <div>
               <label className="mb-1 block text-sm font-medium text-zinc-700">面積 (sqft) *</label>
