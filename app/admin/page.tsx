@@ -180,7 +180,7 @@ export default function AdminPage() {
 
   async function fetchProperties() {
     setIsLoadingList(true);
-    const { data, error } = await supabase.from("properties").select("*, profiles(*)").order("created_at", { ascending: false });
+    const { data, error } = await supabase.from("properties").select("*, profiles!owner_id(*)").order("created_at", { ascending: false });
     setIsLoadingList(false);
     if (error) console.error("Fetch 錯誤:", error);
     if (error) return toast.error(`讀取租盤失敗：${error.message}`);
@@ -311,12 +311,7 @@ export default function AdminPage() {
         (filterArea === "med" && property.size_sqft >= 100 && property.size_sqft <= 200) ||
         (filterArea === "large" && property.size_sqft > 200);
 
-      const profileData = (property as Property & {
-        profiles?: { display_name?: string | null } | Array<{ display_name?: string | null }>;
-        owner_display_name?: string;
-      }).profiles;
-      const profileDisplayName = Array.isArray(profileData) ? (profileData[0]?.display_name ?? "") : (profileData?.display_name ?? "");
-      const landlordName = profileDisplayName || (property as Property & { owner_display_name?: string }).owner_display_name || "";
+      const landlordName = property.profiles?.display_name || "";
       const normalizedSearch = searchLandlord.trim().toLowerCase();
       const matchLandlord = normalizedSearch === "" || landlordName.toLowerCase().includes(normalizedSearch);
 
