@@ -12,6 +12,7 @@ export default function Navbar() {
   const router = useRouter();
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
   const [user, setUser] = useState<User | null>(null);
+  const [profileRole, setProfileRole] = useState<string>("");
 
   // 👇 1. 放喺第 15 行 (即係 useState 同 useEffect 中間)
   const VIP_EMAILS = [
@@ -32,14 +33,37 @@ export default function Navbar() {
   useEffect(() => {
     let mounted = true;
 
-    supabase.auth.getUser().then(({ data }) => {
-      if (mounted) setUser(data.user);
+    supabase.auth.getUser().then(async ({ data }) => {
+      if (!mounted) return;
+      setUser(data.user);
+      if (!data.user) {
+        setProfileRole("");
+        return;
+      }
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("role")
+        .eq("id", data.user.id)
+        .maybeSingle();
+      if (!mounted) return;
+      setProfileRole(typeof profile?.role === "string" ? profile.role : "");
     });
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user ?? null);
+    } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      const nextUser = session?.user ?? null;
+      setUser(nextUser);
+      if (!nextUser) {
+        setProfileRole("");
+        return;
+      }
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("role")
+        .eq("id", nextUser.id)
+        .maybeSingle();
+      setProfileRole(typeof profile?.role === "string" ? profile.role : "");
     });
 
     return () => {
@@ -61,6 +85,20 @@ export default function Navbar() {
     router.refresh();
   }
 
+  function handleListPropertyClick() {
+    if (!user) {
+      router.push("/login");
+      return;
+    }
+
+    if (profileRole === "tenant") {
+      toast.error("抱歉，租客帳號無法放盤。如有需要，請使用業主帳號登入！");
+      return;
+    }
+
+    router.push("/list-property");
+  }
+
   return (
     <nav className="sticky top-0 z-50 border-b border-zinc-200 bg-white/95 backdrop-blur-sm">
       <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-4 py-3 sm:px-6">
@@ -77,14 +115,13 @@ export default function Navbar() {
         </Link>
 
         <div className="flex shrink-0 items-center gap-2 sm:gap-3">
-          <Link href="/list-property" className="inline-flex">
-            <Button
-              type="button"
-              className="rounded-full bg-[#0f2540] px-3 py-1.5 text-sm text-white hover:bg-[#1a3a5c]"
-            >
-              免費放盤
-            </Button>
-          </Link>
+          <Button
+            type="button"
+            onClick={handleListPropertyClick}
+            className="rounded-full bg-[#0f2540] px-3 py-1.5 text-sm text-white hover:bg-[#1a3a5c]"
+          >
+            免費放盤
+          </Button>
 {/* 👇 呢度就係管家後台嘅傳送門 */}
 
 {/* 👇 2. 用 isAdmin 判斷包住佢，只有 Admin 先見到呢個掣！ */}
