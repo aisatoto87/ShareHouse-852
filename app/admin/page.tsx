@@ -205,7 +205,10 @@ export default function AdminPage() {
 
   async function fetchProperties() {
     setIsLoadingList(true);
-    const { data, error } = await supabase.from("properties").select("*, profiles!owner_id(*)").order("created_at", { ascending: false });
+    const { data, error } = await supabase
+      .from("properties")
+      .select("*, room_count, pricing_mode, room_prices, profiles!owner_id(*)")
+      .order("created_at", { ascending: false });
     setIsLoadingList(false);
     if (error) console.error("Fetch 錯誤:", error);
     if (error) return toast.error(`讀取租盤失敗：${error.message}`);
@@ -425,6 +428,33 @@ export default function AdminPage() {
     });
     return list;
   }, [landlords, sortConfig]);
+
+  function formatPriceCompact(value: number): string {
+    if (!Number.isFinite(value)) return "0";
+    if (value >= 1000) {
+      const k = value / 1000;
+      return `${Number.isInteger(k) ? k.toFixed(0) : k.toFixed(1)}k`;
+    }
+    return value.toString();
+  }
+
+  function buildAdminRentSubtitle(property: Property): { short: string; full: string } {
+    const roomCount = Math.max(1, property.room_count ?? 1);
+    const averagePrice = Math.round(property.price / roomCount);
+
+    if (property.pricing_mode === "custom") {
+      const roomPrices = (property.room_prices ?? []).filter((item) => Number.isFinite(item) && item >= 0);
+      if (roomPrices.length > 0) {
+        const roomDetails = roomPrices.map((item, index) => `房${index + 1} $${formatPriceCompact(item)}`).join(", ");
+        const full = `(自訂: ${roomDetails})`;
+        const short = full.length > 32 ? `${full.slice(0, 31)}...` : full;
+        return { short, full };
+      }
+    }
+
+    const text = `(共 ${roomCount} 房，平均 HK$ ${new Intl.NumberFormat("zh-HK").format(averagePrice)}/房)`;
+    return { short: text, full: text };
+  }
 
   const existingGalleryItems: StoredGalleryItem[] = useMemo(() => {
     if (!selectedManagedProperty?.gallery?.length) return [];
@@ -990,6 +1020,19 @@ export default function AdminPage() {
               {filteredProperties.map((property) => (
                 <div key={property.id} className="relative">
                   <PropertyCard property={property} />
+                  <div className="pointer-events-none absolute inset-x-3 bottom-[3.55rem] z-30 rounded-md bg-white/95 px-2.5 py-1.5 ring-1 ring-zinc-200/90 backdrop-blur-sm">
+                    <p className="text-sm font-semibold text-[#0f2540]">
+                      HK$ {new Intl.NumberFormat("zh-HK").format(property.price)}
+                    </p>
+                    {(() => {
+                      const rentText = buildAdminRentSubtitle(property);
+                      return (
+                        <p className="truncate text-xs text-zinc-500" title={rentText.full}>
+                          {rentText.short}
+                        </p>
+                      );
+                    })()}
+                  </div>
                   <div className="absolute inset-x-3 bottom-3 z-30 flex gap-2">
                     <Link href={`/edit-property/${property.id}`} className="flex-1">
                       <Button
