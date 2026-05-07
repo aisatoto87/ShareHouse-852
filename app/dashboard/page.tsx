@@ -101,27 +101,22 @@ export default function DashboardPage() {
   const [myRating, setMyRating] = useState<{ average: number; count: number }>({ average: 3, count: 0 });
 
   useEffect(() => {
-    const bootstrap = async () => {
-      setIsLoading(true);
+    let isMounted = true;
+
+    async function fetchProfile() {
       try {
         const {
-          data: { session },
-          error: sessionError,
-        } = await supabase.auth.getSession();
-        const {
           data: { user },
-          error: userError,
+          error: authError,
         } = await supabase.auth.getUser();
 
-        if (!session || !user || sessionError || userError) {
-          setUserId(null);
-          setUserRole("");
-          setProperties([]);
-          setMyRating({ average: 3, count: 0 });
-          toast.error("請先登入");
+        if (authError || !user) {
+          toast.error("登入已失效，請重新登入");
           router.push("/");
           return;
         }
+
+        if (!isMounted) return;
 
         setUserId(user.id);
         setEmail(typeof user.email === "string" ? user.email : "");
@@ -141,6 +136,8 @@ export default function DashboardPage() {
           supabase.from("properties").select("*").order("created_at", { ascending: false }),
           supabase.from("reviews").select("rating").eq("reviewee_id", user.id),
         ]);
+
+        if (!isMounted) return;
 
         if (reviewsError) {
           console.error("[dashboard] my reviews", reviewsError);
@@ -214,18 +211,22 @@ export default function DashboardPage() {
           setZhHonorificSuffix("先生");
           setEnEnglishTitle("Mr.");
         }
-
       } catch (error) {
-        console.error("[dashboard] bootstrap failed", error);
-        const message = error instanceof Error ? error.message : "未知錯誤";
-        toast.error(`載入 Dashboard 失敗：${message}`);
+        console.error("Fetch error:", error);
+        toast.error("讀取資料失敗");
       } finally {
-        setIsLoading(false);
+        if (isMounted) {
+          setIsLoading(false);
+        }
       }
-    };
+    }
 
-    void bootstrap();
-  }, [router, supabase]);
+    void fetchProfile();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [router]);
 
   useEffect(() => {
     if (secretCount !== 5) return;
