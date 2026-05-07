@@ -118,7 +118,6 @@ export default function DashboardPage() {
           setUserRole("");
           setProperties([]);
           setMyRating({ average: 3, count: 0 });
-          setIsLoading(false);
           toast.error("請先登入");
           router.push("/");
           return;
@@ -216,9 +215,11 @@ export default function DashboardPage() {
           setEnEnglishTitle("Mr.");
         }
 
-        setIsLoading(false);
       } catch (error) {
         console.error("[dashboard] bootstrap failed", error);
+        const message = error instanceof Error ? error.message : "未知錯誤";
+        toast.error(`載入 Dashboard 失敗：${message}`);
+      } finally {
         setIsLoading(false);
       }
     };
