@@ -351,34 +351,45 @@ export default function EditPropertyPage() {
     if (!Number.isInteger(roomCount) || roomCount < 1) {
       return toast.error("出租房間數量必須為 1 或以上。");
     }
+    const price = form.price;
+    let finalPricingMode = pricingMode;
     let finalRoomPrices: Record<string, number | string> = {};
+
     if (pricingMode === "custom") {
-      let sum = 0;
-      for (let i = 1; i < roomCount; i += 1) {
-        const key = `room${i}`;
-        const roomValue = Number(roomPrices[key] || 0);
-        if (!Number.isFinite(roomValue) || roomValue < 0) {
-          return toast.error("自訂每房價錢必須為有效數字。");
+      if (roomCount === 1) {
+        finalRoomPrices = { room1: Number(price) };
+      } else {
+        let sum = 0;
+        for (let i = 1; i < roomCount; i += 1) {
+          const roomValue = Number(roomPrices[`room${i}`] || 0);
+          if (!Number.isFinite(roomValue) || roomValue < 0) {
+            toast.error("自訂每房價錢必須為有效數字。");
+            return;
+          }
+          sum += roomValue;
         }
-        sum += roomValue;
+        const lastRoomPrice = Number(price) - sum;
+
+        if (lastRoomPrice < 0) {
+          toast.error("前面房間的租金總和已超過總租金，請重新調整！");
+          setIsSaving(false);
+          return;
+        }
+
+        finalRoomPrices = { ...roomPrices, [`room${roomCount}`]: lastRoomPrice };
       }
-      const lastRoomPrice = Number(form.price) - sum;
-      if (lastRoomPrice < 0) {
-        toast.error("前面房間的租金總和已超過總租金！");
+
+      const customTotal = Object.values(finalRoomPrices).reduce<number>(
+        (acc, value) => acc + Number(value || 0),
+        0
+      );
+      if (customTotal !== Number(price)) {
+        toast.error("各房間租金總和必須等於總租金！");
         return;
       }
-      finalRoomPrices = { ...roomPrices, [`room${roomCount}`]: lastRoomPrice };
-
-      if (customPricing.hasInvalidEditableRoom) {
-        return toast.error("自訂每房價錢必須為有效數字。");
-      }
-      if (customPricing.isOtherSumExceeded || customPricing.remaining < 0) {
-        return toast.error("前面房間的租金總和已超過總租金，請重新調整！");
-      }
-      const customRoomTotal = Object.values(customPricing.computedRoomPrices).reduce((sum, value) => sum + value, 0);
-      if (customRoomTotal !== priceNum || !customPricing.isTotalMatched) {
-        return toast.error("各房間租金總和必須等於總租金！");
-      }
+    } else {
+      finalPricingMode = "average";
+      finalRoomPrices = {};
     }
 
     const {
@@ -452,8 +463,8 @@ export default function EditPropertyPage() {
       tags: selectedTags,
       gallery: mergedGallery,
       room_count: roomCount,
-      pricing_mode: pricingMode,
-      room_prices: pricingMode === "custom" ? finalRoomPrices : {},
+      pricing_mode: finalPricingMode,
+      room_prices: finalPricingMode === "custom" ? finalRoomPrices : {},
     };
     const updateQuery = supabase
       .from("properties")
