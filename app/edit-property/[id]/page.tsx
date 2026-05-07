@@ -400,7 +400,7 @@ export default function EditPropertyPage() {
       gallery: mergedGallery,
       room_count: roomCount,
       pricing_mode: pricingMode,
-      room_prices: pricingMode === "custom" ? normalizedRoomPrices : null,
+      room_prices: pricingMode === "custom" ? normalizedRoomPrices : {},
     };
     const updateQuery = supabase
       .from("properties")
