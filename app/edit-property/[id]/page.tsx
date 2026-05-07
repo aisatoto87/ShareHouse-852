@@ -234,6 +234,39 @@ export default function EditPropertyPage() {
   const districtSubDistricts = form.district ? DISTRICT_SUBDISTRICTS[form.district as (typeof DISTRICT_OPTIONS)[number]] ?? [] : [];
   const usingOtherSubDistrict = form.sub_district === SUBDISTRICT_OTHER_VALUE;
   const finalSubDistrict = usingOtherSubDistrict ? customSubDistrict.trim() : form.sub_district.trim();
+  const totalRent = Number(form.price);
+  const normalizedTotalRent = Number.isFinite(totalRent) && totalRent >= 0 ? totalRent : 0;
+  const customPricing = useMemo(() => {
+    const computedRoomPrices: Record<string, number> = {};
+    const lastRoomIndex = roomCount;
+    const lastRoomKey = `room${lastRoomIndex}`;
+    let otherRoomsSum = 0;
+    let hasInvalidEditableRoom = false;
+
+    for (let i = 1; i <= roomCount; i += 1) {
+      const key = `room${i}`;
+      if (roomCount === 1 || i === lastRoomIndex) continue;
+      const parsed = Number(roomPrices[key] ?? "");
+      if (!Number.isFinite(parsed) || parsed < 0) {
+        hasInvalidEditableRoom = true;
+        continue;
+      }
+      computedRoomPrices[key] = parsed;
+      otherRoomsSum += parsed;
+    }
+
+    const remaining = roomCount === 1 ? normalizedTotalRent : normalizedTotalRent - otherRoomsSum;
+    computedRoomPrices[lastRoomKey] = remaining;
+
+    return {
+      computedRoomPrices,
+      otherRoomsSum,
+      remaining,
+      hasInvalidEditableRoom,
+      isOtherSumExceeded: otherRoomsSum > normalizedTotalRent,
+      isTotalMatched: otherRoomsSum + remaining === normalizedTotalRent,
+    };
+  }, [normalizedTotalRent, roomCount, roomPrices]);
 
   const normTags = useMemo(() => selectedTags.map((x) => x.toLowerCase()), [selectedTags]);
   const normAmenities = useMemo(() => selectedAmenities.map((x) => x.toLowerCase()), [selectedAmenities]);
@@ -307,6 +340,29 @@ export default function EditPropertyPage() {
   async function handleSave(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (!propertyId) return;
+    if (!form.title || !form.district || !finalSubDistrict || !form.price || !form.size_sqft || !form.description || !form.contact_whatsapp) {
+      return toast.error("請先填妥所有必填欄位。");
+    }
+    const priceNum = Number(form.price);
+    const sizeNum = Number(form.size_sqft);
+    if (!Number.isFinite(priceNum) || !Number.isFinite(sizeNum) || priceNum < 0 || sizeNum < 0) {
+      return toast.error("租金與面積必須是大於或等於 0 的有效數字。");
+    }
+    if (!Number.isInteger(roomCount) || roomCount < 1) {
+      return toast.error("出租房間數量必須為 1 或以上。");
+    }
+    if (pricingMode === "custom") {
+      if (customPricing.hasInvalidEditableRoom) {
+        return toast.error("自訂每房價錢必須為有效數字。");
+      }
+      if (customPricing.isOtherSumExceeded || customPricing.remaining < 0) {
+        return toast.error("前面房間的租金總和已超過總租金，請重新調整！");
+      }
+      const customRoomTotal = Object.values(customPricing.computedRoomPrices).reduce((sum, value) => sum + value, 0);
+      if (customRoomTotal !== priceNum || !customPricing.isTotalMatched) {
+        return toast.error("各房間租金總和必須等於總租金！");
+      }
+    }
 
     const {
       data: { user },
@@ -334,25 +390,9 @@ export default function EditPropertyPage() {
       return;
     }
 
-    if (!form.title || !form.district || !finalSubDistrict || !form.price || !form.size_sqft || !form.description || !form.contact_whatsapp) {
-      return toast.error("請先填妥所有必填欄位。");
-    }
-    const priceNum = Number(form.price);
-    const sizeNum = Number(form.size_sqft);
-    if (!Number.isFinite(priceNum) || !Number.isFinite(sizeNum) || priceNum < 0 || sizeNum < 0) {
-      return toast.error("租金與面積必須是大於或等於 0 的有效數字。");
-    }
-    if (!Number.isInteger(roomCount) || roomCount < 1) {
-      return toast.error("出租房間數量必須為 1 或以上。");
-    }
-    const normalizedRoomPrices = Array.from({ length: roomCount }).map((_, index) => {
-      const key = `room${index + 1}`;
-      return Number(roomPrices[key] ?? "");
-    });
-    if (pricingMode === "custom") {
-      const hasInvalid = normalizedRoomPrices.some((price) => !Number.isFinite(price) || price < 0);
-      if (hasInvalid) return toast.error("自訂每房價錢必須為有效數字。");
-    }
+    const normalizedRoomPrices = pricingMode === "custom"
+      ? customPricing.computedRoomPrices
+      : {};
 
     setIsSaving(true);
     setIsUploadingGallery(true);
@@ -400,7 +440,7 @@ export default function EditPropertyPage() {
       gallery: mergedGallery,
       room_count: roomCount,
       pricing_mode: pricingMode,
-      room_prices: pricingMode === "custom" ? normalizedRoomPrices : {},
+      room_prices: normalizedRoomPrices,
     };
     const updateQuery = supabase
       .from("properties")
@@ -519,19 +559,23 @@ export default function EditPropertyPage() {
                 <div className="mt-4 grid gap-3 sm:grid-cols-2">
                   {Array.from({ length: roomCount }).map((_, index) => {
                     const key = `room${index + 1}`;
+                    const isAutoCalculatedRoom = roomCount === 1 || index + 1 === roomCount;
                     return (
                       <div key={key}>
                         <label className="mb-1 block text-sm font-medium text-zinc-700">房間 {index + 1} 租金</label>
                         <Input
                           type="number"
                           min={0}
-                          value={roomPrices[key] ?? ""}
+                          value={isAutoCalculatedRoom ? String(customPricing.computedRoomPrices[key] ?? 0) : (roomPrices[key] ?? "")}
                           onKeyDown={handleNonNegativeNumberKeyDown}
                           onChange={(e) => {
+                            if (isAutoCalculatedRoom) return;
                             const value = e.target.value;
                             setRoomPrices((prev) => ({ ...prev, [key]: value }));
                           }}
-                          className="bg-white"
+                          readOnly={isAutoCalculatedRoom}
+                          disabled={isAutoCalculatedRoom}
+                          className={isAutoCalculatedRoom ? "bg-zinc-100 text-zinc-600" : "bg-white"}
                           placeholder="例如：4500"
                         />
                       </div>
@@ -539,12 +583,7 @@ export default function EditPropertyPage() {
                   })}
                   <p className="sm:col-span-2 text-xs text-zinc-500">
                     目前各房總和 HK$
-                    {Array.from({ length: Number(roomCount) || 1 }).reduce((sum: number, _, index: number) => {
-    const key = `room${index + 1}`;
-    // @ts-ignore
-    const parsed = Number(roomPrices[key] ?? "");
-    return Number.isFinite(parsed) && parsed >= 0 ? sum + parsed : sum;
-}, 0)}
+                    {Object.values(customPricing.computedRoomPrices).reduce((sum: number, value: number) => sum + value, 0)}
                     / 總銀碼 HK${(Number(form.price) || 0).toLocaleString("zh-HK")}
                   </p>
                 </div>
