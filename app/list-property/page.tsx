@@ -428,7 +428,7 @@ export default function ListPropertyPage() {
       owner_id: ownerUserId,
       room_count: roomCount,
       pricing_mode: pricingMode,
-      room_prices: pricingMode === "custom" ? normalizedRoomPrices : null,
+      room_prices: pricingMode === "custom" ? normalizedRoomPrices : {},
     };
 
     const { error } = await supabase.from("properties").insert(payload);

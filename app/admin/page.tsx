@@ -513,6 +513,18 @@ export default function AdminPage() {
     const mainCandidate =
       galleryUploads.find((item) => item.isFallbackMain) ?? galleryUploads[0];
 
+    const formPricing = form as FormState & {
+      room_count?: number | string;
+      pricing_mode?: "average" | "custom" | string;
+      room_prices?: unknown;
+    };
+    const finalRoomCount = Math.max(1, Math.trunc(Number(formPricing.room_count ?? 1)));
+    const finalPricingMode = formPricing.pricing_mode === "custom" ? "custom" : "average";
+    const finalRoomPrices =
+      finalPricingMode === "custom" && formPricing.room_prices && typeof formPricing.room_prices === "object"
+        ? formPricing.room_prices
+        : {};
+
     const payload = {
       title: form.title.trim(),
       district: form.district.trim(),
@@ -530,6 +542,9 @@ export default function AdminPage() {
       roommates_req: selectedRoommateReqs,
       tags: selectedTags,
       gallery: galleryUploads.map((item) => item.entry),
+      room_count: finalRoomCount,
+      pricing_mode: finalPricingMode,
+      room_prices: finalPricingMode === "custom" ? finalRoomPrices : {},
     };
     const { error } = await supabase.from("properties").insert(payload);
     setIsSubmitting(false);
