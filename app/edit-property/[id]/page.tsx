@@ -477,6 +477,7 @@ export default function EditPropertyPage() {
     }
 
     toast.success("更新成功！");
+    router.refresh();
     router.push("/dashboard");
   }
 
