@@ -359,31 +359,30 @@ export default function EditPropertyPage() {
         finalRoomPrices = { room1: Number(price) };
       } else {
         let sum = 0;
+        const currentRooms: Record<string, number> = {};
+
         for (let i = 1; i < roomCount; i += 1) {
-          const roomValue = Number(roomPrices[`room${i}`] || 0);
+          const roomValue = Number(roomPrices[`room${i}`]) || 0;
           if (!Number.isFinite(roomValue) || roomValue < 0) {
-            toast.error("自訂每房價錢必須為有效數字。");
+            toast.error(`房間 ${i} 租金必須為有效數字。`);
+            setIsSaving(false);
             return;
           }
           sum += roomValue;
+          currentRooms[`room${i}`] = roomValue;
         }
-        const lastRoomPrice = Number(price) - sum;
 
+        const lastRoomPrice = Number(price) - sum;
         if (lastRoomPrice < 0) {
-          toast.error("前面房間的租金總和已超過總租金，請重新調整！");
+          toast.error("前面房間的租金總和已超過總租金！");
+          setIsSaving(false);
           return;
         }
 
-        finalRoomPrices = { ...roomPrices, [`room${roomCount}`]: lastRoomPrice };
-      }
-
-      const customTotal = Object.values(finalRoomPrices).reduce<number>(
-        (acc, value) => acc + Number(value || 0),
-        0
-      );
-      if (customTotal !== Number(price)) {
-        toast.error("各房間租金總和必須等於總租金！");
-        return;
+        finalRoomPrices = {
+          ...currentRooms,
+          [`room${roomCount}`]: lastRoomPrice,
+        };
       }
     }
 
