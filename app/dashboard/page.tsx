@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState, type ChangeEvent } from "react";
 import { BadgeCheck, Loader2, Save, UserRound } from "lucide-react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import HabitInput from "@/components/HabitInput";
 import Navbar from "@/components/Navbar";
@@ -74,6 +75,7 @@ const HABIT_ITEMS: Array<{
 
 export default function DashboardPage() {
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
+  const router = useRouter();
   const [userId, setUserId] = useState<string | null>(null);
   const [userRole, setUserRole] = useState<string>("");
   const [secretCount, setSecretCount] = useState(0);
@@ -101,116 +103,128 @@ export default function DashboardPage() {
   useEffect(() => {
     const bootstrap = async () => {
       setIsLoading(true);
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
+      try {
+        const {
+          data: { session },
+          error: sessionError,
+        } = await supabase.auth.getSession();
+        const {
+          data: { user },
+          error: userError,
+        } = await supabase.auth.getUser();
 
-      if (!user) {
-        setUserId(null);
-        setUserRole("");
-        setProperties([]);
-        setMyRating({ average: 3, count: 0 });
-        setIsLoading(false);
-        return;
-      }
+        if (!session || !user || sessionError || userError) {
+          setUserId(null);
+          setUserRole("");
+          setProperties([]);
+          setMyRating({ average: 3, count: 0 });
+          setIsLoading(false);
+          toast.error("請先登入");
+          router.push("/");
+          return;
+        }
 
-      setUserId(user.id);
-      setEmail(typeof user.email === "string" ? user.email : "");
+        setUserId(user.id);
+        setEmail(typeof user.email === "string" ? user.email : "");
 
-      const [
-        { data: profileData },
-        { data: propertyRows, error: propertyError },
-        { data: myReviews, error: reviewsError },
-      ] = await Promise.all([
-        supabase
-          .from("profiles")
-          .select(
-            "habit_cleanliness, habit_ac_temp, habit_guests, habit_noise, role, last_name_zh, last_name_en, nickname, phone, avatar_url, display_name, is_verified"
-          )
-          .eq("id", user.id)
-          .maybeSingle(),
-        supabase.from("properties").select("*").order("created_at", { ascending: false }),
-        supabase.from("reviews").select("rating").eq("reviewee_id", user.id),
-      ]);
+        const [
+          { data: profileData },
+          { data: propertyRows, error: propertyError },
+          { data: myReviews, error: reviewsError },
+        ] = await Promise.all([
+          supabase
+            .from("profiles")
+            .select(
+              "habit_cleanliness, habit_ac_temp, habit_guests, habit_noise, role, last_name_zh, last_name_en, nickname, phone, avatar_url, display_name, is_verified"
+            )
+            .eq("id", user.id)
+            .maybeSingle(),
+          supabase.from("properties").select("*").order("created_at", { ascending: false }),
+          supabase.from("reviews").select("rating").eq("reviewee_id", user.id),
+        ]);
 
-      if (reviewsError) {
-        console.error("[dashboard] my reviews", reviewsError);
-        setMyRating({ average: 3, count: 0 });
-      } else {
-        const reviewRows = Array.isArray(myReviews) ? myReviews : [];
-        const count = reviewRows.length;
-        if (count === 0) {
+        if (reviewsError) {
+          console.error("[dashboard] my reviews", reviewsError);
           setMyRating({ average: 3, count: 0 });
         } else {
-          const sum = reviewRows.reduce(
-            (acc, row) => acc + (typeof row.rating === "number" ? row.rating : Number(row.rating) || 0),
-            0
-          );
-          setMyRating({
-            average: Math.round((sum / count) * 10) / 10,
-            count,
-          });
+          const reviewRows = Array.isArray(myReviews) ? myReviews : [];
+          const count = reviewRows.length;
+          if (count === 0) {
+            setMyRating({ average: 3, count: 0 });
+          } else {
+            const sum = reviewRows.reduce(
+              (acc, row) => acc + (typeof row.rating === "number" ? row.rating : Number(row.rating) || 0),
+              0
+            );
+            setMyRating({
+              average: Math.round((sum / count) * 10) / 10,
+              count,
+            });
+          }
         }
+
+        if (propertyError) {
+          setProperties([]);
+        } else {
+          const ownProperties = (propertyRows ?? []).filter((row) => {
+            const ownerId =
+              (typeof row.owner_id === "string" ? row.owner_id : null) ??
+              (typeof row.user_id === "string" ? row.user_id : null);
+            return ownerId ? ownerId === user.id : true;
+          });
+          setProperties(ownProperties);
+        }
+
+        if (profileData) {
+          setHabits({
+            habit_cleanliness: Number(profileData.habit_cleanliness) || 3,
+            habit_ac_temp: Number(profileData.habit_ac_temp) || 3,
+            habit_guests: Number(profileData.habit_guests) || 3,
+            habit_noise: Number(profileData.habit_noise) || 3,
+          });
+          setUserRole(profileData.role || "tenant");
+
+          const lnZh = typeof profileData.last_name_zh === "string" ? profileData.last_name_zh : "";
+          const lnEn = typeof profileData.last_name_en === "string" ? profileData.last_name_en : "";
+          const nn = typeof profileData.nickname === "string" ? profileData.nickname : "";
+          const ph = typeof profileData.phone === "string" ? profileData.phone : "";
+          const av = typeof profileData.avatar_url === "string" ? profileData.avatar_url : "";
+          const dn = typeof profileData.display_name === "string" ? profileData.display_name : "";
+          const verified = profileData.is_verified === true;
+
+          setLastNameZh(lnZh);
+          setLastNameEn(lnEn);
+          setNickname(nn);
+          setPhone(ph);
+          setAvatarUrl(av);
+          setIsVerified(verified);
+
+          const mode = inferSalutationMode(dn, lnZh, lnEn, nn);
+          setSalutationMode(mode);
+          if (mode === "chinese") setZhHonorificSuffix(inferZhSuffix(dn, lnZh));
+          if (mode === "english") setEnEnglishTitle(inferEnTitle(dn, lnEn));
+        } else {
+          setUserRole("tenant");
+          setLastNameZh("");
+          setLastNameEn("");
+          setNickname("");
+          setPhone("");
+          setAvatarUrl("");
+          setIsVerified(false);
+          setSalutationMode("chinese");
+          setZhHonorificSuffix("先生");
+          setEnEnglishTitle("Mr.");
+        }
+
+        setIsLoading(false);
+      } catch (error) {
+        console.error("[dashboard] bootstrap failed", error);
+        setIsLoading(false);
       }
-
-      if (propertyError) {
-        setProperties([]);
-      } else {
-        const ownProperties = (propertyRows ?? []).filter((row) => {
-          const ownerId =
-            (typeof row.owner_id === "string" ? row.owner_id : null) ??
-            (typeof row.user_id === "string" ? row.user_id : null);
-          return ownerId ? ownerId === user.id : true;
-        });
-        setProperties(ownProperties);
-      }
-
-      if (profileData) {
-        setHabits({
-          habit_cleanliness: Number(profileData.habit_cleanliness) || 3,
-          habit_ac_temp: Number(profileData.habit_ac_temp) || 3,
-          habit_guests: Number(profileData.habit_guests) || 3,
-          habit_noise: Number(profileData.habit_noise) || 3,
-        });
-        setUserRole(profileData.role || "tenant");
-
-        const lnZh = typeof profileData.last_name_zh === "string" ? profileData.last_name_zh : "";
-        const lnEn = typeof profileData.last_name_en === "string" ? profileData.last_name_en : "";
-        const nn = typeof profileData.nickname === "string" ? profileData.nickname : "";
-        const ph = typeof profileData.phone === "string" ? profileData.phone : "";
-        const av = typeof profileData.avatar_url === "string" ? profileData.avatar_url : "";
-        const dn = typeof profileData.display_name === "string" ? profileData.display_name : "";
-        const verified = profileData.is_verified === true;
-
-        setLastNameZh(lnZh);
-        setLastNameEn(lnEn);
-        setNickname(nn);
-        setPhone(ph);
-        setAvatarUrl(av);
-        setIsVerified(verified);
-
-        const mode = inferSalutationMode(dn, lnZh, lnEn, nn);
-        setSalutationMode(mode);
-        if (mode === "chinese") setZhHonorificSuffix(inferZhSuffix(dn, lnZh));
-        if (mode === "english") setEnEnglishTitle(inferEnTitle(dn, lnEn));
-      } else {
-        setUserRole("tenant");
-        setLastNameZh("");
-        setLastNameEn("");
-        setNickname("");
-        setPhone("");
-        setAvatarUrl("");
-        setIsVerified(false);
-        setSalutationMode("chinese");
-        setZhHonorificSuffix("先生");
-        setEnEnglishTitle("Mr.");
-      }
-
-      setIsLoading(false);
     };
 
     void bootstrap();
-  }, [supabase]);
+  }, [router, supabase]);
 
   useEffect(() => {
     if (secretCount !== 5) return;
