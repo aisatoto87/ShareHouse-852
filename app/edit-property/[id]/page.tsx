@@ -351,7 +351,24 @@ export default function EditPropertyPage() {
     if (!Number.isInteger(roomCount) || roomCount < 1) {
       return toast.error("出租房間數量必須為 1 或以上。");
     }
+    let finalRoomPrices: Record<string, number | string> = {};
     if (pricingMode === "custom") {
+      let sum = 0;
+      for (let i = 1; i < roomCount; i += 1) {
+        const key = `room${i}`;
+        const roomValue = Number(roomPrices[key] || 0);
+        if (!Number.isFinite(roomValue) || roomValue < 0) {
+          return toast.error("自訂每房價錢必須為有效數字。");
+        }
+        sum += roomValue;
+      }
+      const lastRoomPrice = Number(form.price) - sum;
+      if (lastRoomPrice < 0) {
+        toast.error("前面房間的租金總和已超過總租金！");
+        return;
+      }
+      finalRoomPrices = { ...roomPrices, [`room${roomCount}`]: lastRoomPrice };
+
       if (customPricing.hasInvalidEditableRoom) {
         return toast.error("自訂每房價錢必須為有效數字。");
       }
@@ -389,10 +406,6 @@ export default function EditPropertyPage() {
       router.replace("/dashboard");
       return;
     }
-
-    const normalizedRoomPrices = pricingMode === "custom"
-      ? customPricing.computedRoomPrices
-      : {};
 
     setIsSaving(true);
     setIsUploadingGallery(true);
@@ -440,7 +453,7 @@ export default function EditPropertyPage() {
       gallery: mergedGallery,
       room_count: roomCount,
       pricing_mode: pricingMode,
-      room_prices: normalizedRoomPrices,
+      room_prices: pricingMode === "custom" ? finalRoomPrices : {},
     };
     const updateQuery = supabase
       .from("properties")
