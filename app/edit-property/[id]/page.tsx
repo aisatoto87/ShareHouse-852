@@ -352,7 +352,6 @@ export default function EditPropertyPage() {
       return toast.error("出租房間數量必須為 1 或以上。");
     }
     const price = form.price;
-    let finalPricingMode = pricingMode;
     let finalRoomPrices: Record<string, number | string> = {};
 
     if (pricingMode === "custom") {
@@ -372,7 +371,6 @@ export default function EditPropertyPage() {
 
         if (lastRoomPrice < 0) {
           toast.error("前面房間的租金總和已超過總租金，請重新調整！");
-          setIsSaving(false);
           return;
         }
 
@@ -387,9 +385,6 @@ export default function EditPropertyPage() {
         toast.error("各房間租金總和必須等於總租金！");
         return;
       }
-    } else {
-      finalPricingMode = "average";
-      finalRoomPrices = {};
     }
 
     const {
@@ -462,9 +457,9 @@ export default function EditPropertyPage() {
       roommates_req: selectedRoommateReqs,
       tags: selectedTags,
       gallery: mergedGallery,
-      room_count: roomCount,
-      pricing_mode: finalPricingMode,
-      room_prices: finalPricingMode === "custom" ? finalRoomPrices : {},
+      room_count: Number(roomCount),
+      pricing_mode: pricingMode,
+      room_prices: pricingMode === "custom" ? finalRoomPrices : {},
     };
     const updateQuery = supabase
       .from("properties")
