@@ -54,7 +54,25 @@ export default function PropertyCard({ property, tenantHabits }: PropertyCardPro
   const roomCount = Math.max(1, property.room_count ?? 1);
   const averagePrice = Math.round(price / roomCount);
   const formattedAveragePrice = new Intl.NumberFormat("zh-HK").format(averagePrice);
-  const customRoomPrices = (property.room_prices ?? []).filter((item) => Number.isFinite(item) && item >= 0);
+  const customRoomPriceEntries = (() => {
+    const raw = (property as unknown as Record<string, unknown>).room_prices;
+    if (Array.isArray(raw)) {
+      return raw
+        .map((item, index) => ({ roomNo: index + 1, value: Number(item) }))
+        .filter((item) => Number.isFinite(item.value) && item.value >= 0);
+    }
+    if (raw && typeof raw === "object") {
+      return Object.entries(raw as Record<string, unknown>)
+        .map(([key, value]) => {
+          const match = key.match(/^room(\d+)$/i);
+          const roomNo = match ? Number(match[1]) : Number.NaN;
+          return { roomNo, value: Number(value) };
+        })
+        .filter((item) => Number.isFinite(item.roomNo) && Number.isFinite(item.value) && item.value >= 0)
+        .sort((a, b) => a.roomNo - b.roomNo);
+    }
+    return [];
+  })();
   const waUrl = buildWhatsAppUrl(title, contact_whatsapp);
   const detailHref = `/property/${id}`;
   const blockCardNavigation = (e: MouseEvent<HTMLDivElement>) => {
@@ -150,11 +168,11 @@ export default function PropertyCard({ property, tenantHabits }: PropertyCardPro
             <span className="ml-1 text-sm font-normal text-zinc-400">/月</span>
           </p>
           <div className="mt-2">
-            {property.pricing_mode === "custom" && customRoomPrices.length > 0 && roomCount > 1 ? (
+            {property.pricing_mode === "custom" && customRoomPriceEntries.length > 0 ? (
               <div className="flex flex-wrap gap-1.5">
-                {customRoomPrices.map((item, index) => (
-                  <Badge key={`${id}-room-${index}`} className="bg-blue-50 text-blue-700">
-                    房間 {index + 1}: HK$ {new Intl.NumberFormat("zh-HK").format(item)}
+                {customRoomPriceEntries.map((item) => (
+                  <Badge key={`${id}-room-${item.roomNo}`} className="bg-blue-50 text-blue-700">
+                    房間 {item.roomNo}: HK$ {new Intl.NumberFormat("zh-HK").format(item.value)}
                   </Badge>
                 ))}
               </div>
