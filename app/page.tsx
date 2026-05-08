@@ -1,9 +1,10 @@
+export const dynamic = 'force-dynamic';
 import Navbar from "@/components/Navbar";
 import HeroBanner from "@/components/HeroBanner";
 import ListingsClient from "@/components/ListingsClient";
 import { fetchAllProperties } from "@/lib/property-queries";
 
-export const dynamic = "force-dynamic";
+
 
 export const metadata = {
   title: "ShareHouse 852 — 香港一站式合租管家服務",

@@ -48,6 +48,7 @@ interface PropertyCardProps {
 }
 
 export default function PropertyCard({ property, tenantHabits }: PropertyCardProps) {
+  console.log("卡片收到的資料:", property.title, property.pricing_mode, property.room_prices);
   const { id, title, district, sub_district, price, size_sqft, imageUrl, tags, contact_whatsapp } =
     property;
   const formattedPrice = new Intl.NumberFormat("zh-HK").format(price);
