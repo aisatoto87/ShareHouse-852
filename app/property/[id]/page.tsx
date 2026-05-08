@@ -156,7 +156,9 @@ export default async function PropertyDetailPage({ params }: PageProps) {
   const roomCount = Math.max(1, property.room_count ?? 1);
   const averagePrice = Math.round(property.price / roomCount);
   const formattedAveragePrice = new Intl.NumberFormat("zh-HK").format(averagePrice);
-  const customRoomPrices = (property.room_prices ?? []).filter((item) => Number.isFinite(item) && item >= 0);
+  const customRoomPrices = Object.values(property.room_prices || {}).filter(
+    (item) => Number.isFinite(item) && item >= 0,
+  );
   const waUrl = buildWhatsAppUrl(property.contact_whatsapp, property.title);
 
   return (

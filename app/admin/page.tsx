@@ -443,7 +443,9 @@ export default function AdminPage() {
     const averagePrice = Math.round(property.price / roomCount);
 
     if (property.pricing_mode === "custom") {
-      const roomPrices = (property.room_prices ?? []).filter((item) => Number.isFinite(item) && item >= 0);
+      const roomPrices = Object.values(property.room_prices || {}).filter(
+        (item) => Number.isFinite(item) && item >= 0,
+      );
       if (roomPrices.length > 0) {
         const roomDetails = roomPrices.map((item, index) => `房${index + 1} $${formatPriceCompact(item)}`).join(", ");
         const full = `(自訂: ${roomDetails})`;
