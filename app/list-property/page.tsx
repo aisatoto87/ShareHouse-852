@@ -357,12 +357,23 @@ export default function ListPropertyPage() {
     }
     let normalizedRoomPrices: number[] | null = null;
     if (pricingMode === "custom") {
-      normalizedRoomPrices = roomPrices.map((item) => Number(item));
-      const hasInvalid = normalizedRoomPrices.some((item) => !Number.isFinite(item) || item < 0);
-      if (hasInvalid) {
-        toast.error("自訂每間房價錢必須為有效數字。");
+      let sum = 0;
+      const prefixRoomPrices: number[] = [];
+      for (let i = 0; i < roomCount - 1; i++) {
+        const n = Number(roomPrices[i]);
+        if (!Number.isFinite(n) || n < 0) {
+          toast.error("自訂每間房價錢必須為有效數字，且不可小於 0。");
+          return;
+        }
+        prefixRoomPrices.push(n);
+        sum += n;
+      }
+      const lastRoomPrice = priceNum - sum;
+      if (lastRoomPrice < 0) {
+        toast.error("前面房間的租金總和已超過總租金！");
         return;
       }
+      normalizedRoomPrices = [...prefixRoomPrices, lastRoomPrice];
     }
 
     setIsSubmitting(true);
