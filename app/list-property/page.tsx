@@ -4,7 +4,7 @@ import { type FormEvent, type KeyboardEvent, useEffect, useMemo, useState } from
 import { Loader2, PlusCircle, UploadCloud, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import HabitInput from "@/components/HabitInput";
+import HabitDefenseSliders from "@/components/HabitDefenseSliders";
 import Navbar from "@/components/Navbar";
 import { TagInputField } from "@/components/TagInputField";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
@@ -759,36 +759,15 @@ export default function ListPropertyPage() {
             />
             <div className="sm:col-span-2 rounded-xl border border-zinc-200 bg-zinc-50/70 p-4">
               <h3 className="text-sm font-semibold text-[#0f2540]">✨ 單位專屬 Vibe (配對神仙室友必填)</h3>
-              <div className="mt-3 space-y-4">
-                <HabitInput
-                  label="洗碗習慣"
-                  value={form.habit_cleanliness}
-                  onChange={(nextValue) => updateForm("habit_cleanliness", nextValue)}
-                  leftText="食完即洗(1)"
-                  rightText="隔夜先洗(5)"
-                />
-                <HabitInput
-                  label="冷氣偏好"
-                  value={form.habit_ac_temp}
-                  onChange={(nextValue) => updateForm("habit_ac_temp", nextValue)}
-                  leftText="18度雪房(1)"
-                  rightText="25度環保(5)"
-                />
-                <HabitInput
-                  label="訪客政策"
-                  value={form.habit_guests}
-                  onChange={(nextValue) => updateForm("habit_guests", nextValue)}
-                  leftText="絕對唔得(1)"
-                  rightText="當自己屋企(5)"
-                />
-                <HabitInput
-                  label="噪音容忍"
-                  value={form.habit_noise}
-                  onChange={(nextValue) => updateForm("habit_noise", nextValue)}
-                  leftText="絕對安靜(1)"
-                  rightText="開Party都得(5)"
-                />
-              </div>
+              <HabitDefenseSliders
+                values={{
+                  habit_cleanliness: form.habit_cleanliness,
+                  habit_ac_temp: form.habit_ac_temp,
+                  habit_guests: form.habit_guests,
+                  habit_noise: form.habit_noise,
+                }}
+                onChange={(key, value) => updateForm(key, value)}
+              />
             </div>
             <TagInputField
               label="室友要求 (roommates_req，多選可自訂)"
