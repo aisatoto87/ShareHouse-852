@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
+import { useEffect, useMemo, useState, type ChangeEvent } from "react";
 import { BadgeCheck, Loader2, Save, UserRound } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
+import HabitDefenseSliders from "@/components/HabitDefenseSliders";
 import Navbar from "@/components/Navbar";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -46,52 +47,6 @@ function clampHabitValue(value: unknown): number {
   return Math.min(5, Math.max(1, Math.round(base)));
 }
 
-const HABIT_ITEMS: Array<{
-  key: HabitKey;
-  title: string;
-  scaleNotes: {
-    low: string;
-    mid: string;
-    high: string;
-  };
-}> = [
-  {
-    key: "habit_cleanliness",
-    title: "洗碗與公共衛生極限",
-    scaleNotes: {
-      low: "【零容忍】用完廚房/浴室 10 分鐘內必須清空恢復原狀。",
-      mid: "【不過夜】允許短暫放置，但睡前必須清理完畢。",
-      high: "【極度隨性】習慣累積到週末或等管家清潔，不介意雜亂。",
-    },
-  },
-  {
-    key: "habit_ac_temp",
-    title: "冷氣使用與溫度偏好",
-    scaleNotes: {
-      low: "【北極熊】20度以下，人在客廳/房間 24 小時長開。",
-      mid: "【標準睡眠】23-25度，僅夜間睡覺時開啟。",
-      high: "【環保節能】極少開冷氣，以風扇為主，對電費敏感。",
-    },
-  },
-  {
-    key: "habit_guests",
-    title: "訪客與邊界政策",
-    scaleNotes: {
-      low: "【絕對私密】禁止任何非合租室友進入單位。",
-      mid: "【有限開放】每月 1-2 次訪客，需提前 24 小時報備，禁過夜。",
-      high: "【無界社交】隨時歡迎帶朋友回來，當成自己獨居的家。",
-    },
-  },
-  {
-    key: "habit_noise",
-    title: "靜音時段嚴格度",
-    scaleNotes: {
-      low: "【神經衰弱】23:00 後絕對靜音（禁洗衣機、講電話需氣音）。",
-      mid: "【標準作息】24:00 後關房門戴耳機，接受微弱生活白噪音。",
-      high: "【無感夜貓】無懼噪音，接受半夜煮宵夜或外放音頻。",
-    },
-  },
-];
 
 export default function DashboardPage() {
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
@@ -101,8 +56,6 @@ export default function DashboardPage() {
   const [secretCount, setSecretCount] = useState(0);
   const [properties, setProperties] = useState<any[]>([]);
   const [habits, setHabits] = useState<HabitState>(DEFAULT_HABITS);
-  const lastValidHabitsRef = useRef<HabitState>({ ...DEFAULT_HABITS });
-  const [habitInputDraft, setHabitInputDraft] = useState<Partial<Record<HabitKey, string>>>({});
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [isSavingPersonal, setIsSavingPersonal] = useState(false);
@@ -201,8 +154,6 @@ export default function DashboardPage() {
             habit_noise: clampHabitValue(profileData.habit_noise),
           };
           setHabits(nextHabits);
-          lastValidHabitsRef.current = { ...nextHabits };
-          setHabitInputDraft({});
           setUserRole(profileData.role || "tenant");
 
           const lnZh = typeof profileData.last_name_zh === "string" ? profileData.last_name_zh : "";
@@ -291,57 +242,6 @@ export default function DashboardPage() {
   useEffect(() => {
     if (userRole === "tenant" && activeTab === "properties") setActiveTab("personal");
   }, [userRole, activeTab]);
-
-  const updateHabit = (key: HabitKey, value: number) => {
-    const safeValue = Math.min(5, Math.max(1, Math.round(value)));
-    lastValidHabitsRef.current = { ...lastValidHabitsRef.current, [key]: safeValue };
-    setHabits((prev) => ({ ...prev, [key]: safeValue }));
-    setHabitInputDraft((prev) => {
-      const next = { ...prev };
-      delete next[key];
-      return next;
-    });
-  };
-
-  const getHabitInputDisplay = (key: HabitKey) =>
-    habitInputDraft[key] !== undefined ? habitInputDraft[key]! : String(habits[key]);
-
-  const handleHabitNumberChange = (key: HabitKey, raw: string) => {
-    setHabitInputDraft((prev) => ({ ...prev, [key]: raw }));
-
-    const trimmed = raw.trim();
-    if (trimmed === "") return;
-
-    const n = Number(trimmed);
-    if (!Number.isFinite(n)) return;
-
-    const rounded = Math.round(n);
-    if (rounded >= 1 && rounded <= 5 && Math.abs(n - rounded) < 1e-9) {
-      updateHabit(key, rounded);
-    }
-  };
-
-  const handleHabitNumberBlur = (key: HabitKey) => {
-    const draft = habitInputDraft[key];
-    if (draft === undefined) return;
-
-    const fallback = lastValidHabitsRef.current[key];
-    const trimmed = draft.trim();
-
-    if (trimmed === "") {
-      updateHabit(key, fallback);
-      return;
-    }
-
-    const n = Number(trimmed);
-    const rounded = Math.round(n);
-    if (!Number.isFinite(n) || rounded < 1 || rounded > 5) {
-      updateHabit(key, fallback);
-      return;
-    }
-
-    updateHabit(key, rounded);
-  };
 
   const handleSave = async () => {
     if (!userId) return toast.error("請先登入再儲存設定。");
@@ -790,55 +690,10 @@ export default function DashboardPage() {
                     讀取設定中...
                   </div>
                 ) : (
-                  HABIT_ITEMS.map((item) => (
-                    <div key={item.key} className="rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm">
-                      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                        <h3 className="text-sm font-semibold text-[#0f2540]">{item.title}</h3>
-                        <label className="flex items-center gap-1.5 text-xs font-medium text-zinc-600">
-                          <span className="hidden sm:inline">分數 (1–5)</span>
-                          <input
-                            type="number"
-                            min={1}
-                            max={5}
-                            step={1}
-                            inputMode="numeric"
-                            autoComplete="off"
-                            value={getHabitInputDisplay(item.key)}
-                            onChange={(e) => handleHabitNumberChange(item.key, e.target.value)}
-                            onBlur={() => handleHabitNumberBlur(item.key)}
-                            className="w-16 rounded-md border border-zinc-300 bg-white px-2 py-1 text-center text-sm font-semibold text-[#0f2540] outline-none focus:ring-2 focus:ring-[#0f2540]"
-                            aria-label={`${item.title} 分數`}
-                          />
-                        </label>
-                      </div>
-
-                      <input
-                        type="range"
-                        min={1}
-                        max={5}
-                        step={1}
-                        value={habits[item.key]}
-                        onChange={(event) => updateHabit(item.key, Number(event.target.value))}
-                        className="h-2 w-full cursor-pointer appearance-none rounded-lg bg-zinc-200 accent-[#0f2540]"
-                        aria-label={item.title}
-                      />
-
-                      <div className="mt-3 grid gap-2 text-xs leading-relaxed text-zinc-600">
-                        <p className="rounded-md border border-zinc-200 bg-zinc-50 px-2 py-1">
-                          <span className="font-semibold text-zinc-800">1：</span>
-                          {item.scaleNotes.low}
-                        </p>
-                        <p className="rounded-md border border-zinc-200 bg-zinc-50 px-2 py-1">
-                          <span className="font-semibold text-zinc-800">3：</span>
-                          {item.scaleNotes.mid}
-                        </p>
-                        <p className="rounded-md border border-zinc-200 bg-zinc-50 px-2 py-1">
-                          <span className="font-semibold text-zinc-800">5：</span>
-                          {item.scaleNotes.high}
-                        </p>
-                      </div>
-                    </div>
-                  ))
+                  <HabitDefenseSliders
+                    values={habits}
+                    onChange={(key, value) => setHabits((prev) => ({ ...prev, [key]: value }))}
+                  />
                 )}
 
                 <div className="flex justify-end pt-2">
