@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import type { Session } from "@supabase/supabase-js";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
-import HabitInput from "@/components/HabitInput";
+import HabitDefenseSliders, { type HabitDimensionKey } from "@/components/HabitDefenseSliders";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -36,47 +36,11 @@ import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
 import { needsProfileRoleOnboarding } from "@/types/profile";
 
-type HabitKey = "habit_cleanliness" | "habit_ac_temp" | "habit_guests" | "habit_noise";
-type HabitState = Record<HabitKey, number>;
-
-const DEFAULT_HABITS: HabitState = {
-  habit_cleanliness: 3,
-  habit_ac_temp: 3,
-  habit_guests: 3,
-  habit_noise: 3,
-};
-
-const HABIT_ITEMS: Array<{
-  key: HabitKey;
-  title: string;
-  leftLabel: string;
-  rightLabel: string;
-}> = [
-  {
-    key: "habit_cleanliness",
-    title: "洗碗習慣",
-    leftLabel: "食完即洗 (1)",
-    rightLabel: "隔夜先洗 (5)",
-  },
-  {
-    key: "habit_ac_temp",
-    title: "冷氣偏好",
-    leftLabel: "18度雪房 (1)",
-    rightLabel: "25度環保 (5)",
-  },
-  {
-    key: "habit_guests",
-    title: "訪客政策",
-    leftLabel: "絕對唔得 (1)",
-    rightLabel: "當自己屋企 (5)",
-  },
-  {
-    key: "habit_noise",
-    title: "噪音容忍",
-    leftLabel: "絕對安靜 (1)",
-    rightLabel: "開Party都得 (5)",
-  },
-];
+function clampProfileHabit(value: unknown): number {
+  const n = Number(value);
+  const base = Number.isFinite(n) ? n : 3;
+  return Math.min(5, Math.max(1, Math.round(base)));
+}
 
 export default function RoleOnboardingGate() {
   const router = useRouter();
@@ -104,7 +68,24 @@ export default function RoleOnboardingGate() {
   const [salutationMode, setSalutationMode] = useState<SalutationMode>("chinese");
   const [zhHonorificSuffix, setZhHonorificSuffix] = useState("先生");
   const [enEnglishTitle, setEnEnglishTitle] = useState("Mr.");
-  const [wizardHabits, setWizardHabits] = useState<HabitState>(DEFAULT_HABITS);
+  const [habit_cleanliness, setHabitCleanliness] = useState(3);
+  const [habit_ac_temp, setHabitAcTemp] = useState(3);
+  const [habit_guests, setHabitGuests] = useState(3);
+  const [habit_noise, setHabitNoise] = useState(3);
+
+  const habitSetterMap: Record<HabitDimensionKey, (value: number) => void> = {
+    habit_cleanliness: setHabitCleanliness,
+    habit_ac_temp: setHabitAcTemp,
+    habit_guests: setHabitGuests,
+    habit_noise: setHabitNoise,
+  };
+
+  const resetHabitsToDefault = useCallback(() => {
+    setHabitCleanliness(3);
+    setHabitAcTemp(3);
+    setHabitGuests(3);
+    setHabitNoise(3);
+  }, []);
 
   const finishWizard = useCallback(() => {
     midOnboardingWizardRef.current = false;
@@ -151,7 +132,7 @@ export default function RoleOnboardingGate() {
           setSalutationMode("chinese");
           setZhHonorificSuffix("先生");
           setEnEnglishTitle("Mr.");
-          setWizardHabits(DEFAULT_HABITS);
+          resetHabitsToDefault();
           return;
         }
 
@@ -171,12 +152,10 @@ export default function RoleOnboardingGate() {
           setSalutationMode(mode);
           if (mode === "chinese") setZhHonorificSuffix(inferZhSuffix(dn, lnZh));
           if (mode === "english") setEnEnglishTitle(inferEnTitle(dn, lnEn));
-          setWizardHabits({
-            habit_cleanliness: Number(profile.habit_cleanliness) || 3,
-            habit_ac_temp: Number(profile.habit_ac_temp) || 3,
-            habit_guests: Number(profile.habit_guests) || 3,
-            habit_noise: Number(profile.habit_noise) || 3,
-          });
+          setHabitCleanliness(clampProfileHabit(profile.habit_cleanliness));
+          setHabitAcTemp(clampProfileHabit(profile.habit_ac_temp));
+          setHabitGuests(clampProfileHabit(profile.habit_guests));
+          setHabitNoise(clampProfileHabit(profile.habit_noise));
         } else {
           setLastNameZh("");
           setLastNameEn("");
@@ -186,7 +165,7 @@ export default function RoleOnboardingGate() {
           setSalutationMode("chinese");
           setZhHonorificSuffix("先生");
           setEnEnglishTitle("Mr.");
-          setWizardHabits(DEFAULT_HABITS);
+          resetHabitsToDefault();
         }
       } catch (e) {
         console.error("[RoleOnboardingGate] step2 profile load", e);
@@ -197,7 +176,7 @@ export default function RoleOnboardingGate() {
           setNickname("");
           setPhone("");
           setAvatarUrl("");
-          setWizardHabits(DEFAULT_HABITS);
+          resetHabitsToDefault();
         }
       } finally {
         if (!cancelled) setProfileStepLoading(false);
@@ -206,7 +185,7 @@ export default function RoleOnboardingGate() {
     return () => {
       cancelled = true;
     };
-  }, [step, userId, supabase]);
+  }, [step, userId, supabase, resetHabitsToDefault]);
 
   useEffect(() => {
     let mounted = true;
@@ -420,10 +399,10 @@ export default function RoleOnboardingGate() {
     const { error } = await supabase
       .from("profiles")
       .update({
-        habit_cleanliness: wizardHabits.habit_cleanliness,
-        habit_ac_temp: wizardHabits.habit_ac_temp,
-        habit_guests: wizardHabits.habit_guests,
-        habit_noise: wizardHabits.habit_noise,
+        habit_cleanliness,
+        habit_ac_temp,
+        habit_guests,
+        habit_noise,
       })
       .eq("id", userId);
     setSavingHabits(false);
@@ -434,10 +413,6 @@ export default function RoleOnboardingGate() {
     toast.success("設定完成，祝你搵到神仙室友！");
     finishWizard();
   }
-
-  const updateWizardHabit = (key: HabitKey, value: number) => {
-    setWizardHabits((prev) => ({ ...prev, [key]: value }));
-  };
 
   const showOnboarding = Boolean(userId) && !checking && showWizard;
 
@@ -451,7 +426,7 @@ export default function RoleOnboardingGate() {
     <Dialog open onOpenChange={handleOpenChange} modal disablePointerDismissal>
       <DialogContent
         showCloseButton={false}
-        className="max-h-[min(90vh,calc(100%-2rem))] max-w-[calc(100%-2rem)] gap-0 overflow-y-auto border-zinc-200 bg-white p-0 shadow-xl sm:max-w-lg"
+        className="max-h-[min(90vh,calc(100%-2rem))] max-w-[calc(100%-2rem)] gap-0 overflow-y-auto border-zinc-200 bg-white p-0 shadow-xl sm:max-w-2xl"
         aria-describedby={
           step === 1 ? "role-onboarding-desc" : step === 2 ? "onboarding-step2-desc" : "onboarding-step3-desc"
         }
@@ -728,16 +703,15 @@ export default function RoleOnboardingGate() {
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-4 p-6">
-              {HABIT_ITEMS.map((item) => (
-                <HabitInput
-                  key={item.key}
-                  label={item.title}
-                  value={wizardHabits[item.key]}
-                  onChange={(v) => updateWizardHabit(item.key, v)}
-                  leftText={item.leftLabel}
-                  rightText={item.rightLabel}
-                />
-              ))}
+              <HabitDefenseSliders
+                values={{
+                  habit_cleanliness,
+                  habit_ac_temp,
+                  habit_guests,
+                  habit_noise,
+                }}
+                onChange={(key, value) => habitSetterMap[key](value)}
+              />
               <div className="flex flex-col-reverse gap-2 border-t border-zinc-100 pt-4 sm:flex-row sm:justify-end">
                 <Button
                   type="button"
