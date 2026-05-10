@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, type ChangeEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import { BadgeCheck, Loader2, Save, UserRound } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -39,6 +39,12 @@ const DEFAULT_HABITS: HabitState = {
   habit_guests: 3,
   habit_noise: 3,
 };
+
+function clampHabitValue(value: unknown): number {
+  const n = Number(value);
+  const base = Number.isFinite(n) ? n : 3;
+  return Math.min(5, Math.max(1, Math.round(base)));
+}
 
 const HABIT_ITEMS: Array<{
   key: HabitKey;
@@ -95,6 +101,8 @@ export default function DashboardPage() {
   const [secretCount, setSecretCount] = useState(0);
   const [properties, setProperties] = useState<any[]>([]);
   const [habits, setHabits] = useState<HabitState>(DEFAULT_HABITS);
+  const lastValidHabitsRef = useRef<HabitState>({ ...DEFAULT_HABITS });
+  const [habitInputDraft, setHabitInputDraft] = useState<Partial<Record<HabitKey, string>>>({});
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [isSavingPersonal, setIsSavingPersonal] = useState(false);
@@ -186,12 +194,15 @@ export default function DashboardPage() {
         }
 
         if (profileData) {
-          setHabits({
-            habit_cleanliness: Number(profileData.habit_cleanliness) || 3,
-            habit_ac_temp: Number(profileData.habit_ac_temp) || 3,
-            habit_guests: Number(profileData.habit_guests) || 3,
-            habit_noise: Number(profileData.habit_noise) || 3,
-          });
+          const nextHabits: HabitState = {
+            habit_cleanliness: clampHabitValue(profileData.habit_cleanliness),
+            habit_ac_temp: clampHabitValue(profileData.habit_ac_temp),
+            habit_guests: clampHabitValue(profileData.habit_guests),
+            habit_noise: clampHabitValue(profileData.habit_noise),
+          };
+          setHabits(nextHabits);
+          lastValidHabitsRef.current = { ...nextHabits };
+          setHabitInputDraft({});
           setUserRole(profileData.role || "tenant");
 
           const lnZh = typeof profileData.last_name_zh === "string" ? profileData.last_name_zh : "";
@@ -283,7 +294,53 @@ export default function DashboardPage() {
 
   const updateHabit = (key: HabitKey, value: number) => {
     const safeValue = Math.min(5, Math.max(1, Math.round(value)));
+    lastValidHabitsRef.current = { ...lastValidHabitsRef.current, [key]: safeValue };
     setHabits((prev) => ({ ...prev, [key]: safeValue }));
+    setHabitInputDraft((prev) => {
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+  };
+
+  const getHabitInputDisplay = (key: HabitKey) =>
+    habitInputDraft[key] !== undefined ? habitInputDraft[key]! : String(habits[key]);
+
+  const handleHabitNumberChange = (key: HabitKey, raw: string) => {
+    setHabitInputDraft((prev) => ({ ...prev, [key]: raw }));
+
+    const trimmed = raw.trim();
+    if (trimmed === "") return;
+
+    const n = Number(trimmed);
+    if (!Number.isFinite(n)) return;
+
+    const rounded = Math.round(n);
+    if (rounded >= 1 && rounded <= 5 && Math.abs(n - rounded) < 1e-9) {
+      updateHabit(key, rounded);
+    }
+  };
+
+  const handleHabitNumberBlur = (key: HabitKey) => {
+    const draft = habitInputDraft[key];
+    if (draft === undefined) return;
+
+    const fallback = lastValidHabitsRef.current[key];
+    const trimmed = draft.trim();
+
+    if (trimmed === "") {
+      updateHabit(key, fallback);
+      return;
+    }
+
+    const n = Number(trimmed);
+    const rounded = Math.round(n);
+    if (!Number.isFinite(n) || rounded < 1 || rounded > 5) {
+      updateHabit(key, fallback);
+      return;
+    }
+
+    updateHabit(key, rounded);
   };
 
   const handleSave = async () => {
@@ -735,11 +792,24 @@ export default function DashboardPage() {
                 ) : (
                   HABIT_ITEMS.map((item) => (
                     <div key={item.key} className="rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm">
-                      <div className="mb-3 flex items-start justify-between gap-3">
+                      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                         <h3 className="text-sm font-semibold text-[#0f2540]">{item.title}</h3>
-                        <span className="rounded-full bg-[#0f2540]/10 px-2.5 py-1 text-xs font-semibold text-[#0f2540]">
-                          目前：{habits[item.key]}
-                        </span>
+                        <label className="flex items-center gap-1.5 text-xs font-medium text-zinc-600">
+                          <span className="hidden sm:inline">分數 (1–5)</span>
+                          <input
+                            type="number"
+                            min={1}
+                            max={5}
+                            step={1}
+                            inputMode="numeric"
+                            autoComplete="off"
+                            value={getHabitInputDisplay(item.key)}
+                            onChange={(e) => handleHabitNumberChange(item.key, e.target.value)}
+                            onBlur={() => handleHabitNumberBlur(item.key)}
+                            className="w-16 rounded-md border border-zinc-300 bg-white px-2 py-1 text-center text-sm font-semibold text-[#0f2540] outline-none focus:ring-2 focus:ring-[#0f2540]"
+                            aria-label={`${item.title} 分數`}
+                          />
+                        </label>
                       </div>
 
                       <input
