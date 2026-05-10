@@ -123,20 +123,32 @@ export default function ListPropertyPage() {
   useEffect(() => {
     let mounted = true;
 
-    supabase.auth.getUser().then(({ data, error }) => {
-      if (!mounted) return;
-      if (error || !data.user) {
-        toast.info("請先登入以發布租盤");
+    const verifyAuth = async () => {
+      try {
+        const { data, error } = await supabase.auth.getUser();
+        if (!mounted) return;
+        if (error || !data.user) {
+          toast.info("請先登入以發布租盤");
+          router.replace("/login");
+          return;
+        }
+      } catch {
+        if (!mounted) return;
+        toast.error("無法驗證登入狀態，請稍後再試。");
         router.replace("/login");
-        return;
+      } finally {
+        if (mounted) {
+          setAuthChecking(false);
+        }
       }
-      setAuthChecking(false);
-    });
+    };
+
+    void verifyAuth();
 
     return () => {
       mounted = false;
     };
-  }, [router, supabase.auth]);
+  }, [router, supabase]);
 
   function updateForm<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((prev) => ({ ...prev, [key]: value }));
