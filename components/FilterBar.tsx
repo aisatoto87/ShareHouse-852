@@ -17,18 +17,14 @@ import { cn } from "@/lib/utils";
 
 export type ListingsViewMode = "matched" | "all";
 
-export type ListingsViewMode = "matched" | "all";
 
 interface FilterBarProps {
   filters: Filters;
   onChange: (filters: Filters) => void;
   viewMode: ListingsViewMode;
   onViewModeChange: (mode: ListingsViewMode) => void;
-<<<<<<< HEAD
   /** 租盤列表載入中：鎖定 Tab 避免重複請求 */
   listingsLoading: boolean;
-=======
->>>>>>> df218211340cd8f850c7663b079beaa7623f5b15
   sortByMatch: boolean;
   onToggleSortByMatch: () => void;
 }
@@ -38,10 +34,7 @@ export default function FilterBar({
   onChange,
   viewMode,
   onViewModeChange,
-<<<<<<< HEAD
   listingsLoading,
-=======
->>>>>>> df218211340cd8f850c7663b079beaa7623f5b15
   sortByMatch,
   onToggleSortByMatch,
 }: FilterBarProps) {
@@ -51,14 +44,10 @@ export default function FilterBar({
     <div className="sticky top-[57px] z-40 border-b border-zinc-200 bg-white/95 backdrop-blur-sm">
       <div className="mx-auto max-w-6xl px-4 pb-2 pt-2.5 sm:px-6">
         <div
-<<<<<<< HEAD
           className={cn(
             "mb-2.5 flex w-full max-w-md rounded-lg border border-zinc-200 bg-zinc-100/80 p-0.5 sm:max-w-lg",
             tabDisabled && "pointer-events-none opacity-70"
           )}
-=======
-          className="mb-2.5 flex w-full max-w-md rounded-lg border border-zinc-200 bg-zinc-100/80 p-0.5 sm:max-w-lg"
->>>>>>> df218211340cd8f850c7663b079beaa7623f5b15
           role="tablist"
           aria-label="租盤列表顯示模式"
         >
@@ -66,7 +55,6 @@ export default function FilterBar({
             type="button"
             role="tab"
             aria-selected={viewMode === "matched"}
-<<<<<<< HEAD
             disabled={tabDisabled}
             onClick={() => onViewModeChange("matched")}
             className={cn(
@@ -76,14 +64,6 @@ export default function FilterBar({
                 : "text-zinc-600 hover:bg-white/80 hover:text-zinc-900",
               tabDisabled && "cursor-not-allowed"
             )}
-=======
-            onClick={() => onViewModeChange("matched")}
-            className={`flex-1 rounded-md px-3 py-2 text-center text-sm font-semibold transition-colors ${
-              viewMode === "matched"
-                ? "bg-[#0f2540] text-white shadow-sm"
-                : "text-zinc-600 hover:bg-white/80 hover:text-zinc-900"
-            }`}
->>>>>>> df218211340cd8f850c7663b079beaa7623f5b15
           >
             🔥 智能配對
           </button>
@@ -91,7 +71,6 @@ export default function FilterBar({
             type="button"
             role="tab"
             aria-selected={viewMode === "all"}
-<<<<<<< HEAD
             disabled={tabDisabled}
             onClick={() => onViewModeChange("all")}
             className={cn(
@@ -101,14 +80,6 @@ export default function FilterBar({
                 : "text-zinc-600 hover:bg-white/80 hover:text-zinc-900",
               tabDisabled && "cursor-not-allowed"
             )}
-=======
-            onClick={() => onViewModeChange("all")}
-            className={`flex-1 rounded-md px-3 py-2 text-center text-sm font-semibold transition-colors ${
-              viewMode === "all"
-                ? "bg-[#0f2540] text-white shadow-sm"
-                : "text-zinc-600 hover:bg-white/80 hover:text-zinc-900"
-            }`}
->>>>>>> df218211340cd8f850c7663b079beaa7623f5b15
           >
             🌍 全部租盤
           </button>
