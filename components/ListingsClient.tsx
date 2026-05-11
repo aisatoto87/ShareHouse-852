@@ -64,8 +64,36 @@ export default function ListingsClient() {
   const [habitsSurveyIncomplete, setHabitsSurveyIncomplete] = useState(false);
   const [sortByMatch, setSortByMatch] = useState(false);
 
+<<<<<<< HEAD
   useEffect(() => {
     let ignore = false;
+=======
+  const fetchListings = useCallback(async () => {
+    setIsLoadingListings(true);
+    try {
+      if (viewMode === "all") {
+        const { data: propertyRows, error } = await supabase
+          .from("properties")
+          .select("*")
+          .order("created_at", { ascending: false })
+          .limit(50);
+
+        if (error) {
+          throw error;
+        }
+
+        const next: SmartMatchedPropertyRow[] = (propertyRows ?? []).map((row) => ({
+          property: mapRowToProperty(row as Record<string, unknown>),
+          similarity: 0,
+        }));
+        setMatchedRows(next);
+        return;
+      }
+
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+>>>>>>> df218211340cd8f850c7663b079beaa7623f5b15
 
     async function fetchData() {
       setIsLoadingListings(true);
@@ -175,6 +203,7 @@ export default function ListingsClient() {
         }
       }
     }
+<<<<<<< HEAD
 
     void fetchData();
 
@@ -182,6 +211,13 @@ export default function ListingsClient() {
       ignore = true;
     };
   }, [viewMode, supabase]);
+=======
+  }, [supabase, viewMode]);
+
+  useEffect(() => {
+    void fetchListings();
+  }, [fetchListings]);
+>>>>>>> df218211340cd8f850c7663b079beaa7623f5b15
 
   function handleToggleSortByMatch() {
     setSortByMatch((prev) => !prev);
@@ -203,7 +239,10 @@ export default function ListingsClient() {
         onChange={setFilters}
         viewMode={viewMode}
         onViewModeChange={setViewMode}
+<<<<<<< HEAD
         listingsLoading={isLoadingListings}
+=======
+>>>>>>> df218211340cd8f850c7663b079beaa7623f5b15
         sortByMatch={sortByMatch}
         onToggleSortByMatch={handleToggleSortByMatch}
       />
