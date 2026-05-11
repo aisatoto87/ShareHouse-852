@@ -8,7 +8,6 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardFooter } from "@/components/ui/card";
 import WishlistHeartButton from "@/components/WishlistHeartButton";
 import { cn } from "@/lib/utils";
-import type { SyncMatchPreview } from "@/lib/matchingAlgorithm";
 import type { Property } from "@/types/property";
 
 const TAG_STYLES: Record<string, string> = {
@@ -35,11 +34,11 @@ function buildWhatsAppUrl(title: string, phone: string): string {
 
 interface PropertyCardProps {
   property: Property;
-  /** 已登入且租盤四項習慣齊備時由列表預算；紅線盤不會傳入此卡 */
-  syncMatchPreview?: SyncMatchPreview | null;
+  /** 後端 RPC 契合度 (0–100)；null 不顯示 Badge */
+  similarityScore?: number | null;
 }
 
-export default function PropertyCard({ property, syncMatchPreview }: PropertyCardProps) {
+export default function PropertyCard({ property, similarityScore }: PropertyCardProps) {
   const { id, title, district, sub_district, price, size_sqft, imageUrl, tags, contact_whatsapp } =
     property;
   const formattedPrice = new Intl.NumberFormat("zh-HK").format(price);
@@ -106,19 +105,19 @@ export default function PropertyCard({ property, syncMatchPreview }: PropertyCar
           </div>
         )}
 
-        {syncMatchPreview ? (
+        {similarityScore != null && Number.isFinite(similarityScore) ? (
           <div className="absolute right-14 top-3 z-10 max-w-[min(12rem,calc(100%-5.5rem))]">
             <span
               className={cn(
                 "inline-flex items-center rounded-full px-2 py-1 text-xs font-bold shadow-sm",
-                syncMatchPreview.meetsThreshold
+                similarityScore >= 72
                   ? "bg-green-100 text-green-800 ring-1 ring-green-200/80"
-                  : syncMatchPreview.similarity >= 55
+                  : similarityScore >= 55
                     ? "bg-amber-100 text-amber-900 ring-1 ring-amber-200/80"
                     : "bg-zinc-100 text-zinc-600 ring-1 ring-zinc-200/80"
               )}
             >
-              🔥 {syncMatchPreview.similarity}% 契合度
+              🔥 {similarityScore}% 契合度
             </span>
           </div>
         ) : null}

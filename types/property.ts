@@ -1,3 +1,9 @@
+/** 首頁 RPC `get_smart_matched_properties` 單筆結果 */
+export type SmartMatchedPropertyRow = {
+  property: Property;
+  similarity: number;
+};
+
 export interface Property {
   id: string;
   title: string;
