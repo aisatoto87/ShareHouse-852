@@ -114,10 +114,7 @@ export default function ListingsClient() {
       });
 
       if (rpcError) {
-        console.error("[ListingsClient] get_smart_matched_properties", rpcError);
-        toast.error(`載入租盤失敗：${rpcError.message}`);
-        setMatchedRows([]);
-        return;
+        throw rpcError;
       }
 
       const rawRows = Array.isArray(rpcData) ? rpcData : [];
@@ -133,9 +130,9 @@ export default function ListingsClient() {
       }
 
       setMatchedRows(next);
-    } catch (e) {
-      console.error("[ListingsClient] fetchSmartMatchedProperties", e);
-      toast.error("載入租盤時發生錯誤，請重新整理頁面。");
+    } catch (error) {
+      console.error("獲取配對租盤失敗:", error);
+      toast.error("載入租盤失敗，請稍後再試");
       setMatchedRows([]);
     } finally {
       setIsLoadingListings(false);
