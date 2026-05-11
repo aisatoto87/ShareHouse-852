@@ -1,14 +1,16 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import FilterBar from "@/components/FilterBar";
 import ListingGrid from "@/components/ListingGrid";
 import { applyFilters } from "@/lib/filter";
+import { mapRowToProperty } from "@/lib/property-mapper";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import type { UserHabits } from "@/lib/matchingAlgorithm";
-import type { Filters, Property } from "@/types/property";
+import type { Filters, SmartMatchedPropertyRow } from "@/types/property";
 
 const DEFAULT_HABIT_USER: UserHabits = {
   habit_cleanliness: 3,
@@ -45,80 +47,113 @@ function profileRowToUserHabits(row: {
   return { habit_cleanliness, habit_ac_temp, habit_guests, habit_noise };
 }
 
-interface ListingsClientProps {
-  allProperties: Property[];
-}
-
 const defaultFilters: Filters = {
   district: "",
   price: "",
   size: "",
 };
 
-export default function ListingsClient({ allProperties }: ListingsClientProps) {
+export default function ListingsClient() {
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
   const [filters, setFilters] = useState<Filters>(defaultFilters);
-  /** 已登入時必有值（問卷未填則為預設 3）；未登入為 null */
+  const [matchedRows, setMatchedRows] = useState<SmartMatchedPropertyRow[]>([]);
+  const [isLoadingListings, setIsLoadingListings] = useState(true);
+  /** 已登入時反映問卷是否齊備；未登入為 null */
   const [userMatchHabits, setUserMatchHabits] = useState<UserHabits | null>(null);
   const [habitsSurveyIncomplete, setHabitsSurveyIncomplete] = useState(false);
   const [sortByMatch, setSortByMatch] = useState(false);
 
-  useEffect(() => {
-    let active = true;
-
-    async function loadTenantHabits() {
+  const fetchSmartMatchedProperties = useCallback(async () => {
+    setIsLoadingListings(true);
+    try {
       const {
         data: { user },
       } = await supabase.auth.getUser();
 
-      if (!active) return;
-      if (!user) {
-        setUserMatchHabits(null);
-        setHabitsSurveyIncomplete(false);
-        return;
-      }
+      let habitsForRpc = DEFAULT_HABIT_USER;
+      let nextUserMatchHabits: UserHabits | null = null;
+      let surveyIncomplete = false;
 
-      const { data } = await supabase
-        .from("profiles")
-        .select("habit_cleanliness, habit_ac_temp, habit_guests, habit_noise")
-        .eq("id", user.id)
-        .single();
+      if (user) {
+        const { data: profileRow, error: profileError } = await supabase
+          .from("profiles")
+          .select("habit_cleanliness, habit_ac_temp, habit_guests, habit_noise")
+          .eq("id", user.id)
+          .maybeSingle();
 
-      if (!active) return;
-
-      if (data) {
-        const parsed = profileRowToUserHabits(data);
-        if (parsed) {
-          setUserMatchHabits(parsed);
-          setHabitsSurveyIncomplete(false);
-        } else {
-          setUserMatchHabits(DEFAULT_HABIT_USER);
-          setHabitsSurveyIncomplete(true);
+        if (profileError) {
+          console.error("[ListingsClient] profile", profileError);
         }
+
+        if (profileRow) {
+          const parsed = profileRowToUserHabits(profileRow);
+          if (parsed) {
+            habitsForRpc = parsed;
+            nextUserMatchHabits = parsed;
+            surveyIncomplete = false;
+          } else {
+            habitsForRpc = DEFAULT_HABIT_USER;
+            nextUserMatchHabits = DEFAULT_HABIT_USER;
+            surveyIncomplete = true;
+          }
+        } else {
+          habitsForRpc = DEFAULT_HABIT_USER;
+          nextUserMatchHabits = DEFAULT_HABIT_USER;
+          surveyIncomplete = true;
+        }
+      }
+
+      setUserMatchHabits(nextUserMatchHabits);
+      setHabitsSurveyIncomplete(surveyIncomplete);
+
+      const { data: rpcData, error: rpcError } = await supabase.rpc("get_smart_matched_properties", {
+        u_clean: habitsForRpc.habit_cleanliness ?? 3,
+        u_ac: habitsForRpc.habit_ac_temp ?? 3,
+        u_guests: habitsForRpc.habit_guests ?? 3,
+        u_noise: habitsForRpc.habit_noise ?? 3,
+      });
+
+      if (rpcError) {
+        console.error("[ListingsClient] get_smart_matched_properties", rpcError);
+        toast.error(`載入租盤失敗：${rpcError.message}`);
+        setMatchedRows([]);
         return;
       }
 
-      setUserMatchHabits(DEFAULT_HABIT_USER);
-      setHabitsSurveyIncomplete(true);
-    }
+      const rawRows = Array.isArray(rpcData) ? rpcData : [];
+      const next: SmartMatchedPropertyRow[] = [];
 
-    void loadTenantHabits();
-    return () => {
-      active = false;
-    };
+      for (const entry of rawRows) {
+        const rec = entry as { property?: unknown; similarity?: unknown };
+        if (rec.property == null || typeof rec.property !== "object") continue;
+        const property = mapRowToProperty(rec.property as Record<string, unknown>);
+        const sim = Number(rec.similarity);
+        const similarity = Number.isFinite(sim) ? Math.round(sim) : 0;
+        next.push({ property, similarity });
+      }
+
+      setMatchedRows(next);
+    } catch (e) {
+      console.error("[ListingsClient] fetchSmartMatchedProperties", e);
+      toast.error("載入租盤時發生錯誤，請重新整理頁面。");
+      setMatchedRows([]);
+    } finally {
+      setIsLoadingListings(false);
+    }
   }, [supabase]);
 
+  useEffect(() => {
+    void fetchSmartMatchedProperties();
+  }, [fetchSmartMatchedProperties]);
+
   function handleToggleSortByMatch() {
-    if (userMatchHabits === null) {
-      toast.info("請先登入，再使用契合度排序。");
-      return;
-    }
     setSortByMatch((prev) => !prev);
   }
 
-  const filtered = useMemo(
-    () => applyFilters(allProperties, filters),
-    [allProperties, filters]
+  const filteredRows = useMemo(
+    () =>
+      matchedRows.filter(({ property }) => applyFilters([property], filters).length > 0),
+    [matchedRows, filters]
   );
 
   return (
@@ -134,7 +169,7 @@ export default function ListingsClient({ allProperties }: ListingsClientProps) {
           <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
             <span className="font-medium">尚未完成生活習慣問卷</span>
             <span className="text-amber-800/90">
-              — 目前以預設值（各項 3）估算契合度與紅線；為了配對準確，請到
+              — 目前以預設值（各項 3）送交配對；為了結果準確，請到
             </span>{" "}
             <Link href="/dashboard" className="font-semibold underline underline-offset-2">
               我的帳號
@@ -142,12 +177,15 @@ export default function ListingsClient({ allProperties }: ListingsClientProps) {
             <span className="text-amber-800/90"> 填寫四項習慣。</span>
           </div>
         ) : null}
-        <ListingGrid
-          properties={filtered}
-          total={allProperties.length}
-          sortByMatch={sortByMatch}
-          userMatchHabits={userMatchHabits}
-        />
+
+        {isLoadingListings ? (
+          <div className="flex flex-col items-center justify-center rounded-2xl border border-zinc-200 bg-white py-24 text-center">
+            <Loader2 className="h-10 w-10 animate-spin text-[#0f2540]" aria-hidden />
+            <p className="mt-4 text-sm font-medium text-zinc-600">載入為你配對的租盤…</p>
+          </div>
+        ) : (
+          <ListingGrid rows={filteredRows} totalBeforeFilters={matchedRows.length} sortByMatch={sortByMatch} />
+        )}
       </main>
     </>
   );
