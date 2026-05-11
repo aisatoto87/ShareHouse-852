@@ -76,22 +76,21 @@ export default function DashboardPage() {
   const [myRating, setMyRating] = useState<{ average: number; count: number }>({ average: 3, count: 0 });
 
   useEffect(() => {
-    let isMounted = true;
+    let cancelled = false;
 
     async function fetchProfile() {
       try {
         const {
           data: { user },
-          error: authError,
         } = await supabase.auth.getUser();
 
-        if (authError || !user) {
-          toast.error("登入已失效，請重新登入");
+        if (!user) {
+          toast.error("登入狀態已過期，請重新登入");
           router.push("/");
           return;
         }
 
-        if (!isMounted) return;
+        if (cancelled) return;
 
         setUserId(user.id);
         setEmail(typeof user.email === "string" ? user.email : "");
@@ -112,7 +111,7 @@ export default function DashboardPage() {
           supabase.from("reviews").select("rating").eq("reviewee_id", user.id),
         ]);
 
-        if (!isMounted) return;
+        if (cancelled) return;
 
         if (reviewsError) {
           console.error("[dashboard] my reviews", reviewsError);
@@ -188,21 +187,21 @@ export default function DashboardPage() {
           setEnEnglishTitle("Mr.");
         }
       } catch (error) {
-        console.error("Fetch error:", error);
-        toast.error("讀取資料失敗");
-      } finally {
-        if (isMounted) {
-          setIsLoading(false);
+        console.error("[dashboard] fetchProfile:", error);
+        if (!cancelled) {
+          toast.error("讀取資料失敗");
         }
+      } finally {
+        setIsLoading(false);
       }
     }
 
     void fetchProfile();
 
     return () => {
-      isMounted = false;
+      cancelled = true;
     };
-  }, [router]);
+  }, [router, supabase]);
 
   useEffect(() => {
     if (secretCount !== 5) return;
