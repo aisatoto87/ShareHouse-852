@@ -8,9 +8,16 @@ interface ListingGridProps {
   totalBeforeFilters: number;
   /** 開啟時依 similarity 由高到低排序；關閉時維持後端回傳順序 */
   sortByMatch: boolean;
+  /** 「全部租盤」模式不顯示契合度 Badge */
+  showSimilarityBadge?: boolean;
 }
 
-export default function ListingGrid({ rows, totalBeforeFilters, sortByMatch }: ListingGridProps) {
+export default function ListingGrid({
+  rows,
+  totalBeforeFilters,
+  sortByMatch,
+  showSimilarityBadge = true,
+}: ListingGridProps) {
   const displayedRows = sortByMatch
     ? [...rows].sort((a, b) => b.similarity - a.similarity)
     : rows;
@@ -33,7 +40,11 @@ export default function ListingGrid({ rows, totalBeforeFilters, sortByMatch }: L
       ) : (
         <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
           {displayedRows.map(({ property, similarity }) => (
-            <PropertyCard key={property.id} property={property} similarityScore={similarity} />
+            <PropertyCard
+              key={property.id}
+              property={property}
+              similarityScore={showSimilarityBadge ? similarity : null}
+            />
           ))}
         </div>
       )}
