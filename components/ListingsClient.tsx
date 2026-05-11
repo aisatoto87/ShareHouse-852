@@ -55,6 +55,7 @@ const defaultFilters: Filters = {
 
 export default function ListingsClient() {
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
+  const [viewMode, setViewMode] = useState<"matched" | "all">("matched");
   const [filters, setFilters] = useState<Filters>(defaultFilters);
   const [matchedRows, setMatchedRows] = useState<SmartMatchedPropertyRow[]>([]);
   const [isLoadingListings, setIsLoadingListings] = useState(true);
@@ -63,9 +64,28 @@ export default function ListingsClient() {
   const [habitsSurveyIncomplete, setHabitsSurveyIncomplete] = useState(false);
   const [sortByMatch, setSortByMatch] = useState(false);
 
-  const fetchSmartMatchedProperties = useCallback(async () => {
+  const fetchListings = useCallback(async () => {
     setIsLoadingListings(true);
     try {
+      if (viewMode === "all") {
+        const { data: propertyRows, error } = await supabase
+          .from("properties")
+          .select("*")
+          .order("created_at", { ascending: false })
+          .limit(50);
+
+        if (error) {
+          throw error;
+        }
+
+        const next: SmartMatchedPropertyRow[] = (propertyRows ?? []).map((row) => ({
+          property: mapRowToProperty(row as Record<string, unknown>),
+          similarity: 0,
+        }));
+        setMatchedRows(next);
+        return;
+      }
+
       const {
         data: { user },
       } = await supabase.auth.getUser();
@@ -137,11 +157,11 @@ export default function ListingsClient() {
     } finally {
       setIsLoadingListings(false);
     }
-  }, [supabase]);
+  }, [supabase, viewMode]);
 
   useEffect(() => {
-    void fetchSmartMatchedProperties();
-  }, [fetchSmartMatchedProperties]);
+    void fetchListings();
+  }, [fetchListings]);
 
   function handleToggleSortByMatch() {
     setSortByMatch((prev) => !prev);
@@ -153,16 +173,21 @@ export default function ListingsClient() {
     [matchedRows, filters]
   );
 
+  const showSimilarityBadge = viewMode === "matched";
+  const sortByMatchEffective = showSimilarityBadge && sortByMatch;
+
   return (
     <>
       <FilterBar
         filters={filters}
         onChange={setFilters}
+        viewMode={viewMode}
+        onViewModeChange={setViewMode}
         sortByMatch={sortByMatch}
         onToggleSortByMatch={handleToggleSortByMatch}
       />
       <main className="mx-auto max-w-6xl px-4 py-6 sm:px-6">
-        {habitsSurveyIncomplete && userMatchHabits ? (
+        {viewMode === "matched" && habitsSurveyIncomplete && userMatchHabits ? (
           <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
             <span className="font-medium">尚未完成生活習慣問卷</span>
             <span className="text-amber-800/90">
@@ -178,10 +203,17 @@ export default function ListingsClient() {
         {isLoadingListings ? (
           <div className="flex flex-col items-center justify-center rounded-2xl border border-zinc-200 bg-white py-24 text-center">
             <Loader2 className="h-10 w-10 animate-spin text-[#0f2540]" aria-hidden />
-            <p className="mt-4 text-sm font-medium text-zinc-600">載入為你配對的租盤…</p>
+            <p className="mt-4 text-sm font-medium text-zinc-600">
+              {viewMode === "matched" ? "載入為你配對的租盤…" : "載入全部租盤…"}
+            </p>
           </div>
         ) : (
-          <ListingGrid rows={filteredRows} totalBeforeFilters={matchedRows.length} sortByMatch={sortByMatch} />
+          <ListingGrid
+            rows={filteredRows}
+            totalBeforeFilters={matchedRows.length}
+            sortByMatch={sortByMatchEffective}
+            showSimilarityBadge={showSimilarityBadge}
+          />
         )}
       </main>
     </>

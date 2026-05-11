@@ -14,9 +14,13 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
+export type ListingsViewMode = "matched" | "all";
+
 interface FilterBarProps {
   filters: Filters;
   onChange: (filters: Filters) => void;
+  viewMode: ListingsViewMode;
+  onViewModeChange: (mode: ListingsViewMode) => void;
   sortByMatch: boolean;
   onToggleSortByMatch: () => void;
 }
@@ -24,12 +28,48 @@ interface FilterBarProps {
 export default function FilterBar({
   filters,
   onChange,
+  viewMode,
+  onViewModeChange,
   sortByMatch,
   onToggleSortByMatch,
 }: FilterBarProps) {
   return (
     <div className="sticky top-[57px] z-40 border-b border-zinc-200 bg-white/95 backdrop-blur-sm">
-      <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-2.5 px-4 py-2.5 sm:px-6">
+      <div className="mx-auto max-w-6xl px-4 pb-2 pt-2.5 sm:px-6">
+        <div
+          className="mb-2.5 flex w-full max-w-md rounded-lg border border-zinc-200 bg-zinc-100/80 p-0.5 sm:max-w-lg"
+          role="tablist"
+          aria-label="租盤列表顯示模式"
+        >
+          <button
+            type="button"
+            role="tab"
+            aria-selected={viewMode === "matched"}
+            onClick={() => onViewModeChange("matched")}
+            className={`flex-1 rounded-md px-3 py-2 text-center text-sm font-semibold transition-colors ${
+              viewMode === "matched"
+                ? "bg-[#0f2540] text-white shadow-sm"
+                : "text-zinc-600 hover:bg-white/80 hover:text-zinc-900"
+            }`}
+          >
+            🔥 智能配對
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={viewMode === "all"}
+            onClick={() => onViewModeChange("all")}
+            className={`flex-1 rounded-md px-3 py-2 text-center text-sm font-semibold transition-colors ${
+              viewMode === "all"
+                ? "bg-[#0f2540] text-white shadow-sm"
+                : "text-zinc-600 hover:bg-white/80 hover:text-zinc-900"
+            }`}
+          >
+            🌍 全部租盤
+          </button>
+        </div>
+      </div>
+      <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-2.5 px-4 pb-2.5 sm:px-6">
         <Select
           value={filters.district || "all"}
           onValueChange={(val) =>
@@ -84,17 +124,19 @@ export default function FilterBar({
           </SelectContent>
         </Select>
 
-        <button
-          type="button"
-          onClick={onToggleSortByMatch}
-          className={`h-9 shrink-0 rounded-md border px-3 text-sm font-medium transition-colors ${
-            sortByMatch
-              ? "border-[#0f2540] bg-[#0f2540] text-white hover:bg-[#1a3a5c]"
-              : "border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-100"
-          }`}
-        >
-          ✨ 幫我搵神仙室友
-        </button>
+        {viewMode === "matched" ? (
+          <button
+            type="button"
+            onClick={onToggleSortByMatch}
+            className={`h-9 shrink-0 rounded-md border px-3 text-sm font-medium transition-colors ${
+              sortByMatch
+                ? "border-[#0f2540] bg-[#0f2540] text-white hover:bg-[#1a3a5c]"
+                : "border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-100"
+            }`}
+          >
+            ✨ 幫我搵神仙室友
+          </button>
+        ) : null}
       </div>
     </div>
   );
