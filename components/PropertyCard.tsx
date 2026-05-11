@@ -7,12 +7,8 @@ import { CheckCircle, MapPin, Maximize2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardFooter } from "@/components/ui/card";
 import WishlistHeartButton from "@/components/WishlistHeartButton";
-import {
-  habitMatchScorePercent,
-  parsePropertyHabitsFromRecord,
-  parseTenantHabits,
-} from "@/lib/habit-match";
 import { cn } from "@/lib/utils";
+import type { SyncMatchPreview } from "@/lib/matchingAlgorithm";
 import type { Property } from "@/types/property";
 
 const TAG_STYLES: Record<string, string> = {
@@ -39,16 +35,11 @@ function buildWhatsAppUrl(title: string, phone: string): string {
 
 interface PropertyCardProps {
   property: Property;
-  tenantHabits?: {
-    cleanliness?: number;
-    ac_temp?: number;
-    guests?: number;
-    noise?: number;
-  };
+  /** 已登入且租盤四項習慣齊備時由列表預算；紅線盤不會傳入此卡 */
+  syncMatchPreview?: SyncMatchPreview | null;
 }
 
-export default function PropertyCard({ property, tenantHabits }: PropertyCardProps) {
-  console.log("卡片收到的資料:", property.title, property.pricing_mode, property.room_prices);
+export default function PropertyCard({ property, syncMatchPreview }: PropertyCardProps) {
   const { id, title, district, sub_district, price, size_sqft, imageUrl, tags, contact_whatsapp } =
     property;
   const formattedPrice = new Intl.NumberFormat("zh-HK").format(price);
@@ -80,15 +71,6 @@ export default function PropertyCard({ property, tenantHabits }: PropertyCardPro
     e.preventDefault();
     e.stopPropagation();
   };
-
-  const propertyHabitSource = property as unknown as Record<string, unknown>;
-  const tenantQuartet = parseTenantHabits(tenantHabits);
-  const propertyQuartet = parsePropertyHabitsFromRecord(propertyHabitSource);
-
-  const matchPercentage =
-    tenantQuartet && propertyQuartet
-      ? Math.round(habitMatchScorePercent(tenantQuartet, propertyQuartet))
-      : null;
 
   return (
     <Card className="group overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-sm transition-shadow duration-300 hover:shadow-lg">
@@ -124,22 +106,20 @@ export default function PropertyCard({ property, tenantHabits }: PropertyCardPro
           </div>
         )}
 
-        {matchPercentage !== null ? (
-          <div
-            className={cn(
-              "absolute right-14 top-3 z-10 rounded-full px-2.5 py-1 text-[11px] font-semibold",
-              matchPercentage >= 80
-                ? "bg-emerald-500 text-white shadow-[0_0_10px_rgba(16,185,129,0.5)]"
-                : matchPercentage <= 40
-                  ? "bg-red-500 text-white"
-                  : "bg-slate-100 text-slate-700"
-            )}
-          >
-            {matchPercentage >= 80
-              ? `✨ ${matchPercentage}% 神仙契合`
-              : matchPercentage <= 40
-                ? `⚠️ ${matchPercentage}% 習慣互斥`
-                : `🤝 ${matchPercentage}% 契合`}
+        {syncMatchPreview ? (
+          <div className="absolute right-14 top-3 z-10 max-w-[min(12rem,calc(100%-5.5rem))]">
+            <span
+              className={cn(
+                "inline-flex items-center rounded-full px-2 py-1 text-xs font-bold shadow-sm",
+                syncMatchPreview.meetsThreshold
+                  ? "bg-green-100 text-green-800 ring-1 ring-green-200/80"
+                  : syncMatchPreview.similarity >= 55
+                    ? "bg-amber-100 text-amber-900 ring-1 ring-amber-200/80"
+                    : "bg-zinc-100 text-zinc-600 ring-1 ring-zinc-200/80"
+              )}
+            >
+              🔥 {syncMatchPreview.similarity}% 契合度
+            </span>
           </div>
         ) : null}
 
