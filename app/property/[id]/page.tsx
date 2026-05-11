@@ -6,6 +6,8 @@ import PropertyLandlordRatingCard from "@/components/PropertyLandlordRatingCard"
 import Navbar from "@/components/Navbar";
 import PropertyBentoGallery from "@/components/PropertyBentoGallery";
 import ShareListingButton from "@/components/ShareListingButton";
+import SyncNestHabitRadarAnalysis from "@/components/SyncNestHabitRadarAnalysis";
+import type { HabitRadarValues } from "@/components/SyncNestHabitRadarAnalysis";
 import WishlistHeartButton from "@/components/WishlistHeartButton";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -40,6 +42,29 @@ function isAdminUser(user: { app_metadata?: Record<string, unknown>; user_metada
     user.app_metadata?.is_admin === true ||
     user.user_metadata?.is_admin === true
   );
+}
+
+const DEFAULT_HABIT_RADAR = 3;
+
+function habitScoreForRadar(v: unknown, fallback = DEFAULT_HABIT_RADAR): number {
+  if (v == null) return fallback;
+  const n = Number(v);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(5, Math.max(0, Math.round(n)));
+}
+
+function propertyToRadarValues(property: {
+  habit_cleanliness?: number;
+  habit_ac_temp?: number;
+  habit_guests?: number;
+  habit_noise?: number;
+}): HabitRadarValues {
+  return {
+    cleanliness: habitScoreForRadar(property.habit_cleanliness),
+    acTemp: habitScoreForRadar(property.habit_ac_temp),
+    guests: habitScoreForRadar(property.habit_guests),
+    noise: habitScoreForRadar(property.habit_noise),
+  };
 }
 
 function buildWhatsAppUrl(phone: string, title: string): string {
@@ -144,6 +169,30 @@ export default async function PropertyDetailPage({ params }: PageProps) {
   } = await supabase.auth.getUser();
   const canEditProperty = isAdminUser(user) || (ownerId.length > 0 && user?.id === ownerId);
 
+  let userRadarHabits: HabitRadarValues = {
+    cleanliness: DEFAULT_HABIT_RADAR,
+    acTemp: DEFAULT_HABIT_RADAR,
+    guests: DEFAULT_HABIT_RADAR,
+    noise: DEFAULT_HABIT_RADAR,
+  };
+  if (user) {
+    const { data: habitProfile } = await supabase
+      .from("profiles")
+      .select("habit_cleanliness, habit_ac_temp, habit_guests, habit_noise")
+      .eq("id", user.id)
+      .maybeSingle();
+    if (habitProfile) {
+      userRadarHabits = {
+        cleanliness: habitScoreForRadar(habitProfile.habit_cleanliness),
+        acTemp: habitScoreForRadar(habitProfile.habit_ac_temp),
+        guests: habitScoreForRadar(habitProfile.habit_guests),
+        noise: habitScoreForRadar(habitProfile.habit_noise),
+      };
+    }
+  }
+
+  const listingRadarHabits = propertyToRadarValues(property);
+
   const parsedGallery = parseGallery(property.gallery);
   const normalizedMainImage = parseGalleryEntry(property.imageUrl).url;
   const mainImage = normalizedMainImage.startsWith("http")
@@ -229,6 +278,12 @@ export default async function PropertyDetailPage({ params }: PageProps) {
 
         <div className="grid grid-cols-1 gap-8 lg:grid-cols-[minmax(0,1fr)_320px]">
           <section className="space-y-6">
+            <SyncNestHabitRadarAnalysis
+              you={userRadarHabits}
+              listing={listingRadarHabits}
+              viewerLoggedIn={Boolean(user)}
+            />
+
             <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm">
               <h2 className="text-lg font-semibold text-zinc-900">特色與條件</h2>
               <div className="mt-4 space-y-3">
