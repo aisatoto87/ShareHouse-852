@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
@@ -55,12 +55,12 @@ const defaultFilters: Filters = {
 
 export default function ListingsClient() {
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
-  /** 僅「目前這一輪」請求可在 finally 關閉 loading，避免與 ignore 疊加後永遠不關 */
-  const fetchRequestIdRef = useRef(0);
   const [viewMode, setViewMode] = useState<"matched" | "all">("matched");
   const [filters, setFilters] = useState<Filters>(defaultFilters);
   const [matchedRows, setMatchedRows] = useState<SmartMatchedPropertyRow[]>([]);
   const [isLoadingListings, setIsLoadingListings] = useState(true);
+  /** 未登入卻選了智能配對時為 true，用於顯示登入提示而非發 RPC */
+  const [matchedRequiresAuth, setMatchedRequiresAuth] = useState(false);
   /** 已登入時反映問卷是否齊備；未登入為 null */
   const [userMatchHabits, setUserMatchHabits] = useState<UserHabits | null>(null);
   const [habitsSurveyIncomplete, setHabitsSurveyIncomplete] = useState(false);
@@ -68,10 +68,11 @@ export default function ListingsClient() {
 
   useEffect(() => {
     let ignore = false;
-    const requestId = ++fetchRequestIdRef.current;
 
     async function fetchData() {
       setIsLoadingListings(true);
+      setMatchedRequiresAuth(false);
+
       try {
         if (viewMode === "all") {
           const { data: propertyRows, error } = await supabase
@@ -80,11 +81,11 @@ export default function ListingsClient() {
             .order("created_at", { ascending: false })
             .limit(50);
 
+          if (ignore) return;
+
           if (error) {
             throw error;
           }
-
-          if (ignore) return;
 
           const next: SmartMatchedPropertyRow[] = (propertyRows ?? []).map((row) => ({
             property: mapRowToProperty(row as Record<string, unknown>),
@@ -98,47 +99,58 @@ export default function ListingsClient() {
 
         const {
           data: { user },
+          error: authError,
         } = await supabase.auth.getUser();
 
         if (ignore) return;
+
+        if (authError || !user) {
+          if (!ignore) {
+            setMatchedRows([]);
+            setUserMatchHabits(null);
+            setHabitsSurveyIncomplete(false);
+            setMatchedRequiresAuth(true);
+          }
+          return;
+        }
 
         let habitsForRpc = DEFAULT_HABIT_USER;
         let nextUserMatchHabits: UserHabits | null = null;
         let surveyIncomplete = false;
 
-        if (user) {
-          const { data: profileRow, error: profileError } = await supabase
-            .from("profiles")
-            .select("habit_cleanliness, habit_ac_temp, habit_guests, habit_noise")
-            .eq("id", user.id)
-            .maybeSingle();
+        const { data: profileRow, error: profileError } = await supabase
+          .from("profiles")
+          .select("habit_cleanliness, habit_ac_temp, habit_guests, habit_noise")
+          .eq("id", user.id)
+          .maybeSingle();
 
-          if (profileError) {
-            console.error("[ListingsClient] profile", profileError);
-          }
+        if (profileError) {
+          console.error("[ListingsClient] profile", profileError);
+        }
 
-          if (profileRow) {
-            const parsed = profileRowToUserHabits(profileRow);
-            if (parsed) {
-              habitsForRpc = parsed;
-              nextUserMatchHabits = parsed;
-              surveyIncomplete = false;
-            } else {
-              habitsForRpc = DEFAULT_HABIT_USER;
-              nextUserMatchHabits = DEFAULT_HABIT_USER;
-              surveyIncomplete = true;
-            }
+        if (ignore) return;
+
+        if (profileRow) {
+          const parsed = profileRowToUserHabits(profileRow);
+          if (parsed) {
+            habitsForRpc = parsed;
+            nextUserMatchHabits = parsed;
+            surveyIncomplete = false;
           } else {
             habitsForRpc = DEFAULT_HABIT_USER;
             nextUserMatchHabits = DEFAULT_HABIT_USER;
             surveyIncomplete = true;
           }
+        } else {
+          habitsForRpc = DEFAULT_HABIT_USER;
+          nextUserMatchHabits = DEFAULT_HABIT_USER;
+          surveyIncomplete = true;
         }
 
-        if (ignore) return;
-
-        setUserMatchHabits(nextUserMatchHabits);
-        setHabitsSurveyIncomplete(surveyIncomplete);
+        if (!ignore) {
+          setUserMatchHabits(nextUserMatchHabits);
+          setHabitsSurveyIncomplete(surveyIncomplete);
+        }
 
         const { data: rpcData, error: rpcError } = await supabase.rpc("get_smart_matched_properties", {
           u_clean: habitsForRpc.habit_cleanliness ?? 3,
@@ -184,7 +196,7 @@ export default function ListingsClient() {
           setMatchedRows([]);
         }
       } finally {
-        if (requestId === fetchRequestIdRef.current) {
+        if (!ignore) {
           setIsLoadingListings(false);
         }
       }
@@ -241,6 +253,16 @@ export default function ListingsClient() {
             <p className="mt-4 text-sm font-medium text-zinc-600">
               {viewMode === "matched" ? "載入為你配對的租盤…" : "載入全部租盤…"}
             </p>
+          </div>
+        ) : matchedRequiresAuth ? (
+          <div className="flex flex-col items-center justify-center rounded-2xl border border-zinc-200 bg-white px-6 py-24 text-center">
+            <p className="max-w-md text-sm font-medium text-zinc-700">請登入以查看專屬神仙室友配對</p>
+            <Link
+              href="/login"
+              className="mt-6 inline-flex rounded-lg bg-[#0f2540] px-4 py-2 text-sm font-semibold text-white hover:bg-[#0f2540]/90"
+            >
+              前往登入
+            </Link>
           </div>
         ) : (
           <ListingGrid
