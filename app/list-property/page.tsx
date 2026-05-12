@@ -122,24 +122,43 @@ export default function ListPropertyPage() {
 
   useEffect(() => {
     let mounted = true;
+    let settled = false;
+
+    const finishAuthCheck = () => {
+      if (settled) return;
+      settled = true;
+      if (mounted) {
+        setAuthChecking(false);
+      }
+    };
+
+    const timeoutId = window.setTimeout(() => {
+      if (!mounted || settled) return;
+      console.log("Auth check timeout");
+      finishAuthCheck();
+      toast.info("請先登入以發布租盤");
+      router.replace("/login");
+    }, 5000);
 
     const verifyAuth = async () => {
       try {
-        const { data, error } = await supabase.auth.getUser();
+        const { data, error } = await supabase.auth.getSession();
         if (!mounted) return;
-        if (error || !data.user) {
+        if (settled) return;
+
+        if (error || !data.session?.user) {
           toast.info("請先登入以發布租盤");
           router.replace("/login");
           return;
         }
       } catch {
         if (!mounted) return;
-        toast.error("無法驗證登入狀態，請稍後再試。");
+        if (settled) return;
+        toast.info("請先登入以發布租盤");
         router.replace("/login");
       } finally {
-        if (mounted) {
-          setAuthChecking(false);
-        }
+        window.clearTimeout(timeoutId);
+        finishAuthCheck();
       }
     };
 
@@ -147,6 +166,7 @@ export default function ListPropertyPage() {
 
     return () => {
       mounted = false;
+      window.clearTimeout(timeoutId);
     };
   }, [router, supabase]);
 
