@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
@@ -55,6 +55,8 @@ const defaultFilters: Filters = {
 
 export default function ListingsClient() {
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
+  /** 單調遞增；effect cleanup 與新一輪 effect 開頭皆會推進，用於作廢舊請求、避免舊回應誤關新請求的 loading */
+  const listingsFetchRequestIdRef = useRef(0);
   const [viewMode, setViewMode] = useState<"matched" | "all">("matched");
   const [filters, setFilters] = useState<Filters>(defaultFilters);
   const [matchedRows, setMatchedRows] = useState<SmartMatchedPropertyRow[]>([]);
@@ -67,12 +69,19 @@ export default function ListingsClient() {
   const [sortByMatch, setSortByMatch] = useState(false);
 
   useEffect(() => {
-    let ignore = false;
+    const myRequestId = ++listingsFetchRequestIdRef.current;
+    const isActive = () => myRequestId === listingsFetchRequestIdRef.current;
+
     const fallbackTimer = window.setTimeout(() => {
-      setIsLoadingListings(false);
+      if (isActive()) {
+        setIsLoadingListings(false);
+      }
     }, 5000);
 
     async function fetchData() {
+      if (!isActive()) {
+        return;
+      }
       setIsLoadingListings(true);
       setMatchedRequiresAuth(false);
 
@@ -84,7 +93,7 @@ export default function ListingsClient() {
             .order("created_at", { ascending: false })
             .limit(50);
 
-          if (ignore) {
+          if (!isActive()) {
             return;
           }
 
@@ -96,9 +105,8 @@ export default function ListingsClient() {
             property: mapRowToProperty(row as Record<string, unknown>),
             similarity: 0,
           }));
-          if (!ignore) {
+          if (isActive()) {
             setMatchedRows(next);
-            setIsLoadingListings(false);
           }
           return;
         }
@@ -108,17 +116,16 @@ export default function ListingsClient() {
           error: authError,
         } = await supabase.auth.getUser();
 
-        if (ignore) {
+        if (!isActive()) {
           return;
         }
 
         if (authError || !user) {
-          if (!ignore) {
+          if (isActive()) {
             setMatchedRows([]);
             setUserMatchHabits(null);
             setHabitsSurveyIncomplete(false);
             setMatchedRequiresAuth(true);
-            setIsLoadingListings(false);
           }
           return;
         }
@@ -137,7 +144,7 @@ export default function ListingsClient() {
           console.error("[ListingsClient] profile", profileError);
         }
 
-        if (ignore) {
+        if (!isActive()) {
           return;
         }
 
@@ -158,7 +165,7 @@ export default function ListingsClient() {
           surveyIncomplete = true;
         }
 
-        if (!ignore) {
+        if (isActive()) {
           setUserMatchHabits(nextUserMatchHabits);
           setHabitsSurveyIncomplete(surveyIncomplete);
         }
@@ -170,7 +177,7 @@ export default function ListingsClient() {
           u_noise: habitsForRpc.habit_noise ?? 3,
         });
 
-        if (ignore) {
+        if (!isActive()) {
           return;
         }
 
@@ -190,13 +197,12 @@ export default function ListingsClient() {
           next.push({ property, similarity });
         }
 
-        if (!ignore) {
+        if (isActive()) {
           setMatchedRows(next);
-          setIsLoadingListings(false);
         }
       } catch (error) {
         console.error("Fetch API Error:", error);
-        if (!ignore) {
+        if (isActive()) {
           const message =
             error instanceof Error
               ? error.message
@@ -208,11 +214,10 @@ export default function ListingsClient() {
                 : "載入租盤失敗，請稍後再試";
           toast.error(message);
           setMatchedRows([]);
-          setIsLoadingListings(false);
         }
       } finally {
         window.clearTimeout(fallbackTimer);
-        if (!ignore) {
+        if (isActive()) {
           setIsLoadingListings(false);
         }
       }
@@ -221,7 +226,7 @@ export default function ListingsClient() {
     void fetchData();
 
     return () => {
-      ignore = true;
+      listingsFetchRequestIdRef.current += 1;
       window.clearTimeout(fallbackTimer);
     };
   }, [viewMode, supabase]);
