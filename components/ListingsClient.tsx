@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
@@ -55,6 +55,8 @@ const defaultFilters: Filters = {
 
 export default function ListingsClient() {
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
+  /** 僅「目前這一輪」請求可在 finally 關閉 loading，避免與 ignore 疊加後永遠不關 */
+  const fetchRequestIdRef = useRef(0);
   const [viewMode, setViewMode] = useState<"matched" | "all">("matched");
   const [filters, setFilters] = useState<Filters>(defaultFilters);
   const [matchedRows, setMatchedRows] = useState<SmartMatchedPropertyRow[]>([]);
@@ -66,6 +68,7 @@ export default function ListingsClient() {
 
   useEffect(() => {
     let ignore = false;
+    const requestId = ++fetchRequestIdRef.current;
 
     async function fetchData() {
       setIsLoadingListings(true);
@@ -87,7 +90,9 @@ export default function ListingsClient() {
             property: mapRowToProperty(row as Record<string, unknown>),
             similarity: 0,
           }));
-          setMatchedRows(next);
+          if (!ignore) {
+            setMatchedRows(next);
+          }
           return;
         }
 
@@ -165,12 +170,21 @@ export default function ListingsClient() {
         }
       } catch (error) {
         if (!ignore) {
-          console.error("獲取配對租盤失敗:", error);
-          toast.error("載入租盤失敗，請稍後再試");
+          console.error("Fetch Error:", error);
+          const message =
+            error instanceof Error
+              ? error.message
+              : typeof error === "object" &&
+                  error !== null &&
+                  "message" in error &&
+                  typeof (error as { message: unknown }).message === "string"
+                ? String((error as { message: string }).message)
+                : "載入租盤失敗，請稍後再試";
+          toast.error(message);
           setMatchedRows([]);
         }
       } finally {
-        if (!ignore) {
+        if (requestId === fetchRequestIdRef.current) {
           setIsLoadingListings(false);
         }
       }
