@@ -68,6 +68,9 @@ export default function ListingsClient() {
 
   useEffect(() => {
     let ignore = false;
+    const fallbackTimer = window.setTimeout(() => {
+      setIsLoadingListings(false);
+    }, 5000);
 
     async function fetchData() {
       setIsLoadingListings(true);
@@ -81,7 +84,9 @@ export default function ListingsClient() {
             .order("created_at", { ascending: false })
             .limit(50);
 
-          if (ignore) return;
+          if (ignore) {
+            return;
+          }
 
           if (error) {
             throw error;
@@ -93,6 +98,7 @@ export default function ListingsClient() {
           }));
           if (!ignore) {
             setMatchedRows(next);
+            setIsLoadingListings(false);
           }
           return;
         }
@@ -102,7 +108,9 @@ export default function ListingsClient() {
           error: authError,
         } = await supabase.auth.getUser();
 
-        if (ignore) return;
+        if (ignore) {
+          return;
+        }
 
         if (authError || !user) {
           if (!ignore) {
@@ -110,6 +118,7 @@ export default function ListingsClient() {
             setUserMatchHabits(null);
             setHabitsSurveyIncomplete(false);
             setMatchedRequiresAuth(true);
+            setIsLoadingListings(false);
           }
           return;
         }
@@ -128,7 +137,9 @@ export default function ListingsClient() {
           console.error("[ListingsClient] profile", profileError);
         }
 
-        if (ignore) return;
+        if (ignore) {
+          return;
+        }
 
         if (profileRow) {
           const parsed = profileRowToUserHabits(profileRow);
@@ -159,7 +170,9 @@ export default function ListingsClient() {
           u_noise: habitsForRpc.habit_noise ?? 3,
         });
 
-        if (ignore) return;
+        if (ignore) {
+          return;
+        }
 
         if (rpcError) {
           throw rpcError;
@@ -179,10 +192,11 @@ export default function ListingsClient() {
 
         if (!ignore) {
           setMatchedRows(next);
+          setIsLoadingListings(false);
         }
       } catch (error) {
+        console.error("Fetch API Error:", error);
         if (!ignore) {
-          console.error("Fetch Error:", error);
           const message =
             error instanceof Error
               ? error.message
@@ -194,8 +208,10 @@ export default function ListingsClient() {
                 : "載入租盤失敗，請稍後再試";
           toast.error(message);
           setMatchedRows([]);
+          setIsLoadingListings(false);
         }
       } finally {
+        window.clearTimeout(fallbackTimer);
         if (!ignore) {
           setIsLoadingListings(false);
         }
@@ -206,6 +222,7 @@ export default function ListingsClient() {
 
     return () => {
       ignore = true;
+      window.clearTimeout(fallbackTimer);
     };
   }, [viewMode, supabase]);
 
