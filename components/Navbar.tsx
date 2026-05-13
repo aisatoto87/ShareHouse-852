@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import type { User } from "@supabase/supabase-js";
+import type { Session, User } from "@supabase/supabase-js";
 import { toast } from "sonner";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
@@ -33,26 +33,9 @@ export default function Navbar() {
   useEffect(() => {
     let mounted = true;
 
-    supabase.auth.getUser().then(async ({ data }) => {
-      if (!mounted) return;
-      setUser(data.user);
-      if (!data.user) {
-        setProfileRole("");
-        return;
-      }
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("role")
-        .eq("id", data.user.id)
-        .maybeSingle();
-      if (!mounted) return;
-      setProfileRole(typeof profile?.role === "string" ? profile.role : "");
-    });
-
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange(async (_event, session) => {
+    const applySession = async (session: Session | null) => {
       const nextUser = session?.user ?? null;
+      if (!mounted) return;
       setUser(nextUser);
       if (!nextUser) {
         setProfileRole("");
@@ -63,7 +46,24 @@ export default function Navbar() {
         .select("role")
         .eq("id", nextUser.id)
         .maybeSingle();
+      if (!mounted) return;
       setProfileRole(typeof profile?.role === "string" ? profile.role : "");
+    };
+
+    const checkSession = async () => {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (!mounted) return;
+      await applySession(session);
+    };
+
+    void checkSession();
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      void applySession(session);
     });
 
     return () => {
@@ -80,6 +80,8 @@ export default function Navbar() {
       return;
     }
 
+    setUser(null);
+    setProfileRole("");
     toast.success("已登出");
     router.push("/");
     router.refresh();
