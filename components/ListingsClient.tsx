@@ -2,10 +2,13 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
+import type { User } from "@supabase/supabase-js";
 import FilterBar from "@/components/FilterBar";
 import ListingGrid from "@/components/ListingGrid";
+import { Button } from "@/components/ui/button";
 import { applyFilters } from "@/lib/filter";
 import { mapRowToProperty } from "@/lib/property-mapper";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
@@ -54,10 +57,12 @@ const defaultFilters: Filters = {
 };
 
 export default function ListingsClient() {
+  const router = useRouter();
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
   /** 單調遞增；effect cleanup 與新一輪 effect 開頭皆會推進，用於作廢舊請求、避免舊回應誤關新請求的 loading */
   const listingsFetchRequestIdRef = useRef(0);
-  const [viewMode, setViewMode] = useState<"matched" | "all">("matched");
+  /** 街客首屏預設「全部租盤」；登入後再切到智能配對 */
+  const [viewMode, setViewMode] = useState<"matched" | "all">("all");
   const [filters, setFilters] = useState<Filters>(defaultFilters);
   const [matchedRows, setMatchedRows] = useState<SmartMatchedPropertyRow[]>([]);
   const [isLoadingListings, setIsLoadingListings] = useState(true);
@@ -68,7 +73,59 @@ export default function ListingsClient() {
   const [habitsSurveyIncomplete, setHabitsSurveyIncomplete] = useState(false);
   const [sortByMatch, setSortByMatch] = useState(false);
 
+  const [authReady, setAuthReady] = useState(false);
+  const [sessionUser, setSessionUser] = useState<User | null>(null);
+  const prevResolvedUserIdRef = useRef<string | null | undefined>(undefined);
+
   useEffect(() => {
+    let mounted = true;
+
+    const syncViewModeForUserId = (id: string | null) => {
+      const prev = prevResolvedUserIdRef.current;
+      if (prev === undefined) {
+        setViewMode(id ? "matched" : "all");
+        prevResolvedUserIdRef.current = id;
+        return;
+      }
+      const had = prev !== null;
+      const has = id !== null;
+      prevResolvedUserIdRef.current = id;
+      if (had && !has) {
+        setViewMode("all");
+      } else if (!had && has) {
+        setViewMode("matched");
+      }
+    };
+
+    void supabase.auth.getSession().then(({ data: { session } }) => {
+      if (!mounted) return;
+      const id = session?.user?.id ?? null;
+      setSessionUser(session?.user ?? null);
+      setAuthReady(true);
+      syncViewModeForUserId(id);
+    });
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      const id = session?.user?.id ?? null;
+      setSessionUser(session?.user ?? null);
+      setAuthReady(true);
+      syncViewModeForUserId(id);
+    });
+
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
+  }, [supabase]);
+
+  useEffect(() => {
+    if (!authReady) {
+      setIsLoadingListings(true);
+      return;
+    }
+
     const myRequestId = ++listingsFetchRequestIdRef.current;
     const isActive = () => myRequestId === listingsFetchRequestIdRef.current;
 
@@ -82,6 +139,19 @@ export default function ListingsClient() {
       if (!isActive()) {
         return;
       }
+
+      if (viewMode === "matched" && !sessionUser) {
+        window.clearTimeout(fallbackTimer);
+        setMatchedRequiresAuth(true);
+        setMatchedRows([]);
+        setUserMatchHabits(null);
+        setHabitsSurveyIncomplete(false);
+        if (isActive()) {
+          setIsLoadingListings(false);
+        }
+        return;
+      }
+
       setIsLoadingListings(true);
       setMatchedRequiresAuth(false);
 
@@ -111,24 +181,7 @@ export default function ListingsClient() {
           return;
         }
 
-        const {
-          data: { user },
-          error: authError,
-        } = await supabase.auth.getUser();
-
-        if (!isActive()) {
-          return;
-        }
-
-        if (authError || !user) {
-          if (isActive()) {
-            setMatchedRows([]);
-            setUserMatchHabits(null);
-            setHabitsSurveyIncomplete(false);
-            setMatchedRequiresAuth(true);
-          }
-          return;
-        }
+        const user = sessionUser!;
 
         let habitsForRpc = DEFAULT_HABIT_USER;
         let nextUserMatchHabits: UserHabits | null = null;
@@ -229,7 +282,7 @@ export default function ListingsClient() {
       listingsFetchRequestIdRef.current += 1;
       window.clearTimeout(fallbackTimer);
     };
-  }, [viewMode, supabase]);
+  }, [viewMode, supabase, authReady, sessionUser]);
 
   function handleToggleSortByMatch() {
     setSortByMatch((prev) => !prev);
@@ -277,14 +330,20 @@ export default function ListingsClient() {
             </p>
           </div>
         ) : matchedRequiresAuth ? (
-          <div className="flex flex-col items-center justify-center rounded-2xl border border-zinc-200 bg-white px-6 py-24 text-center">
-            <p className="max-w-md text-sm font-medium text-zinc-700">請登入以查看專屬神仙室友配對</p>
-            <Link
-              href="/login"
-              className="mt-6 inline-flex rounded-lg bg-[#0f2540] px-4 py-2 text-sm font-semibold text-white hover:bg-[#0f2540]/90"
+          <div className="flex flex-col items-center justify-center rounded-2xl border border-zinc-200 bg-gradient-to-b from-white to-zinc-50 px-6 py-20 text-center shadow-sm sm:py-24">
+            <h2 className="max-w-lg text-xl font-bold tracking-tight text-zinc-900 sm:text-2xl">
+              解鎖專屬神仙室友配對！✨
+            </h2>
+            <p className="mt-4 max-w-lg text-sm leading-relaxed text-zinc-600 sm:text-base">
+              你想找不洗碗的室友，還是冷氣開 18 度的企鵝？立即登入設定你的專屬 Vibe，讓我們為你找出 100% 契合的租盤！
+            </p>
+            <Button
+              type="button"
+              className="mt-8 rounded-full bg-[#0f2540] px-6 py-2.5 text-base font-semibold text-white hover:bg-[#1a3a5c]"
+              onClick={() => router.push("/login")}
             >
-              前往登入
-            </Link>
+              👉 立即登入 / 註冊
+            </Button>
           </div>
         ) : (
           <ListingGrid
