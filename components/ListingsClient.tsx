@@ -7,6 +7,7 @@ import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import type { User } from "@supabase/supabase-js";
 import FilterBar from "@/components/FilterBar";
+import type { ListingsViewMode } from "@/components/FilterBar";
 import ListingGrid from "@/components/ListingGrid";
 import { Button } from "@/components/ui/button";
 import { applyFilters } from "@/lib/filter";
@@ -56,15 +57,22 @@ const defaultFilters: Filters = {
   size: "",
 };
 
+const LIMIT = 12;
+
 export default function ListingsClient() {
   const router = useRouter();
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
   /** 單調遞增；effect cleanup 與新一輪 effect 開頭皆會推進，用於作廢舊請求、避免舊回應誤關新請求的 loading */
   const listingsFetchRequestIdRef = useRef(0);
+  const loadMoreRequestIdRef = useRef(0);
   /** 街客首屏預設「全部租盤」；登入後再切到智能配對 */
   const [viewMode, setViewMode] = useState<"matched" | "all">("all");
   const [filters, setFilters] = useState<Filters>(defaultFilters);
   const [matchedRows, setMatchedRows] = useState<SmartMatchedPropertyRow[]>([]);
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(false);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const matchedFullCacheRef = useRef<SmartMatchedPropertyRow[] | null>(null);
   const [isLoadingListings, setIsLoadingListings] = useState(true);
   /** 未登入卻選了智能配對時為 true，用於顯示登入提示而非發 RPC */
   const [matchedRequiresAuth, setMatchedRequiresAuth] = useState(false);
@@ -83,6 +91,7 @@ export default function ListingsClient() {
     const syncViewModeForUserId = (id: string | null) => {
       const prev = prevResolvedUserIdRef.current;
       if (prev === undefined) {
+        setPage(1);
         setViewMode(id ? "matched" : "all");
         prevResolvedUserIdRef.current = id;
         return;
@@ -91,8 +100,10 @@ export default function ListingsClient() {
       const has = id !== null;
       prevResolvedUserIdRef.current = id;
       if (had && !has) {
+        setPage(1);
         setViewMode("all");
       } else if (!had && has) {
+        setPage(1);
         setViewMode("matched");
       }
     };
@@ -135,6 +146,10 @@ export default function ListingsClient() {
       }
     }, 5000);
 
+    setPage(1);
+    setHasMore(false);
+    matchedFullCacheRef.current = null;
+
     async function fetchData() {
       if (!isActive()) {
         return;
@@ -146,6 +161,7 @@ export default function ListingsClient() {
         setMatchedRows([]);
         setUserMatchHabits(null);
         setHabitsSurveyIncomplete(false);
+        setHasMore(false);
         if (isActive()) {
           setIsLoadingListings(false);
         }
@@ -157,11 +173,12 @@ export default function ListingsClient() {
 
       try {
         if (viewMode === "all") {
+          matchedFullCacheRef.current = null;
           const { data: propertyRows, error } = await supabase
             .from("properties")
             .select("*")
             .order("created_at", { ascending: false })
-            .limit(50);
+            .range(0, LIMIT - 1);
 
           if (!isActive()) {
             return;
@@ -171,12 +188,14 @@ export default function ListingsClient() {
             throw error;
           }
 
-          const next: SmartMatchedPropertyRow[] = (propertyRows ?? []).map((row) => ({
+          const rows = propertyRows ?? [];
+          const next: SmartMatchedPropertyRow[] = rows.map((row) => ({
             property: mapRowToProperty(row as Record<string, unknown>),
             similarity: 0,
           }));
           if (isActive()) {
             setMatchedRows(next);
+            setHasMore(rows.length === LIMIT);
           }
           return;
         }
@@ -239,7 +258,7 @@ export default function ListingsClient() {
         }
 
         const rawRows = Array.isArray(rpcData) ? rpcData : [];
-        const next: SmartMatchedPropertyRow[] = [];
+        const full: SmartMatchedPropertyRow[] = [];
 
         for (const entry of rawRows) {
           const rec = entry as { property?: unknown; similarity?: unknown };
@@ -247,11 +266,13 @@ export default function ListingsClient() {
           const property = mapRowToProperty(rec.property as Record<string, unknown>);
           const sim = Number(rec.similarity);
           const similarity = Number.isFinite(sim) ? Math.round(sim) : 0;
-          next.push({ property, similarity });
+          full.push({ property, similarity });
         }
 
         if (isActive()) {
-          setMatchedRows(next);
+          matchedFullCacheRef.current = full;
+          setMatchedRows(full.slice(0, LIMIT));
+          setHasMore(full.length > LIMIT);
         }
       } catch (error) {
         console.error("Fetch API Error:", error);
@@ -267,6 +288,8 @@ export default function ListingsClient() {
                 : "載入租盤失敗，請稍後再試";
           toast.error(message);
           setMatchedRows([]);
+          setHasMore(false);
+          matchedFullCacheRef.current = null;
         }
       } finally {
         window.clearTimeout(fallbackTimer);
@@ -280,9 +303,69 @@ export default function ListingsClient() {
 
     return () => {
       listingsFetchRequestIdRef.current += 1;
+      loadMoreRequestIdRef.current += 1;
       window.clearTimeout(fallbackTimer);
     };
   }, [viewMode, supabase, authReady, sessionUser]);
+
+  async function handleLoadMore() {
+    if (!hasMore || isLoadingMore || isLoadingListings) return;
+
+    if (viewMode === "matched") {
+      const full = matchedFullCacheRef.current;
+      if (!full?.length) return;
+      setIsLoadingMore(true);
+      try {
+        let nextLen = 0;
+        setMatchedRows((prev) => {
+          nextLen = Math.min(prev.length + LIMIT, full.length);
+          return full.slice(0, nextLen);
+        });
+        setHasMore(full.length > nextLen);
+        setPage((p) => p + 1);
+      } finally {
+        setIsLoadingMore(false);
+      }
+      return;
+    }
+
+    const myLoadMoreId = ++loadMoreRequestIdRef.current;
+    setIsLoadingMore(true);
+    try {
+      const from = page * LIMIT;
+      const to = from + LIMIT - 1;
+      const { data: propertyRows, error } = await supabase
+        .from("properties")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .range(from, to);
+
+      if (myLoadMoreId !== loadMoreRequestIdRef.current) {
+        return;
+      }
+
+      if (error) {
+        throw error;
+      }
+
+      const batch = propertyRows ?? [];
+      const mapped: SmartMatchedPropertyRow[] = batch.map((row) => ({
+        property: mapRowToProperty(row as Record<string, unknown>),
+        similarity: 0,
+      }));
+
+      setMatchedRows((prev) => [...prev, ...mapped]);
+      setPage((p) => p + 1);
+      setHasMore(batch.length === LIMIT);
+    } catch (error) {
+      console.error("[ListingsClient] loadMore", error);
+      toast.error("載入更多失敗，請稍後再試。");
+    } finally {
+      if (myLoadMoreId === loadMoreRequestIdRef.current) {
+        setIsLoadingMore(false);
+      }
+    }
+  }
 
   function handleToggleSortByMatch() {
     setSortByMatch((prev) => !prev);
@@ -297,13 +380,19 @@ export default function ListingsClient() {
   const showSimilarityBadge = viewMode === "matched";
   const sortByMatchEffective = showSimilarityBadge && sortByMatch;
 
+  const showPaginationFooter =
+    matchedRows.length > 0 && (hasMore || page > 1 || matchedRows.length >= LIMIT);
+
   return (
     <>
       <FilterBar
         filters={filters}
         onChange={setFilters}
         viewMode={viewMode}
-        onViewModeChange={setViewMode}
+        onViewModeChange={(mode: ListingsViewMode) => {
+          setPage(1);
+          setViewMode(mode);
+        }}
         listingsLoading={isLoadingListings}
         sortByMatch={sortByMatch}
         onToggleSortByMatch={handleToggleSortByMatch}
@@ -346,12 +435,38 @@ export default function ListingsClient() {
             </Button>
           </div>
         ) : (
-          <ListingGrid
-            rows={filteredRows}
-            totalBeforeFilters={matchedRows.length}
-            sortByMatch={sortByMatchEffective}
-            showSimilarityBadge={showSimilarityBadge}
-          />
+          <>
+            <ListingGrid
+              rows={filteredRows}
+              totalBeforeFilters={matchedRows.length}
+              sortByMatch={sortByMatchEffective}
+              showSimilarityBadge={showSimilarityBadge}
+            />
+            {showPaginationFooter ? (
+              <div className="mt-10 flex flex-col items-center justify-center gap-2 pb-6">
+                {hasMore ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={isLoadingMore}
+                    onClick={() => void handleLoadMore()}
+                    className="min-w-[200px] rounded-full border-zinc-300 bg-white px-6 py-2.5 text-base font-semibold text-[#0f2540] shadow-sm transition-colors hover:bg-zinc-50 disabled:opacity-60"
+                  >
+                    {isLoadingMore ? (
+                      <span className="inline-flex items-center gap-2">
+                        <Loader2 className="h-5 w-5 animate-spin" aria-hidden />
+                        載入中…
+                      </span>
+                    ) : (
+                      "👇 載入更多"
+                    )}
+                  </Button>
+                ) : (
+                  <p className="text-sm font-medium text-zinc-500">已經到底啦～</p>
+                )}
+              </div>
+            ) : null}
+          </>
         )}
       </main>
     </>
