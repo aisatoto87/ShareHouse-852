@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, type ChangeEvent } from "react";
+import { useCallback, useEffect, useMemo, useState, type ChangeEvent } from "react";
 import Image from "next/image";
 import { BadgeCheck, Loader2, Save, UserRound } from "lucide-react";
 import Link from "next/link";
@@ -55,7 +55,10 @@ type WaitingListApplication = {
   id: string;
   status: string;
   created_at: string;
+  property_id: string;
   property: Property | null;
+  /** 同租盤、同為 waiting 且早於本人 created_at 的人數；僅 status 為 waiting 時有意義 */
+  aheadCount?: number | null;
 };
 
 function parseEmbeddedProperty(raw: unknown): Record<string, unknown> | null {
@@ -78,18 +81,46 @@ function mapApplicationsFromSupabase(rows: unknown[] | null): WaitingListApplica
     const created_at = typeof r.created_at === "string" ? r.created_at : "";
     const propRow = parseEmbeddedProperty(r.property);
     const property = propRow ? mapRowToProperty(propRow) : null;
-    return { id, status, created_at, property };
+    const property_id =
+      typeof r.property_id === "string" && r.property_id.trim() !== ""
+        ? r.property_id.trim()
+        : property?.id ?? "";
+    return { id, status, created_at, property_id, property };
   });
 }
 
-function queueStatusBadge(status: string): { className: string; label: string } {
-  switch (status) {
-    case "waiting":
+function queueStatusBadge(row: WaitingListApplication): { className: string; label: string } {
+  switch (row.status) {
+    case "waiting": {
+      const base =
+        "max-w-full whitespace-normal rounded-lg border px-3 py-1.5 text-left font-medium shadow-sm";
+      const c = row.aheadCount;
+      if (c === null || c === undefined) {
+        return {
+          className: cn(
+            base,
+            "border-blue-200/70 bg-gradient-to-r from-slate-100 to-blue-50/90 text-slate-800"
+          ),
+          label: "🕒 排隊配對中 (計算中…)",
+        };
+      }
+      if (c === 0) {
+        return {
+          className: cn(
+            base,
+            "border-amber-200/80 bg-gradient-to-r from-amber-50 via-yellow-50 to-amber-100/90 text-amber-950"
+          ),
+          label: "👑 優先排隊中 (您排在第 1 位！)",
+        };
+      }
       return {
-        className:
-          "max-w-full whitespace-normal rounded-lg border border-blue-200/70 bg-gradient-to-r from-slate-100 to-blue-50/90 px-3 py-1.5 text-left font-medium text-slate-800 shadow-sm",
-        label: "🕒 排隊配對中 (系統正為您尋找神仙室友)",
+        className: cn(
+          base,
+          "border-blue-200/70 bg-gradient-to-r from-slate-100 to-blue-50/90 text-slate-800"
+        ),
+        label: `🕒 排隊配對中 (前方還有 ${c} 人)`,
       };
+    }
     case "matching":
       return {
         className:
@@ -112,7 +143,7 @@ function queueStatusBadge(status: string): { className: string; label: string } 
       return {
         className:
           "max-w-full whitespace-normal rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-1.5 text-left font-medium text-zinc-700 shadow-sm",
-        label: status,
+        label: row.status,
       };
   }
 }
@@ -316,22 +347,15 @@ export default function DashboardPage() {
     if (userRole === "tenant" && activeTab === "properties") setActiveTab("personal");
   }, [userRole, activeTab]);
 
-  useEffect(() => {
-    if (activeTab !== "waitingList" || !userId) return;
-
-    let cancelled = false;
-
-    async function fetchWaitingList() {
-      setWaitingListLoading(true);
+  const loadWaitingList = useCallback(async () => {
+    if (!userId) return;
+    setWaitingListLoading(true);
+    try {
       const { data, error } = await supabase
         .from("property_applications")
         .select("*, property:properties(*)")
         .eq("user_id", userId)
         .order("created_at", { ascending: false });
-
-      if (cancelled) return;
-
-      setWaitingListLoading(false);
 
       if (error) {
         console.error("[dashboard] waiting list", error);
@@ -340,15 +364,49 @@ export default function DashboardPage() {
         return;
       }
 
-      setWaitingListRows(mapApplicationsFromSupabase((data ?? []) as unknown[]));
+      const baseRows = mapApplicationsFromSupabase((data ?? []) as unknown[]);
+
+      const waitingForCount = baseRows.filter(
+        (r) => r.status === "waiting" && r.property_id && r.created_at
+      );
+
+      const countPairs = await Promise.all(
+        waitingForCount.map(async (row) => {
+          const { count, error: countError } = await supabase
+            .from("property_applications")
+            .select("*", { count: "exact", head: true })
+            .eq("property_id", row.property_id)
+            .eq("status", "waiting")
+            .lt("created_at", row.created_at);
+
+          if (countError) {
+            console.error("[dashboard] waiting list ahead count", countError);
+            return { id: row.id, aheadCount: null as number | null };
+          }
+          return { id: row.id, aheadCount: count ?? 0 };
+        })
+      );
+
+      const aheadMap = new Map(countPairs.map((x) => [x.id, x.aheadCount]));
+      const merged = baseRows.map((row) => {
+        if (row.status !== "waiting") return row;
+        if (!row.property_id || !row.created_at) {
+          return { ...row, aheadCount: null };
+        }
+        const v = aheadMap.get(row.id);
+        return { ...row, aheadCount: v !== undefined ? v : null };
+      });
+
+      setWaitingListRows(merged);
+    } finally {
+      setWaitingListLoading(false);
     }
+  }, [userId, supabase]);
 
-    void fetchWaitingList();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [activeTab, userId, supabase]);
+  useEffect(() => {
+    if (activeTab !== "waitingList" || !userId) return;
+    void loadWaitingList();
+  }, [activeTab, userId, loadWaitingList]);
 
   const handleSave = async () => {
     if (!userId) return toast.error("請先登入再儲存設定。");
@@ -463,10 +521,8 @@ export default function DashboardPage() {
       return;
     }
 
-    setWaitingListRows((prev) =>
-      prev.map((row) => (row.id === applicationId ? { ...row, status: "cancelled" } : row))
-    );
     toast.success("已取消排隊。");
+    void loadWaitingList();
   };
 
   return (
@@ -890,7 +946,7 @@ export default function DashboardPage() {
                 ) : (
                   <ul className="space-y-4">
                     {waitingListRows.map((row) => {
-                      const badge = queueStatusBadge(row.status);
+                      const badge = queueStatusBadge(row);
                       const p = row.property;
                       const thumb =
                         p?.imageUrl && (p.imageUrl.startsWith("http://") || p.imageUrl.startsWith("https://"))
