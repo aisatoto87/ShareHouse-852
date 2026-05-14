@@ -212,10 +212,10 @@ export async function POST(request: Request) {
       const { data: groupRow, error: groupErr } = await admin
         .from("match_groups")
         .insert({ status: "pending_opt_in" })
-        .select("id")
+        .select("group_id")
         .single();
 
-      if (groupErr || !groupRow?.id) {
+        if (groupErr || !groupRow?.group_id) {
         console.error("[api/match] match_groups insert failed", groupErr);
         return NextResponse.json(
           { error: groupErr?.message ?? "建立配對群組失敗。" },
@@ -223,7 +223,7 @@ export async function POST(request: Request) {
         );
       }
 
-      const groupId = String(groupRow.id);
+      const groupId = String(groupRow.group_id);
       console.log("[api/match] created match_group", groupId);
 
       const { error: membersErr } = await admin.from("group_members").insert([
