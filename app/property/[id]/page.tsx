@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArrowLeft, MapPin, Maximize2, MessageCircle } from "lucide-react";
+import HousingIntentButton from "@/components/HousingIntentButton";
 import InquiryDialogButton from "@/components/InquiryDialogButton";
 import PropertyLandlordRatingCard from "@/components/PropertyLandlordRatingCard";
 import Navbar from "@/components/Navbar";
@@ -71,6 +72,27 @@ function buildWhatsAppUrl(phone: string, title: string): string {
   const digits = phone.replace(/\D/g, "").replace(/^852/, "");
   const msg = encodeURIComponent(`你好，我在 ShareHouse 852 看到你的租盤【${title}】，想了解更多詳情。`);
   return `https://wa.me/852${digits}?text=${msg}`;
+}
+
+function computeIntentDefaultBudget(property: {
+  price: number;
+  room_count?: number;
+  pricing_mode?: "average" | "custom";
+  room_prices?: Record<string, number>;
+}): number {
+  const rooms = Math.max(1, property.room_count ?? 1);
+  const rp = property.room_prices;
+  if (property.pricing_mode === "custom" && rp && typeof rp === "object") {
+    const vals = Object.values(rp).filter(
+      (v): v is number => typeof v === "number" && Number.isFinite(v) && v > 0,
+    );
+    if (vals.length > 0) {
+      const avgRoom = Math.round(vals.reduce((a, b) => a + b, 0) / vals.length);
+      return Math.ceil(avgRoom * 1.05);
+    }
+  }
+  const perRoom = Math.round(property.price / rooms);
+  return Math.ceil(perRoom * 1.05);
 }
 
 async function fetchProperty(id: string) {
@@ -209,6 +231,9 @@ export default async function PropertyDetailPage({ params }: PageProps) {
     (item) => Number.isFinite(item) && item >= 0,
   );
   const waUrl = buildWhatsAppUrl(property.contact_whatsapp, property.title);
+  const intentDefaultDistrict =
+    property.sub_district.trim() !== "" ? property.sub_district.trim() : property.district;
+  const intentDefaultBudget = computeIntentDefaultBudget(property);
 
   return (
     <div className="min-h-screen bg-zinc-50 pb-24 md:pb-8">
@@ -359,9 +384,14 @@ export default async function PropertyDetailPage({ params }: PageProps) {
                 <MessageCircle className="h-4 w-4" />
                 WhatsApp 聯絡業主
               </a>
+              <HousingIntentButton
+                defaultDistrict={intentDefaultDistrict}
+                defaultBudget={intentDefaultBudget}
+                className="mt-3 h-auto min-h-11 w-full whitespace-normal rounded-lg bg-[#0f2540] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#1a3a5c]"
+              />
               <InquiryDialogButton
                 propertyId={property.id}
-                className="mt-3 h-11 w-full rounded-lg bg-[#0f2540] px-4 text-sm font-semibold text-white hover:bg-[#1a3a5c]"
+                className="mt-3 h-11 w-full rounded-lg border border-zinc-200 bg-white text-sm font-semibold text-[#0f2540] shadow-sm hover:bg-zinc-50"
               />
               <ShareListingButton
                 title={property.title}
