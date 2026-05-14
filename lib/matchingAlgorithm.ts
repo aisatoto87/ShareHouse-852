@@ -105,3 +105,35 @@ export function calculateUnitMatch(newTenant: UserHabits, existingTenants: UserH
   const unitAverage = averageUserHabits(existingTenants);
   return calculateMatch(newTenant, unitAverage);
 }
+
+/**
+ * 🧠 SyncNest v3.0 核心匹配引擎：N 對 N 網狀校驗與一票否決 (徹底取代舊有 average 算法)
+ * @param newMember 嘗試加入的新成員 (UserHabits)
+ * @param existingMembers 群組內現有的成員名單 (UserHabits Array)
+ * @returns boolean (是否允許加入)
+ */
+export function canJoinGroup(newMember: UserHabits, existingMembers: UserHabits[]): boolean {
+  // 如果群組仲未有人，第一個人當然可以自動加入
+  if (existingMembers.length === 0) return true;
+
+  // N 對 N 網狀校驗迴圈：必須同群組內【每一個人】獨立單挑
+  for (const member of existingMembers) {
+    const matchResult = calculateMatch(newMember, member);
+
+    // 只要有任何一次單挑失敗（觸發紅線），即刻一票否決！
+    if (matchResult.status === "REJECTED_VETO") {
+      console.log(`[配對大腦] 🔴 一票否決！原因：${matchResult.reason}`);
+      return false; 
+    }
+    
+    // 只要有任何一次單挑相似度唔夠，都係一票否決！（這就是 v3.0 廢除 average 的關鍵）
+    if (matchResult.status === "REJECTED_THRESHOLD") {
+      console.log(`[配對大腦] 🟡 匹配失敗！與其中一位成員分數低於門檻。`);
+      return false;
+    }
+  }
+
+  // 如果順利打贏晒所有人無被否決，代表完美契合！
+  console.log(`[配對大腦] 🟢 完美契合！成功通過群組網狀校驗！`);
+  return true;
+}
