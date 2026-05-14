@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArrowLeft, MapPin, Maximize2, MessageCircle } from "lucide-react";
-import InquiryDialogButton from "@/components/InquiryDialogButton";
+import JoinWaitingListButton from "@/components/JoinWaitingListButton";
 import PropertyLandlordRatingCard from "@/components/PropertyLandlordRatingCard";
 import Navbar from "@/components/Navbar";
 import PropertyBentoGallery from "@/components/PropertyBentoGallery";
@@ -359,9 +359,9 @@ export default async function PropertyDetailPage({ params }: PageProps) {
                 <MessageCircle className="h-4 w-4" />
                 WhatsApp 聯絡業主
               </a>
-              <InquiryDialogButton
+              <JoinWaitingListButton
                 propertyId={property.id}
-                className="mt-3 h-11 w-full rounded-lg bg-[#0f2540] px-4 text-sm font-semibold text-white hover:bg-[#1a3a5c]"
+                className="mt-3 h-auto min-h-11 w-full whitespace-normal rounded-lg bg-[#0f2540] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#1a3a5c]"
               />
               <ShareListingButton
                 title={property.title}
