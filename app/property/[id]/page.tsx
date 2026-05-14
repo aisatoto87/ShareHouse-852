@@ -2,7 +2,6 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArrowLeft, MapPin, Maximize2, MessageCircle } from "lucide-react";
 import HousingIntentButton from "@/components/HousingIntentButton";
-import InquiryDialogButton from "@/components/InquiryDialogButton";
 import PropertyLandlordRatingCard from "@/components/PropertyLandlordRatingCard";
 import Navbar from "@/components/Navbar";
 import PropertyBentoGallery from "@/components/PropertyBentoGallery";
@@ -389,10 +388,7 @@ export default async function PropertyDetailPage({ params }: PageProps) {
                 defaultBudget={intentDefaultBudget}
                 className="mt-3 h-auto min-h-11 w-full whitespace-normal rounded-lg bg-[#0f2540] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#1a3a5c]"
               />
-              <InquiryDialogButton
-                propertyId={property.id}
-                className="mt-3 h-11 w-full rounded-lg border border-zinc-200 bg-white text-sm font-semibold text-[#0f2540] shadow-sm hover:bg-zinc-50"
-              />
+              
               <ShareListingButton
                 title={property.title}
                 className="mt-3 inline-flex h-10 w-full items-center justify-center gap-2 rounded-lg border border-zinc-200 bg-zinc-50 px-4 text-sm font-semibold text-zinc-700 hover:bg-zinc-100"
