@@ -2,7 +2,6 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArrowLeft, MapPin, Maximize2, MessageCircle } from "lucide-react";
 import HousingIntentButton from "@/components/HousingIntentButton";
-import InquiryDialogButton from "@/components/InquiryDialogButton";
 import PropertyLandlordRatingCard from "@/components/PropertyLandlordRatingCard";
 import Navbar from "@/components/Navbar";
 import PropertyBentoGallery from "@/components/PropertyBentoGallery";
