@@ -49,7 +49,8 @@ function clampHabitValue(value: unknown): number {
 }
 
 type HousingIntentRow = {
-  id: string;
+  /** v3.0 意向主鍵（housing_intents.intent_id；若 API 仍回傳 id 則於 map 內對齊） */
+  intent_id: string;
   status: string;
   target_district: string;
   max_budget: number;
@@ -60,7 +61,12 @@ function mapHousingIntentRows(rows: unknown[] | null): HousingIntentRow[] {
   if (!Array.isArray(rows)) return [];
   return rows.map((row) => {
     const r = row as Record<string, unknown>;
-    const id = typeof r.id === "string" ? r.id : String(r.id ?? "");
+    const intent_id =
+      typeof r.intent_id === "string" && r.intent_id.trim() !== ""
+        ? r.intent_id.trim()
+        : typeof r.id === "string" && r.id.trim() !== ""
+          ? r.id.trim()
+          : String(r.intent_id ?? r.id ?? "");
     const status =
       typeof r.status === "string" && r.status.trim() !== "" ? r.status.trim() : "waiting";
     const target_district =
@@ -73,7 +79,7 @@ function mapHousingIntentRows(rows: unknown[] | null): HousingIntentRow[] {
         ? rawBudget
         : Number(rawBudget) || 0;
     const created_at = typeof r.created_at === "string" ? r.created_at : "";
-    return { id, status, target_district, max_budget, created_at };
+    return { intent_id, status, target_district, max_budget, created_at };
   });
 }
 
@@ -142,7 +148,7 @@ export default function DashboardPage() {
   const [myRating, setMyRating] = useState<{ average: number; count: number }>({ average: 3, count: 0 });
   const [intentRows, setIntentRows] = useState<HousingIntentRow[]>([]);
   const [intentsLoading, setIntentsLoading] = useState(false);
-  const [deletingIntentId, setDeletingIntentId] = useState<string | null>(null);
+  const [cancellingId, setCancellingId] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -339,23 +345,32 @@ export default function DashboardPage() {
     void loadHousingIntents();
   }, [activeTab, userId, loadHousingIntents]);
 
-  const handleDeleteIntent = async (intentId: string) => {
-    if (!userId || deletingIntentId) return;
-    setDeletingIntentId(intentId);
-    const { error } = await supabase
-      .from("housing_intents")
-      .delete()
-      .eq("id", intentId)
-      .eq("user_id", userId);
-    setDeletingIntentId(null);
+  const handleCancelWaiting = async (intentId: string) => {
+    if (!userId || cancellingId) return;
+    setCancellingId(intentId);
+    try {
+      const { error } = await supabase
+        .from("housing_intents")
+        .delete()
+        .eq("intent_id", intentId)
+        .eq("user_id", userId);
 
-    if (error) {
-      toast.error(`移除失敗：${error.message}`);
-      return;
+      if (error) {
+        throw error;
+      }
+
+      await loadHousingIntents();
+      toast.success("已從意向池移除。");
+    } catch (error) {
+      console.error("[dashboard] handleCancelWaiting", error);
+      const message =
+        error instanceof Error ? error.message : typeof error === "object" && error && "message" in error
+          ? String((error as { message?: unknown }).message)
+          : "移除失敗，請稍後再試。";
+      toast.error(`移除失敗：${message}`);
+    } finally {
+      setCancellingId(null);
     }
-
-    setIntentRows((prev) => prev.filter((row) => row.id !== intentId));
-    toast.success("已從意向池移除。");
   };
 
   const handleSave = async () => {
@@ -874,7 +889,7 @@ export default function DashboardPage() {
                       const badge = intentStatusBadge(row.status);
                       const budgetLabel = new Intl.NumberFormat("zh-HK").format(row.max_budget);
                       return (
-                        <li key={row.id}>
+                        <li key={row.intent_id}>
                           <Card className="overflow-hidden border-zinc-200 shadow-sm transition-shadow hover:shadow-md">
                             <CardContent className="p-5">
                               <div className="flex flex-wrap items-start justify-between gap-3">
@@ -907,10 +922,10 @@ export default function DashboardPage() {
                                     variant="outline"
                                     size="sm"
                                     className="shrink-0 border-zinc-300 text-zinc-700 hover:bg-zinc-50"
-                                    disabled={deletingIntentId === row.id}
-                                    onClick={() => void handleDeleteIntent(row.id)}
+                                    disabled={cancellingId === row.intent_id}
+                                    onClick={() => void handleCancelWaiting(row.intent_id)}
                                   >
-                                    {deletingIntentId === row.id ? (
+                                    {cancellingId === row.intent_id ? (
                                       <>
                                         <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                                         處理中…
