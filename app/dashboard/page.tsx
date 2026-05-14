@@ -28,8 +28,10 @@ import {
   inferSalutationMode,
   inferZhSuffix,
 } from "@/lib/profile-display-name";
+import { mapRowToProperty } from "@/lib/property-mapper";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
+import type { Property } from "@/types/property";
 
 type HabitKey = "habit_cleanliness" | "habit_ac_temp" | "habit_guests" | "habit_noise";
 
@@ -448,6 +450,31 @@ export default function DashboardPage() {
     }
     setDisplayName(assembled);
     toast.success("個人資料已儲存。");
+  };
+
+  const handleCancelWaiting = async (applicationId: string) => {
+    if (!userId || cancellingId) return;
+    setCancellingId(applicationId);
+    const { data, error } = await supabase
+      .from("property_applications")
+      .update({ status: "cancelled" })
+      .eq("id", applicationId)
+      .eq("user_id", userId)
+      .eq("status", "waiting")
+      .select("id");
+    setCancellingId(null);
+
+    if (error) {
+      toast.error(`取消失敗：${error.message}`);
+      return;
+    }
+    if (!data?.length) {
+      toast.error("無法取消（可能狀態已變更），請重新整理頁面。");
+      return;
+    }
+
+    toast.success("已取消排隊。");
+    void loadWaitingList();
   };
 
   return (
