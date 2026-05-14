@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState, type ChangeEvent } from "react";
-import Image from "next/image";
 import { BadgeCheck, Loader2, Save, UserRound } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -51,87 +50,60 @@ function clampHabitValue(value: unknown): number {
   return Math.min(5, Math.max(1, Math.round(base)));
 }
 
-type WaitingListApplication = {
-  id: string;
+type HousingIntentRow = {
+  /** v3.0 意向主鍵（housing_intents.intent_id；若 API 仍回傳 id 則於 map 內對齊） */
+  intent_id: string;
   status: string;
+  target_district: string;
+  max_budget: number;
   created_at: string;
-  property_id: string;
-  property: Property | null;
-  /** 同租盤、同為 waiting 且早於本人 created_at 的人數；僅 status 為 waiting 時有意義 */
-  aheadCount?: number | null;
 };
 
-function parseEmbeddedProperty(raw: unknown): Record<string, unknown> | null {
-  if (raw == null) return null;
-  if (Array.isArray(raw)) {
-    const first = raw[0];
-    return first && typeof first === "object" ? (first as Record<string, unknown>) : null;
-  }
-  if (typeof raw === "object") return raw as Record<string, unknown>;
-  return null;
-}
-
-function mapApplicationsFromSupabase(rows: unknown[] | null): WaitingListApplication[] {
+function mapHousingIntentRows(rows: unknown[] | null): HousingIntentRow[] {
   if (!Array.isArray(rows)) return [];
   return rows.map((row) => {
     const r = row as Record<string, unknown>;
-    const id = typeof r.id === "string" ? r.id : String(r.id ?? "");
+    const intent_id =
+      typeof r.intent_id === "string" && r.intent_id.trim() !== ""
+        ? r.intent_id.trim()
+        : typeof r.id === "string" && r.id.trim() !== ""
+          ? r.id.trim()
+          : String(r.intent_id ?? r.id ?? "");
     const status =
       typeof r.status === "string" && r.status.trim() !== "" ? r.status.trim() : "waiting";
+    const target_district =
+      typeof r.target_district === "string" && r.target_district.trim() !== ""
+        ? r.target_district.trim()
+        : "—";
+    const rawBudget = r.max_budget;
+    const max_budget =
+      typeof rawBudget === "number" && Number.isFinite(rawBudget)
+        ? rawBudget
+        : Number(rawBudget) || 0;
     const created_at = typeof r.created_at === "string" ? r.created_at : "";
-    const propRow = parseEmbeddedProperty(r.property);
-    const property = propRow ? mapRowToProperty(propRow) : null;
-    const property_id =
-      typeof r.property_id === "string" && r.property_id.trim() !== ""
-        ? r.property_id.trim()
-        : property?.id ?? "";
-    return { id, status, created_at, property_id, property };
+    return { intent_id, status, target_district, max_budget, created_at };
   });
 }
 
-function queueStatusBadge(row: WaitingListApplication): { className: string; label: string } {
-  switch (row.status) {
-    case "waiting": {
-      const base =
-        "max-w-full whitespace-normal rounded-lg border px-3 py-1.5 text-left font-medium shadow-sm";
-      const c = row.aheadCount;
-      if (c === null || c === undefined) {
-        return {
-          className: cn(
-            base,
-            "border-blue-200/70 bg-gradient-to-r from-slate-100 to-blue-50/90 text-slate-800"
-          ),
-          label: "🕒 排隊配對中 (計算中…)",
-        };
-      }
-      if (c === 0) {
-        return {
-          className: cn(
-            base,
-            "border-amber-200/80 bg-gradient-to-r from-amber-50 via-yellow-50 to-amber-100/90 text-amber-950"
-          ),
-          label: "👑 優先排隊中 (您排在第 1 位！)",
-        };
-      }
+function intentStatusBadge(status: string): { className: string; label: string } {
+  switch (status) {
+    case "waiting":
       return {
-        className: cn(
-          base,
-          "border-blue-200/70 bg-gradient-to-r from-slate-100 to-blue-50/90 text-slate-800"
-        ),
-        label: `🕒 排隊配對中 (前方還有 ${c} 人)`,
+        className:
+          "max-w-full whitespace-normal rounded-lg border border-blue-200/70 bg-gradient-to-r from-slate-100 to-blue-50/90 px-3 py-1.5 text-left font-medium text-slate-800 shadow-sm",
+        label: "🕒 意向配對中 (系統正為您尋找同區室友)",
       };
-    }
     case "matching":
       return {
         className:
           "max-w-full whitespace-normal rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-left font-medium text-amber-900 shadow-sm",
-        label: "🔥 撮合中 (已找到潛在室友，等待雙方確認)",
+        label: "🔥 撮合中 (已初步鎖定室友)",
       };
     case "matched":
       return {
         className:
           "max-w-full whitespace-normal rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-left font-medium text-emerald-900 shadow-sm",
-        label: "✅ 配對成功 (恭喜！準備入谷)",
+        label: "✅ 配對成功",
       };
     case "cancelled":
       return {
@@ -143,7 +115,7 @@ function queueStatusBadge(row: WaitingListApplication): { className: string; lab
       return {
         className:
           "max-w-full whitespace-normal rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-1.5 text-left font-medium text-zinc-700 shadow-sm",
-        label: row.status,
+        label: status,
       };
   }
 }
@@ -160,9 +132,9 @@ export default function DashboardPage() {
   const [isSaving, setIsSaving] = useState(false);
   const [isSavingPersonal, setIsSavingPersonal] = useState(false);
   const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
-  const [activeTab, setActiveTab] = useState<
-    "personal" | "profile" | "waitingList" | "properties"
-  >("personal");
+  const [activeTab, setActiveTab] = useState<"personal" | "profile" | "intents" | "properties">(
+    "personal"
+  );
 
   const [email, setEmail] = useState("");
   const [lastNameZh, setLastNameZh] = useState("");
@@ -176,8 +148,8 @@ export default function DashboardPage() {
   const [zhHonorificSuffix, setZhHonorificSuffix] = useState<string>("先生");
   const [enEnglishTitle, setEnEnglishTitle] = useState<string>("Mr.");
   const [myRating, setMyRating] = useState<{ average: number; count: number }>({ average: 3, count: 0 });
-  const [waitingListRows, setWaitingListRows] = useState<WaitingListApplication[]>([]);
-  const [waitingListLoading, setWaitingListLoading] = useState(false);
+  const [intentRows, setIntentRows] = useState<HousingIntentRow[]>([]);
+  const [intentsLoading, setIntentsLoading] = useState(false);
   const [cancellingId, setCancellingId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -347,66 +319,61 @@ export default function DashboardPage() {
     if (userRole === "tenant" && activeTab === "properties") setActiveTab("personal");
   }, [userRole, activeTab]);
 
-  const loadWaitingList = useCallback(async () => {
+  const loadHousingIntents = useCallback(async () => {
     if (!userId) return;
-    setWaitingListLoading(true);
+    setIntentsLoading(true);
     try {
       const { data, error } = await supabase
-        .from("property_applications")
-        .select("*, property:properties(*)")
+        .from("housing_intents")
+        .select("*")
         .eq("user_id", userId)
         .order("created_at", { ascending: false });
 
       if (error) {
-        console.error("[dashboard] waiting list", error);
-        toast.error("讀取排隊名單失敗，請稍後再試。");
-        setWaitingListRows([]);
+        console.error("[dashboard] housing_intents", error);
+        toast.error("讀取租屋意向失敗，請稍後再試。");
+        setIntentRows([]);
         return;
       }
 
-      const baseRows = mapApplicationsFromSupabase((data ?? []) as unknown[]);
-
-      const waitingForCount = baseRows.filter(
-        (r) => r.status === "waiting" && r.property_id && r.created_at
-      );
-
-      const countPairs = await Promise.all(
-        waitingForCount.map(async (row) => {
-          const { count, error: countError } = await supabase
-            .from("property_applications")
-            .select("*", { count: "exact", head: true })
-            .eq("property_id", row.property_id)
-            .eq("status", "waiting")
-            .lt("created_at", row.created_at);
-
-          if (countError) {
-            console.error("[dashboard] waiting list ahead count", countError);
-            return { id: row.id, aheadCount: null as number | null };
-          }
-          return { id: row.id, aheadCount: count ?? 0 };
-        })
-      );
-
-      const aheadMap = new Map(countPairs.map((x) => [x.id, x.aheadCount]));
-      const merged = baseRows.map((row) => {
-        if (row.status !== "waiting") return row;
-        if (!row.property_id || !row.created_at) {
-          return { ...row, aheadCount: null };
-        }
-        const v = aheadMap.get(row.id);
-        return { ...row, aheadCount: v !== undefined ? v : null };
-      });
-
-      setWaitingListRows(merged);
+      setIntentRows(mapHousingIntentRows((data ?? []) as unknown[]));
     } finally {
-      setWaitingListLoading(false);
+      setIntentsLoading(false);
     }
   }, [userId, supabase]);
 
   useEffect(() => {
-    if (activeTab !== "waitingList" || !userId) return;
-    void loadWaitingList();
-  }, [activeTab, userId, loadWaitingList]);
+    if (activeTab !== "intents" || !userId) return;
+    void loadHousingIntents();
+  }, [activeTab, userId, loadHousingIntents]);
+
+  const handleCancelWaiting = async (intentId: string) => {
+    if (!userId || cancellingId) return;
+    setCancellingId(intentId);
+    try {
+      const { error } = await supabase
+        .from("housing_intents")
+        .delete()
+        .eq("intent_id", intentId)
+        .eq("user_id", userId);
+
+      if (error) {
+        throw error;
+      }
+
+      await loadHousingIntents();
+      toast.success("已從意向池移除。");
+    } catch (error) {
+      console.error("[dashboard] handleCancelWaiting", error);
+      const message =
+        error instanceof Error ? error.message : typeof error === "object" && error && "message" in error
+          ? String((error as { message?: unknown }).message)
+          : "移除失敗，請稍後再試。";
+      toast.error(`移除失敗：${message}`);
+    } finally {
+      setCancellingId(null);
+    }
+  };
 
   const handleSave = async () => {
     if (!userId) return toast.error("請先登入再儲存設定。");
@@ -500,31 +467,6 @@ export default function DashboardPage() {
     toast.success("個人資料已儲存。");
   };
 
-  const handleCancelWaiting = async (applicationId: string) => {
-    if (!userId || cancellingId) return;
-    setCancellingId(applicationId);
-    const { data, error } = await supabase
-      .from("property_applications")
-      .update({ status: "cancelled" })
-      .eq("id", applicationId)
-      .eq("user_id", userId)
-      .eq("status", "waiting")
-      .select("id");
-    setCancellingId(null);
-
-    if (error) {
-      toast.error(`取消失敗：${error.message}`);
-      return;
-    }
-    if (!data?.length) {
-      toast.error("無法取消（可能狀態已變更），請重新整理頁面。");
-      return;
-    }
-
-    toast.success("已取消排隊。");
-    void loadWaitingList();
-  };
-
   return (
     <div className="min-h-screen bg-zinc-50">
       <Navbar />
@@ -566,14 +508,14 @@ export default function DashboardPage() {
             </button>
             <button
               type="button"
-              onClick={() => setActiveTab("waitingList")}
+              onClick={() => setActiveTab("intents")}
               className={`border-b-2 px-1 pb-3 text-sm font-semibold transition-colors ${
-                activeTab === "waitingList"
+                activeTab === "intents"
                   ? "border-[#0f2540] text-[#0f2540]"
                   : "border-transparent text-zinc-500 hover:text-zinc-700"
               }`}
             >
-              ⏳ 我的排隊名單
+              🎯 我的租屋意向
             </button>
             {userRole !== "tenant" && (
               <button
@@ -919,22 +861,22 @@ export default function DashboardPage() {
                 </div>
               </div>
             </>
-          ) : activeTab === "waitingList" ? (
+          ) : activeTab === "intents" ? (
             <>
               <div className="flex flex-col space-y-1.5 p-6">
-                <h2 className="text-2xl font-semibold leading-none tracking-tight">⏳ 我的排隊名單</h2>
-                <p className="text-sm text-zinc-500">查看你正在排隊的租盤與配對進度。</p>
+                <h2 className="text-2xl font-semibold leading-none tracking-tight">🎯 我的租屋意向</h2>
+                <p className="text-sm text-zinc-500">查看你在意向池中的配對狀態與預算／區域設定。</p>
               </div>
               <div className="space-y-6 p-6 pt-0">
-                {!userId || waitingListLoading ? (
+                {!userId || intentsLoading ? (
                   <div className="flex items-center justify-center py-12 text-zinc-500">
                     <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-                    讀取排隊名單中…
+                    讀取意向資料中…
                   </div>
-                ) : waitingListRows.length === 0 ? (
+                ) : intentRows.length === 0 ? (
                   <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-zinc-200 bg-zinc-50/80 px-6 py-14 text-center">
                     <p className="max-w-md text-sm leading-relaxed text-zinc-600">
-                      您目前沒有正在排隊的租盤。快去「全部租盤」尋找心水好屋吧！
+                      你尚未加入租屋意向池。到租盤詳情頁點「✨ 加入心水排隊區」，填寫區域與預算即可開始配對。
                     </p>
                     <Link
                       href="/"
@@ -945,85 +887,56 @@ export default function DashboardPage() {
                   </div>
                 ) : (
                   <ul className="space-y-4">
-                    {waitingListRows.map((row) => {
-                      const badge = queueStatusBadge(row);
-                      const p = row.property;
-                      const thumb =
-                        p?.imageUrl && (p.imageUrl.startsWith("http://") || p.imageUrl.startsWith("https://"))
-                          ? p.imageUrl
-                          : "";
-                      const title = p?.title ?? "租盤資料不可用";
-                      const price = p != null ? new Intl.NumberFormat("zh-HK").format(p.price) : "—";
-
+                    {intentRows.map((row) => {
+                      const badge = intentStatusBadge(row.status);
+                      const budgetLabel = new Intl.NumberFormat("zh-HK").format(row.max_budget);
                       return (
-                        <li key={row.id}>
+                        <li key={row.intent_id}>
                           <Card className="overflow-hidden border-zinc-200 shadow-sm transition-shadow hover:shadow-md">
-                            <CardContent className="p-0">
-                              <div className="flex flex-col gap-4 p-4 sm:flex-row sm:items-stretch">
-                                <div className="relative mx-auto h-36 w-full shrink-0 overflow-hidden rounded-lg bg-zinc-100 sm:mx-0 sm:h-32 sm:w-44">
-                                  {thumb ? (
-                                    <Image
-                                      src={thumb}
-                                      alt={title}
-                                      fill
-                                      className="object-cover"
-                                      sizes="(max-width: 640px) 100vw, 11rem"
-                                      unoptimized
-                                    />
-                                  ) : (
-                                    <div className="flex h-full w-full items-center justify-center text-xs text-zinc-500">
-                                      暫無圖片
+                            <CardContent className="p-5">
+                              <div className="flex flex-wrap items-start justify-between gap-3">
+                                <div className="min-w-0 flex-1 space-y-3">
+                                  <Badge variant="secondary" className={cn(badge.className)}>
+                                    {badge.label}
+                                  </Badge>
+                                  <h3 className="text-lg font-semibold text-zinc-900">
+                                    🎯 尋找神仙室友與租盤
+                                  </h3>
+                                  <dl className="grid gap-2 text-sm text-zinc-600 sm:grid-cols-2">
+                                    <div>
+                                      <dt className="font-medium text-zinc-500">目標區域</dt>
+                                      <dd className="mt-0.5 text-base font-semibold text-zinc-900">
+                                        {row.target_district}
+                                      </dd>
                                     </div>
-                                  )}
-                                </div>
-                                <div className="flex min-w-0 flex-1 flex-col gap-3">
-                                  <div className="flex flex-wrap items-start gap-2">
-                                    <Badge variant="secondary" className={cn(badge.className)}>
-                                      {badge.label}
-                                    </Badge>
-                                  </div>
-                                  {p ? (
-                                    <Link
-                                      href={`/property/${p.id}`}
-                                      className="line-clamp-2 text-lg font-semibold text-zinc-900 hover:text-[#0f2540] hover:underline"
-                                    >
-                                      {title}
-                                    </Link>
-                                  ) : (
-                                    <p className="text-lg font-semibold text-zinc-500">{title}</p>
-                                  )}
-                                  <p className="text-base font-bold text-[#0f2540]">
-                                    {p ? (
-                                      <>
-                                        HK$ {price}
+                                    <div>
+                                      <dt className="font-medium text-zinc-500">最高預算</dt>
+                                      <dd className="mt-0.5 text-base font-semibold text-[#0f2540]">
+                                        HK$ {budgetLabel}
                                         <span className="text-sm font-normal text-zinc-500"> / 月</span>
+                                      </dd>
+                                    </div>
+                                  </dl>
+                                </div>
+                                {row.status === "waiting" ? (
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    className="shrink-0 border-zinc-300 text-zinc-700 hover:bg-zinc-50"
+                                    disabled={cancellingId === row.intent_id}
+                                    onClick={() => void handleCancelWaiting(row.intent_id)}
+                                  >
+                                    {cancellingId === row.intent_id ? (
+                                      <>
+                                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                        處理中…
                                       </>
                                     ) : (
-                                      <span className="text-sm font-normal text-zinc-500">—</span>
+                                      "取消意向"
                                     )}
-                                  </p>
-                                  <div className="mt-auto flex flex-wrap items-center gap-2 pt-1">
-                                    {row.status === "waiting" ? (
-                                      <Button
-                                        type="button"
-                                        variant="outline"
-                                        size="sm"
-                                        className="border-zinc-300 text-zinc-700 hover:bg-zinc-50"
-                                        disabled={cancellingId === row.id}
-                                        onClick={() => void handleCancelWaiting(row.id)}
-                                      >
-                                        {cancellingId === row.id ? (
-                                          <>
-                                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                                            處理中…
-                                          </>
-                                        ) : (
-                                          "取消排隊"
-                                        )}
-                                      </Button>
-                                    ) : null}
-                                  </div>
-                                </div>
+                                  </Button>
+                                ) : null}
                               </div>
                             </CardContent>
                           </Card>
