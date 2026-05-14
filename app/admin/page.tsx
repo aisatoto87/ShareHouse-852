@@ -1,89 +1,29 @@
 "use client";
 
-import { type FormEvent, type KeyboardEvent, useEffect, useMemo, useState } from "react";
-import { Loader2, Lock, PlusCircle, RefreshCw, ShieldAlert, Trash2, UploadCloud, X, Pencil } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { Loader2, Lock, PlusCircle, RefreshCw, ShieldAlert, Trash2, Pencil } from "lucide-react";
 import { toast } from "sonner";
-import HabitDefenseSliders from "@/components/HabitDefenseSliders";
 import Navbar from "@/components/Navbar";
-import { TagInputField } from "@/components/TagInputField";
 import PropertyCard from "@/components/PropertyCard";
+import SharedPropertyForm from "@/components/SharedPropertyForm";
+import { propertyRowToInitialData, roomPricesArrayToDbObject } from "@/lib/map-property-row-to-shared-form-initial";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { mapRowToProperty } from "@/lib/property-mapper";
 import type { Property } from "@/types/property";
+import type { SharedPropertyFormInitialData, SharedPropertyFormSubmitPayload } from "@/types/shared-property-form";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
-
 
 const ADMIN_PASSCODE = "852852";
 const ADMIN_UNLOCK_KEY = "sharehouse-admin-unlocked";
-const DEFAULT_TAG_OPTIONS = ["免佣金", "近地鐵", "女生合租", "男生合租", "有電梯", "全新裝修", "可養寵物", "包寬頻"] as const;
-const DEFAULT_AMENITY_OPTIONS = [
-  "冷氣",
-  "洗衣機",
-  "雪櫃",
-  "微波爐",
-  "獨立衛浴",
-  "包寬頻上網",
-  "會所設施",
-  "每週專人清潔",
-  "雙人床",
-  "單人床",
-  "大衣櫃",
-  "書枱",
-] as const;
-const DEFAULT_ROOMMATE_REQ_OPTIONS = [
-  "限女生",
-  "限男生",
-  "男女不限",
-  "不吸煙",
-  "無寵物",
-  "作息規律",
-  "有正當職業",
-  "大學生",
-  "少煮食",
-  "愛乾淨",
-] as const;
-const DISTRICT_OPTIONS = ["香港島", "九龍", "新界"] as const;
-const DISTRICT_SUBDISTRICTS: Record<(typeof DISTRICT_OPTIONS)[number], string[]> = {
-  香港島: ["中環", "灣仔", "銅鑼灣", "鰂魚涌", "薄扶林", "上環", "西營盤", "北角"],
-  九龍: ["旺角", "尖沙咀", "九龍城", "觀塘", "深水埗", "紅磡", "土瓜灣", "何文田"],
-  新界: ["大圍", "沙田", "屯門", "元朗", "將軍澳", "荃灣", "青衣", "天水圍"],
-};
-const SUBDISTRICT_OTHER_VALUE = "__OTHER__";
-const GALLERY_CATEGORIES = ["客廳", "睡房", "廚房", "浴室", "景觀", "會所", "其他"] as const;
 
-type FormState = {
-  title: string;
-  district: string;
-  sub_district: string;
-  price: string;
-  size_sqft: string;
-  description: string;
-  contact_whatsapp: string;
-  habit_cleanliness: number;
-  habit_ac_temp: number;
-  habit_guests: number;
-  habit_noise: number;
-};
-
-type GalleryUploadItem = {
-  id: string;
-  file: File;
-  previewUrl: string;
-  category: (typeof GALLERY_CATEGORIES)[number];
-};
-
-type StoredGalleryItem = {
-  raw: string;
-  category: string;
-  url: string;
-};
+const EDIT_NONE_VALUE = "__admin_edit_none__";
 
 type LandlordRow = {
   id: string;
@@ -98,56 +38,31 @@ type SortConfig = {
   direction: "asc" | "desc";
 };
 
-const initialForm: FormState = {
-  title: "",
-  district: "",
-  sub_district: "",
-  price: "",
-  size_sqft: "",
-  description: "",
-  contact_whatsapp: "",
-  habit_cleanliness: 3,
-  habit_ac_temp: 3,
-  habit_guests: 3,
-  habit_noise: 3,
-};
-
 export default function AdminPage() {
+  const router = useRouter();
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
   const [passcode, setPasscode] = useState("");
   const [unlocked, setUnlocked] = useState(false);
   const [authError, setAuthError] = useState("");
 
-  const [form, setForm] = useState<FormState>(initialForm);
   const [properties, setProperties] = useState<Property[]>([]);
   const [isLoadingList, setIsLoadingList] = useState(false);
-  const [isSubmitting, setIsSubmitting] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [filterRegion, setFilterRegion] = useState("all");
   const [filterRent, setFilterRent] = useState("all");
   const [filterArea, setFilterArea] = useState("all");
   const [searchLandlord, setSearchLandlord] = useState("");
 
-  const [selectedTags, setSelectedTags] = useState<string[]>([]);
-  const [tagQuery, setTagQuery] = useState("");
-  const [tagComboboxOpen, setTagComboboxOpen] = useState(false);
-  const [selectedAmenities, setSelectedAmenities] = useState<string[]>([]);
-  const [amenityQuery, setAmenityQuery] = useState("");
-  const [amenityComboboxOpen, setAmenityComboboxOpen] = useState(false);
-  const [selectedRoommateReqs, setSelectedRoommateReqs] = useState<string[]>([]);
-  const [roommateReqQuery, setRoommateReqQuery] = useState("");
-  const [roommateReqComboboxOpen, setRoommateReqComboboxOpen] = useState(false);
-  const [customSubDistrict, setCustomSubDistrict] = useState("");
-  const [roomCount, setRoomCount] = useState(1);
-  const [pricingMode, setPricingMode] = useState<"average" | "custom">("average");
-  const [roomPrices, setRoomPrices] = useState<Record<string, string>>({});
+  const [createSubmitting, setCreateSubmitting] = useState(false);
+  const [createFormKey, setCreateFormKey] = useState(0);
 
-  const [galleryItems, setGalleryItems] = useState<GalleryUploadItem[]>([]);
-  const [isUploadingGallery, setIsUploadingGallery] = useState(false);
-  const [selectedManagePropertyId, setSelectedManagePropertyId] = useState<string>("");
-  const [deletingGalleryEntry, setDeletingGalleryEntry] = useState<string | null>(null);
-  const [appendGalleryItems, setAppendGalleryItems] = useState<GalleryUploadItem[]>([]);
-  const [isAppendingGallery, setIsAppendingGallery] = useState(false);
+  const [editPropertyId, setEditPropertyId] = useState("");
+  const [editInitialData, setEditInitialData] = useState<SharedPropertyFormInitialData | null>(null);
+  const [editOwnerId, setEditOwnerId] = useState<string | null>(null);
+  const [editLoadingRow, setEditLoadingRow] = useState(false);
+  const [editSubmitting, setEditSubmitting] = useState(false);
+  const [editFormKey, setEditFormKey] = useState(0);
+
   const [pendingCount, setPendingCount] = useState(0);
   const [showLandlordModal, setShowLandlordModal] = useState(false);
   const [landlords, setLandlords] = useState<LandlordRow[]>([]);
@@ -159,17 +74,6 @@ export default function AdminPage() {
     const unlockedFlag = window.sessionStorage.getItem(ADMIN_UNLOCK_KEY);
     if (unlockedFlag === "true") setUnlocked(true);
   }, []);
-
-  useEffect(() => {
-    setRoomPrices((prev) => {
-      const next: Record<string, string> = {};
-      for (let i = 1; i <= roomCount; i += 1) {
-        const key = `room${i}`;
-        next[key] = prev[key] ?? "";
-      }
-      return next;
-    });
-  }, [roomCount]);
 
   useEffect(() => {
     if (!unlocked) return;
@@ -197,25 +101,41 @@ export default function AdminPage() {
     };
   }, [supabase, unlocked]);
 
-  useEffect(
-    () => () => {
-      for (const item of galleryItems) URL.revokeObjectURL(item.previewUrl);
-      for (const item of appendGalleryItems) URL.revokeObjectURL(item.previewUrl);
-    },
-    [galleryItems, appendGalleryItems]
-  );
-
-  useEffect(() => {
-    setAppendGalleryItems((prev) => {
-      for (const item of prev) URL.revokeObjectURL(item.previewUrl);
-      return [];
-    });
-  }, [selectedManagePropertyId]);
-
   useEffect(() => {
     if (!showLandlordModal) return;
     void fetchLandlords();
   }, [showLandlordModal]);
+
+  useEffect(() => {
+    if (!editPropertyId) {
+      setEditInitialData(null);
+      setEditOwnerId(null);
+      return;
+    }
+    let cancelled = false;
+
+    async function loadRow() {
+      setEditLoadingRow(true);
+      const { data, error } = await supabase.from("properties").select("*").eq("id", editPropertyId).single();
+      if (cancelled) return;
+      setEditLoadingRow(false);
+      if (error || !data) {
+        toast.error(`讀取租盤失敗：${error?.message ?? "未知錯誤"}`);
+        setEditPropertyId("");
+        setEditInitialData(null);
+        setEditOwnerId(null);
+        return;
+      }
+      const row = data as Record<string, unknown>;
+      setEditOwnerId(typeof row.owner_id === "string" ? row.owner_id : null);
+      setEditInitialData(propertyRowToInitialData(row));
+    }
+
+    void loadRow();
+    return () => {
+      cancelled = true;
+    };
+  }, [editPropertyId, supabase]);
 
   async function fetchProperties() {
     setIsLoadingList(true);
@@ -240,9 +160,7 @@ export default function AdminPage() {
       return;
     }
 
-    const { data: reviewRows, error: reviewError } = await supabase
-      .from("reviews")
-      .select("reviewee_id, rating");
+    const { data: reviewRows, error: reviewError } = await supabase.from("reviews").select("reviewee_id, rating");
     setIsLoadingLandlords(false);
     if (reviewError) {
       toast.error(`讀取評分資料失敗：${reviewError.message}`);
@@ -276,10 +194,7 @@ export default function AdminPage() {
 
   async function toggleLandlordVerified(landlordId: string, nextValue: boolean) {
     setUpdatingVerificationId(landlordId);
-    const { error } = await supabase
-      .from("profiles")
-      .update({ is_verified: nextValue })
-      .eq("id", landlordId);
+    const { error } = await supabase.from("profiles").update({ is_verified: nextValue }).eq("id", landlordId);
     setUpdatingVerificationId(null);
     if (error) {
       toast.error(`更新認證狀態失敗：${error.message}`);
@@ -310,136 +225,232 @@ export default function AdminPage() {
     toast.success("已解鎖後台");
   }
 
-  function updateForm<K extends keyof FormState>(key: K, value: FormState[K]) {
-    setForm((prev) => ({ ...prev, [key]: value }));
-  }
-
-  function handleNonNegativeNumberKeyDown(e: KeyboardEvent<HTMLInputElement>) {
-    if (e.key === "-" || e.key.toLowerCase() === "e") {
-      e.preventDefault();
+  async function handleAdminCreateSubmit(data: SharedPropertyFormSubmitPayload) {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user?.id) {
+      toast.error("請先登入");
+      return;
     }
-  }
 
-  const normalizedSelectedTags = useMemo(() => selectedTags.map((x) => x.trim().toLowerCase()), [selectedTags]);
-  const filteredTagOptions = useMemo(() => DEFAULT_TAG_OPTIONS.filter((x) => x.toLowerCase().includes(tagQuery.trim().toLowerCase())), [tagQuery]);
-  const canAddCustomTag = tagQuery.trim().length > 0 && !normalizedSelectedTags.includes(tagQuery.trim().toLowerCase());
-  const normalizedSelectedAmenities = useMemo(() => selectedAmenities.map((x) => x.trim().toLowerCase()), [selectedAmenities]);
-  const filteredAmenityOptions = useMemo(() => DEFAULT_AMENITY_OPTIONS.filter((x) => x.toLowerCase().includes(amenityQuery.trim().toLowerCase())), [amenityQuery]);
-  const canAddCustomAmenity = amenityQuery.trim().length > 0 && !normalizedSelectedAmenities.includes(amenityQuery.trim().toLowerCase());
-  const normalizedSelectedRoommateReqs = useMemo(() => selectedRoommateReqs.map((x) => x.trim().toLowerCase()), [selectedRoommateReqs]);
-  const filteredRoommateReqOptions = useMemo(
-    () => DEFAULT_ROOMMATE_REQ_OPTIONS.filter((x) => x.toLowerCase().includes(roommateReqQuery.trim().toLowerCase())),
-    [roommateReqQuery]
-  );
-  const canAddCustomRoommateReq = roommateReqQuery.trim().length > 0 && !normalizedSelectedRoommateReqs.includes(roommateReqQuery.trim().toLowerCase());
-  const districtSubDistricts = form.district ? DISTRICT_SUBDISTRICTS[form.district as (typeof DISTRICT_OPTIONS)[number]] ?? [] : [];
-  const usingOtherSubDistrict = form.sub_district === SUBDISTRICT_OTHER_VALUE;
-  const finalSubDistrict = usingOtherSubDistrict ? customSubDistrict.trim() : form.sub_district.trim();
-  const totalRent = Number(form.price);
-  const normalizedTotalRent = Number.isFinite(totalRent) && totalRent >= 0 ? totalRent : 0;
-  const customPricing = useMemo(() => {
-    const computedRoomPrices: Record<string, number> = {};
-    const lastRoomIndex = roomCount;
-    const lastRoomKey = `room${lastRoomIndex}`;
-    let otherRoomsSum = 0;
-
-    for (let i = 1; i <= roomCount; i += 1) {
-      const key = `room${i}`;
-      if (roomCount === 1 || i === lastRoomIndex) continue;
-      const parsed = Number(roomPrices[key] ?? "");
-      if (!Number.isFinite(parsed) || parsed < 0) {
-        continue;
+    setCreateSubmitting(true);
+    try {
+      let imageUrl: string;
+      if (data.mainImage.kind === "upload") {
+        const file = data.mainImage.file;
+        const extension = file.name.includes(".") ? file.name.split(".").pop()?.toLowerCase() ?? "jpg" : "jpg";
+        const filePath = `properties/admin/main/${Date.now()}-${Math.random().toString(36).slice(2)}.${extension}`;
+        const { error: uploadError } = await supabase
+          .storage
+          .from("property-images")
+          .upload(filePath, file, { upsert: false, contentType: file.type });
+        if (uploadError) {
+          toast.error(`主圖上傳失敗：${uploadError.message}`);
+          return;
+        }
+        const {
+          data: { publicUrl },
+        } = supabase.storage.from("property-images").getPublicUrl(filePath);
+        imageUrl = publicUrl;
+      } else {
+        imageUrl = data.mainImage.publicUrl;
       }
-      computedRoomPrices[key] = parsed;
-      otherRoomsSum += parsed;
+
+      const galleryStrings = await Promise.all(
+        data.gallery.map(async (row) => {
+          if (row.kind === "remote") {
+            return `${row.category}::${row.publicUrl}`;
+          }
+          const file = row.file;
+          const ext = file.name.includes(".") ? file.name.split(".").pop()?.toLowerCase() ?? "jpg" : "jpg";
+          const itemPath = `properties/admin/gallery/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+          const { error } = await supabase
+            .storage
+            .from("property-images")
+            .upload(itemPath, file, { upsert: false, contentType: file.type });
+          if (error) throw new Error(error.message);
+          const {
+            data: { publicUrl: itemPublicUrl },
+          } = supabase.storage.from("property-images").getPublicUrl(itemPath);
+          return `${row.category}::${itemPublicUrl}`;
+        })
+      ).catch((err: unknown) => {
+        toast.error(`相簿上傳失敗：${err instanceof Error ? err.message : "未知錯誤"}`);
+        return null;
+      });
+
+      if (!galleryStrings) return;
+
+      const room_prices =
+        data.pricing_mode === "custom" && data.room_prices.length > 0
+          ? roomPricesArrayToDbObject(data.room_prices)
+          : {};
+
+      const payload = {
+        title: data.title,
+        district: data.district,
+        sub_district: data.sub_district,
+        price: data.price,
+        size_sqft: data.size_sqft,
+        imageUrl,
+        description: data.description,
+        contact_whatsapp: data.contact_whatsapp,
+        habit_cleanliness: data.habit_cleanliness,
+        habit_ac_temp: data.habit_ac_temp,
+        habit_guests: data.habit_guests,
+        habit_noise: data.habit_noise,
+        amenities: data.amenities,
+        roommates_req: data.roommates_req,
+        tags: data.tags,
+        gallery: galleryStrings,
+        room_count: data.room_count,
+        pricing_mode: data.pricing_mode,
+        room_prices,
+      };
+
+      const { error } = await supabase.from("properties").insert(payload);
+      if (error) {
+        toast.error(`新增失敗：${error.message}`);
+        return;
+      }
+
+      toast.success("新增租盤成功");
+      setCreateFormKey((k) => k + 1);
+      await fetchProperties();
+    } finally {
+      setCreateSubmitting(false);
+    }
+  }
+
+  async function handleAdminEditSubmit(data: SharedPropertyFormSubmitPayload) {
+    if (!editPropertyId || !editOwnerId) return;
+
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser();
+    if (authError || !user?.id) {
+      toast.error("請先登入");
+      router.replace("/login");
+      return;
     }
 
-    const remaining = roomCount === 1 ? normalizedTotalRent : normalizedTotalRent - otherRoomsSum;
-    computedRoomPrices[lastRoomKey] = remaining;
+    setEditSubmitting(true);
+    try {
+      let imageUrl: string;
+      if (data.mainImage.kind === "upload") {
+        const file = data.mainImage.file;
+        const extension = file.name.includes(".") ? file.name.split(".").pop()?.toLowerCase() ?? "jpg" : "jpg";
+        const filePath = `properties/${editOwnerId}/${Date.now()}-${Math.random().toString(36).slice(2)}.${extension}`;
+        const { error: uploadError } = await supabase
+          .storage
+          .from("property-images")
+          .upload(filePath, file, { upsert: false, contentType: file.type });
+        if (uploadError) {
+          toast.error(`主圖上傳失敗：${uploadError.message}`);
+          return;
+        }
+        const {
+          data: { publicUrl },
+        } = supabase.storage.from("property-images").getPublicUrl(filePath);
+        imageUrl = publicUrl;
+      } else {
+        imageUrl = data.mainImage.publicUrl;
+      }
 
-    return {
-      computedRoomPrices,
-      otherRoomsSum,
-      remaining,
-      isOtherSumExceeded: otherRoomsSum > normalizedTotalRent,
-    };
-  }, [normalizedTotalRent, roomCount, roomPrices]);
+      const galleryStrings = await Promise.all(
+        data.gallery.map(async (row) => {
+          if (row.kind === "remote") {
+            return `${row.category}::${row.publicUrl}`;
+          }
+          const file = row.file;
+          const ext = file.name.includes(".") ? file.name.split(".").pop()?.toLowerCase() ?? "jpg" : "jpg";
+          const itemPath = `properties/${editPropertyId}/gallery/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+          const { error } = await supabase
+            .storage
+            .from("property-images")
+            .upload(itemPath, file, { upsert: false, contentType: file.type });
+          if (error) throw new Error(error.message);
+          const {
+            data: { publicUrl: itemPublicUrl },
+          } = supabase.storage.from("property-images").getPublicUrl(itemPath);
+          return `${row.category}::${itemPublicUrl}`;
+        })
+      ).catch((err: unknown) => {
+        toast.error(`相簿圖片上傳失敗：${err instanceof Error ? err.message : "未知錯誤"}`);
+        return null;
+      });
 
-  const toggleItem = (setter: React.Dispatch<React.SetStateAction<string[]>>) => (item: string) =>
-    setter((prev) => (prev.includes(item) ? prev.filter((x) => x !== item) : [...prev, item]));
-  const removeItem = (setter: React.Dispatch<React.SetStateAction<string[]>>) => (item: string) =>
-    setter((prev) => prev.filter((x) => x !== item));
-  const addCustom = (
-    query: string,
-    setQuery: React.Dispatch<React.SetStateAction<string>>,
-    selected: string[],
-    setter: React.Dispatch<React.SetStateAction<string[]>>
-  ) => {
-    const next = query.trim();
-    if (!next) return;
-    if (selected.some((x) => x.toLowerCase() === next.toLowerCase())) return setQuery("");
-    setter((prev) => [...prev, next]);
-    setQuery("");
-  };
+      if (!galleryStrings) return;
 
-  const toggleTag = toggleItem(setSelectedTags);
-  const removeTag = removeItem(setSelectedTags);
-  const toggleAmenity = toggleItem(setSelectedAmenities);
-  const removeAmenity = removeItem(setSelectedAmenities);
-  const toggleRoommateReq = toggleItem(setSelectedRoommateReqs);
-  const removeRoommateReq = removeItem(setSelectedRoommateReqs);
-  const addCustomTag = () => addCustom(tagQuery, setTagQuery, selectedTags, setSelectedTags);
-  const addCustomAmenity = () => addCustom(amenityQuery, setAmenityQuery, selectedAmenities, setSelectedAmenities);
-  const addCustomRoommateReq = () => addCustom(roommateReqQuery, setRoommateReqQuery, selectedRoommateReqs, setSelectedRoommateReqs);
+      const room_prices =
+        data.pricing_mode === "custom" && data.room_prices.length > 0
+          ? roomPricesArrayToDbObject(data.room_prices)
+          : {};
 
-  function appendGalleryFiles(files: FileList | null) {
-    if (!files?.length) return;
-    const nextItems: GalleryUploadItem[] = Array.from(files).map((file) => ({
-      id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-      file,
-      previewUrl: URL.createObjectURL(file),
-      category: "其他",
-    }));
-    setGalleryItems((prev) => [...prev, ...nextItems]);
+      const payload = {
+        title: data.title,
+        district: data.district,
+        sub_district: data.sub_district,
+        price: data.price,
+        size_sqft: data.size_sqft,
+        imageUrl,
+        description: data.description,
+        contact_whatsapp: data.contact_whatsapp,
+        habit_cleanliness: data.habit_cleanliness,
+        habit_ac_temp: data.habit_ac_temp,
+        habit_guests: data.habit_guests,
+        habit_noise: data.habit_noise,
+        amenities: data.amenities,
+        roommates_req: data.roommates_req,
+        tags: data.tags,
+        gallery: galleryStrings,
+        room_count: data.room_count,
+        pricing_mode: data.pricing_mode,
+        room_prices,
+      };
+
+      const { error } = await supabase.from("properties").update(payload).eq("id", editPropertyId);
+      if (error) {
+        toast.error(`更新失敗：${error.message}`);
+        return;
+      }
+
+      toast.success("Admin 更新成功！");
+      setEditPropertyId("");
+      setEditInitialData(null);
+      setEditOwnerId(null);
+      setEditFormKey((k) => k + 1);
+      await fetchProperties();
+      router.push("/admin");
+    } finally {
+      setEditSubmitting(false);
+    }
   }
-  function updateGalleryCategory(id: string, category: (typeof GALLERY_CATEGORIES)[number]) {
-    setGalleryItems((prev) => prev.map((item) => (item.id === id ? { ...item, category } : item)));
-  }
-  function removeGalleryItem(id: string) {
-    setGalleryItems((prev) => {
-      const target = prev.find((item) => item.id === id);
-      if (target) URL.revokeObjectURL(target.previewUrl);
-      return prev.filter((item) => item.id !== id);
-    });
+
+  async function handleDelete(propertyId: string) {
+    const ok = window.confirm("確定要刪除這筆租盤嗎？此操作無法還原。");
+    if (!ok) return;
+    setDeletingId(propertyId);
+    const { data, error } = await supabase.from("properties").delete().eq("id", propertyId).select();
+    setDeletingId(null);
+    if (error) {
+      console.error("刪除失敗詳情:", error);
+      toast.error(`刪除失敗：${error.message}`);
+      return;
+    }
+    if (!data || data.length === 0) {
+      console.error("刪除失敗：權限不足或找不到該租盤 (被 RLS 擋下)");
+      toast.error("刪除失敗：權限不足，請確定你是該租盤擁有者或 Admin");
+      return;
+    }
+
+    setProperties((prev) => prev.filter((p) => p.id !== propertyId));
+    toast.success("已刪除租盤");
+    await fetchProperties();
   }
 
-  function appendManageGalleryFiles(files: FileList | null) {
-    if (!files?.length) return;
-    const nextItems: GalleryUploadItem[] = Array.from(files).map((file) => ({
-      id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-      file,
-      previewUrl: URL.createObjectURL(file),
-      category: "其他",
-    }));
-    setAppendGalleryItems((prev) => [...prev, ...nextItems]);
-  }
-
-  function updateManageGalleryCategory(id: string, category: (typeof GALLERY_CATEGORIES)[number]) {
-    setAppendGalleryItems((prev) => prev.map((item) => (item.id === id ? { ...item, category } : item)));
-  }
-
-  function removeManageGalleryItem(id: string) {
-    setAppendGalleryItems((prev) => {
-      const target = prev.find((item) => item.id === id);
-      if (target) URL.revokeObjectURL(target.previewUrl);
-      return prev.filter((item) => item.id !== id);
-    });
-  }
-
-  const selectedManagedProperty = useMemo(
-    () => properties.find((property) => property.id === selectedManagePropertyId) ?? null,
-    [properties, selectedManagePropertyId]
-  );
   const filteredProperties = useMemo(() => {
     return properties.filter((property) => {
       const matchRegion = filterRegion === "all" || filterRegion === "" || property.district === filterRegion;
@@ -465,6 +476,7 @@ export default function AdminPage() {
       return matchRegion && matchRent && matchArea && matchLandlord;
     });
   }, [filterArea, filterRegion, filterRent, properties, searchLandlord]);
+
   const sortedLandlords = useMemo(() => {
     const list = [...landlords];
     list.sort((a, b) => {
@@ -507,277 +519,6 @@ export default function AdminPage() {
     return { short: text, full: text };
   }
 
-  const existingGalleryItems: StoredGalleryItem[] = useMemo(() => {
-    if (!selectedManagedProperty?.gallery?.length) return [];
-    return selectedManagedProperty.gallery
-      .map((entry) => {
-        const [category, ...rest] = entry.split("::");
-        if (rest.length === 0) return { raw: entry, category: "其他", url: entry };
-        return { raw: entry, category: category || "其他", url: rest.join("::") };
-      })
-      .filter((item) => item.url.startsWith("http"));
-  }, [selectedManagedProperty]);
-
-  function extractStoragePathFromPublicUrl(url: string): string | null {
-    const marker = "/storage/v1/object/public/property-images/";
-    const index = url.indexOf(marker);
-    if (index === -1) return null;
-    return url.slice(index + marker.length);
-  }
-
-  async function handleCreateProperty(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    if (!form.title || !form.district || !finalSubDistrict || !form.price || !form.size_sqft || !form.description || !form.contact_whatsapp) {
-      return toast.error("請先填妥所有必填欄位。");
-    }
-    if (galleryItems.length === 0) return toast.error("請先在畫廊管理上傳至少一張圖片。");
-    const priceNum = Number(form.price);
-    const sizeNum = Number(form.size_sqft);
-    if (!Number.isFinite(priceNum) || !Number.isFinite(sizeNum) || priceNum < 0 || sizeNum < 0) {
-      return toast.error("租金與面積必須是大於或等於 0 的有效數字。");
-    }
-    if (!Number.isInteger(roomCount) || roomCount < 1) {
-      return toast.error("出租房間數量必須為 1 或以上。");
-    }
-
-    let finalRoomPricesPayload: Record<string, number> = {};
-    if (pricingMode === "custom") {
-      if (roomCount === 1) {
-        finalRoomPricesPayload = { room1: priceNum };
-      } else {
-        let sum = 0;
-        const currentRooms: Record<string, number> = {};
-
-        for (let i = 1; i < roomCount; i += 1) {
-          const roomValue = Number(roomPrices[`room${i}`]);
-          if (!Number.isFinite(roomValue) || roomValue < 0) {
-            toast.error(`房間 ${i} 租金必須為有效數字。`);
-            return;
-          }
-          sum += roomValue;
-          currentRooms[`room${i}`] = roomValue;
-        }
-
-        const lastRoomPrice = priceNum - sum;
-        if (lastRoomPrice < 0) {
-          toast.error("前面房間的租金總和已超過總租金！");
-          return;
-        }
-
-        finalRoomPricesPayload = {
-          ...currentRooms,
-          [`room${roomCount}`]: lastRoomPrice,
-        };
-      }
-    }
-
-    setIsSubmitting(true);
-    setIsUploadingGallery(true);
-    const galleryUploads = await Promise.all(
-      galleryItems.map(async (item, index) => {
-        const gext = item.file.name.includes(".") ? item.file.name.split(".").pop()?.toLowerCase() ?? "jpg" : "jpg";
-        const gpath = `properties/admin/gallery/${Date.now()}-${Math.random().toString(36).slice(2)}.${gext}`;
-        const { error } = await supabase.storage.from("property-images").upload(gpath, item.file, { upsert: false, contentType: item.file.type });
-        if (error) throw new Error(error.message);
-        const { data: { publicUrl: gurl } } = supabase.storage.from("property-images").getPublicUrl(gpath);
-        return {
-          entry: `${item.category}::${gurl}`,
-          url: gurl,
-          isFallbackMain: item.category === "其他" || !item.category,
-          index,
-        };
-      })
-    ).catch((error: unknown) => {
-      toast.error(`相簿上傳失敗：${error instanceof Error ? error.message : "未知錯誤"}`);
-      return null;
-    });
-    setIsUploadingGallery(false);
-    if (!galleryUploads) {
-      setIsSubmitting(false);
-      return;
-    }
-
-    const mainCandidate =
-      galleryUploads.find((item) => item.isFallbackMain) ?? galleryUploads[0];
-
-    const payload = {
-      title: form.title.trim(),
-      district: form.district.trim(),
-      sub_district: finalSubDistrict,
-      price: priceNum,
-      size_sqft: sizeNum,
-      imageUrl: mainCandidate.url,
-      description: form.description.trim(),
-      contact_whatsapp: form.contact_whatsapp.trim(),
-      habit_cleanliness: form.habit_cleanliness,
-      habit_ac_temp: form.habit_ac_temp,
-      habit_guests: form.habit_guests,
-      habit_noise: form.habit_noise,
-      amenities: selectedAmenities,
-      roommates_req: selectedRoommateReqs,
-      tags: selectedTags,
-      gallery: galleryUploads.map((item) => item.entry),
-      room_count: roomCount,
-      pricing_mode: pricingMode,
-      room_prices: pricingMode === "custom" ? finalRoomPricesPayload : {},
-    };
-    const { error } = await supabase.from("properties").insert(payload);
-    setIsSubmitting(false);
-    if (error) return toast.error(`新增失敗：${error.message}`);
-
-    toast.success("新增租盤成功");
-    setForm(initialForm);
-    setRoomCount(1);
-    setPricingMode("average");
-    setRoomPrices({});
-    setCustomSubDistrict("");
-    setSelectedAmenities([]);
-    setAmenityQuery("");
-    setSelectedRoommateReqs([]);
-    setRoommateReqQuery("");
-    setSelectedTags([]);
-    setTagQuery("");
-    setGalleryItems((prev) => {
-      for (const item of prev) URL.revokeObjectURL(item.previewUrl);
-      return [];
-    });
-    await fetchProperties();
-  }
-
-  async function handleDelete(propertyId: string) {
-    const ok = window.confirm("確定要刪除這筆租盤嗎？此操作無法還原。");
-    if (!ok) return;
-    setDeletingId(propertyId);
-    const { data, error } = await supabase.from("properties").delete().eq("id", propertyId).select();
-    setDeletingId(null);
-    if (error) {
-      console.error("刪除失敗詳情:", error);
-      toast.error(`刪除失敗：${error.message}`);
-      return;
-    }
-    if (!data || data.length === 0) {
-      console.error("刪除失敗：權限不足或找不到該租盤 (被 RLS 擋下)");
-      toast.error("刪除失敗：權限不足，請確定你是該租盤擁有者或 Admin");
-      return;
-    }
-
-    setProperties((prev) => prev.filter((p) => p.id !== propertyId));
-    toast.success("已刪除租盤");
-    await fetchProperties();
-  }
-
-  async function handleDeleteGalleryImage(entry: StoredGalleryItem) {
-    if (!selectedManagedProperty) return;
-    const ok = window.confirm("確定要刪除這張圖片嗎？");
-    if (!ok) return;
-
-    const storagePath = extractStoragePathFromPublicUrl(entry.url);
-    if (!storagePath) {
-      toast.error("無法識別 Storage 路徑，請檢查圖片來源。");
-      return;
-    }
-
-    setDeletingGalleryEntry(entry.raw);
-    const { error: storageError } = await supabase.storage.from("property-images").remove([storagePath]);
-    if (storageError) {
-      setDeletingGalleryEntry(null);
-      toast.error(`刪除 Storage 圖片失敗：${storageError.message}`);
-      return;
-    }
-
-    const nextGallery = (selectedManagedProperty.gallery ?? []).filter((item) => item !== entry.raw);
-    const nextMain = nextGallery[0]?.split("::").slice(1).join("::") || selectedManagedProperty.imageUrl;
-    const { error: updateError } = await supabase
-      .from("properties")
-      .update({ gallery: nextGallery, imageUrl: nextMain })
-      .eq("id", selectedManagedProperty.id);
-
-    setDeletingGalleryEntry(null);
-    if (updateError) {
-      toast.error(`更新租盤畫廊失敗：${updateError.message}`);
-      return;
-    }
-    toast.success("已刪除畫廊圖片");
-    await fetchProperties();
-  }
-
-  async function handleAppendGalleryImages() {
-    if (!selectedManagePropertyId) {
-      toast.error("請先選擇要管理的租盤。");
-      return;
-    }
-    if (appendGalleryItems.length === 0) {
-      toast.error("請先選擇要追加的照片。");
-      return;
-    }
-
-    setIsAppendingGallery(true);
-    const uploadResult = await Promise.all(
-      appendGalleryItems.map(async (item) => {
-        const ext = item.file.name.includes(".") ? item.file.name.split(".").pop()?.toLowerCase() ?? "jpg" : "jpg";
-        const path = `properties/admin/gallery/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
-        const { error } = await supabase
-          .storage
-          .from("property-images")
-          .upload(path, item.file, { upsert: false, contentType: item.file.type });
-        if (error) throw new Error(error.message);
-        const {
-          data: { publicUrl },
-        } = supabase.storage.from("property-images").getPublicUrl(path);
-        return {
-          entry: `${item.category}::${publicUrl}`,
-          url: publicUrl,
-          preferMain: item.category === "其他" || !item.category,
-        };
-      })
-    ).catch((error: unknown) => {
-      toast.error(`追加上傳失敗：${error instanceof Error ? error.message : "未知錯誤"}`);
-      return null;
-    });
-    if (!uploadResult) {
-      setIsAppendingGallery(false);
-      return;
-    }
-
-    const { data: currentRow, error: fetchError } = await supabase
-      .from("properties")
-      .select("gallery,imageUrl")
-      .eq("id", selectedManagePropertyId)
-      .single();
-    if (fetchError) {
-      setIsAppendingGallery(false);
-      toast.error(`讀取現有畫廊失敗：${fetchError.message}`);
-      return;
-    }
-
-    const currentGallery = Array.isArray(currentRow.gallery)
-      ? currentRow.gallery.filter((item): item is string => typeof item === "string")
-      : [];
-    const nextGallery = [...currentGallery, ...uploadResult.map((item) => item.entry)];
-    const shouldUpdateMain = !currentGallery.length;
-    const nextMain = shouldUpdateMain
-      ? (uploadResult.find((item) => item.preferMain) ?? uploadResult[0]).url
-      : currentRow.imageUrl;
-
-    const { error: updateError } = await supabase
-      .from("properties")
-      .update({ gallery: nextGallery, imageUrl: nextMain })
-      .eq("id", selectedManagePropertyId);
-    setIsAppendingGallery(false);
-
-    if (updateError) {
-      toast.error(`更新租盤畫廊失敗：${updateError.message}`);
-      return;
-    }
-
-    toast.success("已成功追加新照片");
-    setAppendGalleryItems((prev) => {
-      for (const item of prev) URL.revokeObjectURL(item.previewUrl);
-      return [];
-    });
-    await fetchProperties();
-  }
-
   if (!unlocked) {
     return (
       <div className="min-h-screen bg-zinc-50">
@@ -785,11 +526,27 @@ export default function AdminPage() {
         <main className="mx-auto flex max-w-md items-center px-4 py-16 sm:px-6">
           <Card className="w-full border-zinc-200 shadow-sm">
             <CardContent className="space-y-4 p-6">
-              <h1 className="flex items-center gap-2 text-lg font-semibold text-[#0f2540]"><Lock className="h-5 w-5" />Admin Panel 密語驗證</h1>
+              <h1 className="flex items-center gap-2 text-lg font-semibold text-[#0f2540]">
+                <Lock className="h-5 w-5" />
+                Admin Panel 密語驗證
+              </h1>
               <p className="text-sm text-zinc-500">MVP 階段使用簡單密語保護，輸入通關密語後可進入後台管理介面。</p>
-              <Input type="password" placeholder="請輸入管理密語" value={passcode} onChange={(e) => setPasscode(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleUnlock()} />
-              {authError ? <p className="flex items-center gap-1 text-sm text-red-600"><ShieldAlert className="h-4 w-4" />{authError}</p> : null}
-              <Button type="button" className="w-full bg-[#0f2540] text-white hover:bg-[#1a3a5c]" onClick={handleUnlock}>進入後台</Button>
+              <Input
+                type="password"
+                placeholder="請輸入管理密語"
+                value={passcode}
+                onChange={(e) => setPasscode(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleUnlock()}
+              />
+              {authError ? (
+                <p className="flex items-center gap-1 text-sm text-red-600">
+                  <ShieldAlert className="h-4 w-4" />
+                  {authError}
+                </p>
+              ) : null}
+              <Button type="button" className="w-full bg-[#0f2540] text-white hover:bg-[#1a3a5c]" onClick={handleUnlock}>
+                進入後台
+              </Button>
             </CardContent>
           </Card>
         </main>
@@ -838,199 +595,31 @@ export default function AdminPage() {
         </div>
 
         <section className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm sm:p-8">
-          <h2 className="mb-4 flex items-center gap-2 text-lg font-semibold text-[#0f2540]"><PlusCircle className="h-5 w-5" />新增租盤</h2>
-          <form className="grid gap-4 sm:grid-cols-2" onSubmit={handleCreateProperty}>
-            <div className="sm:col-span-2"><label className="mb-1 block text-sm font-medium text-zinc-700">標題 *</label><Input value={form.title} onChange={(e) => updateForm("title", e.target.value)} placeholder="例如：太古城新裝套房" /></div>
-            <div>
-              <label className="mb-1 block text-sm font-medium text-zinc-700">地區 *</label>
-              <Select value={form.district} onValueChange={(value) => { updateForm("district", value); updateForm("sub_district", ""); setCustomSubDistrict(""); }}>
-                <SelectTrigger><SelectValue placeholder="請選擇地區" /></SelectTrigger>
-                <SelectContent>{DISTRICT_OPTIONS.map((district) => <SelectItem key={district} value={district}>{district}</SelectItem>)}</SelectContent>
-              </Select>
-            </div>
-            <div>
-              <label className="mb-1 block text-sm font-medium text-zinc-700">分區 *</label>
-              <Select value={form.sub_district} onValueChange={(value) => { updateForm("sub_district", value); if (value !== SUBDISTRICT_OTHER_VALUE) setCustomSubDistrict(""); }} disabled={!form.district}>
-                <SelectTrigger><SelectValue placeholder={form.district ? "請選擇分區" : "請先選擇地區"} /></SelectTrigger>
-                <SelectContent>{districtSubDistricts.map((sd) => <SelectItem key={sd} value={sd}>{sd}</SelectItem>)}<SelectItem value={SUBDISTRICT_OTHER_VALUE}>其他</SelectItem></SelectContent>
-              </Select>
-            </div>
-            {usingOtherSubDistrict ? <div className="sm:col-span-2"><label className="mb-1 block text-sm font-medium text-zinc-700">自訂分區名稱 *</label><Input value={customSubDistrict} onChange={(e) => setCustomSubDistrict(e.target.value)} placeholder="請輸入新的分區名稱" /></div> : null}
-            <div>
-              <label className="mb-1 block text-sm font-medium text-zinc-700">租金 (HKD) *</label>
-              <Input
-                type="number"
-                min={0}
-                value={form.price}
-                onKeyDown={handleNonNegativeNumberKeyDown}
-                onChange={(e) => {
-                  const value = e.target.value;
-                  if (value === "") {
-                    updateForm("price", value);
-                    return;
-                  }
-                  const parsed = Number(value);
-                  if (Number.isFinite(parsed) && parsed >= 0) updateForm("price", value);
-                }}
-                placeholder="9500"
-              />
-            </div>
-            <div className="sm:col-span-2 rounded-xl border border-zinc-200 bg-zinc-50/70 p-4">
-              <label className="mb-1 block text-sm font-medium text-zinc-700">出租房間數量 *</label>
-              <Input
-                type="number"
-                min={1}
-                value={roomCount}
-                onKeyDown={handleNonNegativeNumberKeyDown}
-                onChange={(e) => {
-                  const value = e.target.value;
-                  if (value === "") return;
-                  const parsed = Number(value);
-                  if (Number.isInteger(parsed) && parsed >= 1) setRoomCount(parsed);
-                }}
-                className="max-w-xs bg-white"
-              />
-              <div className="mt-4">
-                <p className="mb-2 text-sm font-medium text-zinc-700">分租定價模式 *</p>
-                <div className="flex flex-wrap gap-4 text-sm text-zinc-700">
-                  <label className="inline-flex items-center gap-2">
-                    <input
-                      type="radio"
-                      name="admin-pricing-mode"
-                      checked={pricingMode === "average"}
-                      onChange={() => setPricingMode("average")}
-                    />
-                    平均計算
-                  </label>
-                  <label className="inline-flex items-center gap-2">
-                    <input
-                      type="radio"
-                      name="admin-pricing-mode"
-                      checked={pricingMode === "custom"}
-                      onChange={() => setPricingMode("custom")}
-                    />
-                    自訂每房價錢 (Custom)
-                  </label>
-                </div>
-              </div>
-              {pricingMode === "custom" ? (
-                <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                  {Array.from({ length: roomCount }).map((_, index) => {
-                    const key = `room${index + 1}`;
-                    const isAutoCalculatedRoom = roomCount === 1 || index + 1 === roomCount;
-                    return (
-                      <div key={key}>
-                        <label className="mb-1 block text-sm font-medium text-zinc-700">房間 {index + 1} 租金 (HKD)</label>
-                        <Input
-                          type="number"
-                          min={0}
-                          value={isAutoCalculatedRoom ? String(customPricing.computedRoomPrices[key] ?? 0) : (roomPrices[key] ?? "")}
-                          onKeyDown={handleNonNegativeNumberKeyDown}
-                          onChange={(e) => {
-                            if (isAutoCalculatedRoom) return;
-                            const value = e.target.value;
-                            setRoomPrices((prev) => ({ ...prev, [key]: value }));
-                          }}
-                          readOnly={isAutoCalculatedRoom}
-                          disabled={isAutoCalculatedRoom}
-                          className={isAutoCalculatedRoom ? "bg-zinc-100 text-zinc-600" : "bg-white"}
-                          placeholder="例如：4500"
-                        />
-                      </div>
-                    );
-                  })}
-                  <p className="sm:col-span-2 text-xs text-zinc-500">
-                    目前各房總和 HK$
-                    {Object.values(customPricing.computedRoomPrices).reduce((sum, value) => sum + value, 0).toLocaleString("zh-HK")}{" "}
-                    / 總銀碼 HK${(Number(form.price) || 0).toLocaleString("zh-HK")}
-                  </p>
-                </div>
-              ) : null}
-            </div>
-            <div>
-              <label className="mb-1 block text-sm font-medium text-zinc-700">面積 (sqft) *</label>
-              <Input
-                type="number"
-                min={0}
-                value={form.size_sqft}
-                onKeyDown={handleNonNegativeNumberKeyDown}
-                onChange={(e) => {
-                  const value = e.target.value;
-                  if (value === "") {
-                    updateForm("size_sqft", value);
-                    return;
-                  }
-                  const parsed = Number(value);
-                  if (Number.isFinite(parsed) && parsed >= 0) updateForm("size_sqft", value);
-                }}
-                placeholder="150"
-              />
-            </div>
-
-            <div className="sm:col-span-2 rounded-xl border border-zinc-200 bg-zinc-50/70 p-4">
-              <h3 className="mb-2 text-sm font-semibold text-[#0f2540]">畫廊管理</h3>
-              <label className="flex cursor-pointer items-center gap-3 rounded-xl border border-dashed border-zinc-300 bg-zinc-50 p-4 transition-colors hover:border-[#1a3a5c]/50 hover:bg-zinc-100/70">
-                <div className="rounded-lg bg-white p-2 shadow-sm"><UploadCloud className="h-5 w-5 text-[#0f2540]" /></div>
-                <div><p className="text-sm font-medium text-zinc-800">點擊或拖曳多張圖片到這裡上傳</p><p className="text-xs text-zinc-500">可為每張圖片設定類別，系統會自動選主圖</p></div>
-                <Input type="file" accept="image/*" multiple className="hidden" onChange={(e) => { appendGalleryFiles(e.target.files); e.currentTarget.value = ""; }} />
-              </label>
-              {galleryItems.length > 0 ? (
-                <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
-                  {galleryItems.map((item) => (
-                    <div key={item.id} className="rounded-lg border border-zinc-200 bg-white p-2">
-                      <div className="relative">
-                        <img src={item.previewUrl} alt="相簿預覽" className="h-24 w-full rounded-md object-cover" />
-                        <button type="button" onClick={() => removeGalleryItem(item.id)} className="absolute right-1 top-1 rounded-full bg-black/55 p-1 text-white hover:bg-black/70"><X className="h-3 w-3" /></button>
-                      </div>
-                      <div className="mt-2">
-                        <Select value={item.category} onValueChange={(value) => updateGalleryCategory(item.id, value as (typeof GALLERY_CATEGORIES)[number])}>
-                          <SelectTrigger className="h-8"><SelectValue /></SelectTrigger>
-                          <SelectContent>{GALLERY_CATEGORIES.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent>
-                        </Select>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="mt-3 text-xs text-zinc-500">尚未新增待上傳圖片。</p>
-              )}
-            </div>
-
-            <div className="sm:col-span-2"><label className="mb-1 block text-sm font-medium text-zinc-700">描述 *</label><Textarea rows={5} value={form.description} onChange={(e) => updateForm("description", e.target.value)} placeholder="請輸入租盤介紹..." /></div>
-            <div className="sm:col-span-2"><label className="mb-1 block text-sm font-medium text-zinc-700">WhatsApp 聯絡電話 (contact_whatsapp) *</label><Input value={form.contact_whatsapp} onChange={(e) => updateForm("contact_whatsapp", e.target.value)} placeholder="85212345678" /></div>
-
-            <TagInputField label="設施 (amenities，多選可自訂)" selectedItems={selectedAmenities} query={amenityQuery} setQuery={setAmenityQuery} open={amenityComboboxOpen} setOpen={setAmenityComboboxOpen} filteredOptions={filteredAmenityOptions} emptyText="找不到符合的設施。" placeholder="輸入設施後按 Enter" heading="常用設施" onToggle={toggleAmenity} onRemove={removeAmenity} onAddCustom={addCustomAmenity} canAddCustom={canAddCustomAmenity} />
-            <div className="sm:col-span-2 rounded-xl border border-zinc-200 bg-zinc-50/70 p-4">
-              <h3 className="text-sm font-semibold text-[#0f2540]">✨ 單位專屬 Vibe (配對神仙室友必填)</h3>
-              <HabitDefenseSliders
-                values={{
-                  habit_cleanliness: form.habit_cleanliness,
-                  habit_ac_temp: form.habit_ac_temp,
-                  habit_guests: form.habit_guests,
-                  habit_noise: form.habit_noise,
-                }}
-                onChange={(key, value) => updateForm(key, value)}
-              />
-            </div>
-            <TagInputField label="室友要求 (roommates_req，多選可自訂)" selectedItems={selectedRoommateReqs} query={roommateReqQuery} setQuery={setRoommateReqQuery} open={roommateReqComboboxOpen} setOpen={setRoommateReqComboboxOpen} filteredOptions={filteredRoommateReqOptions} emptyText="找不到符合的室友要求。" placeholder="輸入要求後按 Enter" heading="常用室友要求" onToggle={toggleRoommateReq} onRemove={removeRoommateReq} onAddCustom={addCustomRoommateReq} canAddCustom={canAddCustomRoommateReq} />
-            <TagInputField label="標籤 (tags，多選可自訂)" selectedItems={selectedTags} query={tagQuery} setQuery={setTagQuery} open={tagComboboxOpen} setOpen={setTagComboboxOpen} filteredOptions={filteredTagOptions} emptyText="找不到符合的標籤。" placeholder="輸入標籤後按 Enter" heading="常用標籤" onToggle={toggleTag} onRemove={removeTag} onAddCustom={addCustomTag} canAddCustom={canAddCustomTag} />
-
-            <div className="sm:col-span-2 flex justify-end">
-              <Button type="submit" disabled={isSubmitting} className="bg-[#0f2540] text-white hover:bg-[#1a3a5c]">
-                {isSubmitting ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />{isUploadingGallery ? "圖片上傳中..." : "送出中..."}</> : "新增租盤"}
-              </Button>
-            </div>
-          </form>
+          <h2 className="mb-4 flex items-center gap-2 text-lg font-semibold text-[#0f2540]">
+            <PlusCircle className="h-5 w-5" />
+            新增租盤
+          </h2>
+          <SharedPropertyForm
+            key={`admin-create-${createFormKey}`}
+            onSubmit={handleAdminCreateSubmit}
+            isSubmitting={createSubmitting}
+            submitButtonText="新增租盤"
+          />
         </section>
 
         <section className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm sm:p-8">
-          <h2 className="mb-4 text-lg font-semibold text-[#0f2540]">現有畫廊總覽</h2>
-          <div className="mb-4">
-            <Select value={selectedManagePropertyId} onValueChange={setSelectedManagePropertyId}>
+          <h2 className="mb-2 text-lg font-semibold text-[#0f2540]">Admin 編輯放盤</h2>
+          <p className="mb-4 text-sm text-zinc-500">選擇租盤後會從 Supabase 載入完整資料；儲存後將以 Admin 權限寫回資料庫。</p>
+          <div className="mb-4 max-w-xl">
+            <Select
+              value={editPropertyId || EDIT_NONE_VALUE}
+              onValueChange={(v) => setEditPropertyId(v === EDIT_NONE_VALUE ? "" : v)}
+            >
               <SelectTrigger>
-                <SelectValue placeholder="選擇要管理畫廊的房屋" />
+                <SelectValue placeholder="選擇要編輯的租盤" />
               </SelectTrigger>
               <SelectContent>
+                <SelectItem value={EDIT_NONE_VALUE}>請選擇租盤</SelectItem>
                 {properties.map((property) => (
                   <SelectItem key={property.id} value={property.id}>
                     {property.title}
@@ -1039,113 +628,40 @@ export default function AdminPage() {
               </SelectContent>
             </Select>
           </div>
-          {selectedManagedProperty ? (
-            <div className="mb-5 rounded-xl border border-zinc-200 bg-zinc-50/70 p-4">
-              <h3 className="mb-2 text-sm font-semibold text-[#0f2540]">追加新照片</h3>
-              <label className="flex cursor-pointer items-center gap-3 rounded-xl border border-dashed border-zinc-300 bg-zinc-50 p-4 transition-colors hover:border-[#1a3a5c]/50 hover:bg-zinc-100/70">
-                <div className="rounded-lg bg-white p-2 shadow-sm">
-                  <UploadCloud className="h-5 w-5 text-[#0f2540]" />
-                </div>
-                <div>
-                  <p className="text-sm font-medium text-zinc-800">點擊或拖曳多張圖片到這裡上傳</p>
-                  <p className="text-xs text-zinc-500">可為每張圖片設定類別，按「確認追加」後寫入現有畫廊</p>
-                </div>
-                <Input
-                  type="file"
-                  accept="image/*"
-                  multiple
-                  className="hidden"
-                  onChange={(e) => {
-                    appendManageGalleryFiles(e.target.files);
-                    e.currentTarget.value = "";
-                  }}
-                />
-              </label>
-              {appendGalleryItems.length > 0 ? (
-                <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
-                  {appendGalleryItems.map((item) => (
-                    <div key={item.id} className="rounded-lg border border-zinc-200 bg-white p-2">
-                      <div className="relative">
-                        <img src={item.previewUrl} alt="追加相簿預覽" className="h-24 w-full rounded-md object-cover" />
-                        <button
-                          type="button"
-                          onClick={() => removeManageGalleryItem(item.id)}
-                          className="absolute right-1 top-1 rounded-full bg-black/55 p-1 text-white hover:bg-black/70"
-                        >
-                          <X className="h-3 w-3" />
-                        </button>
-                      </div>
-                      <div className="mt-2">
-                        <Select
-                          value={item.category}
-                          onValueChange={(value) => updateManageGalleryCategory(item.id, value as (typeof GALLERY_CATEGORIES)[number])}
-                        >
-                          <SelectTrigger className="h-8">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {GALLERY_CATEGORIES.map((category) => (
-                              <SelectItem key={category} value={category}>
-                                {category}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : null}
-              <div className="mt-3 flex justify-end">
-                <Button
-                  type="button"
-                  onClick={() => void handleAppendGalleryImages()}
-                  disabled={isAppendingGallery || appendGalleryItems.length === 0}
-                  className="bg-[#0f2540] text-white hover:bg-[#1a3a5c]"
-                >
-                  {isAppendingGallery ? (
-                    <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      追加上傳中...
-                    </>
-                  ) : (
-                    "確認追加"
-                  )}
-                </Button>
-              </div>
-            </div>
+
+          {editPropertyId && editLoadingRow ? (
+            <p className="inline-flex items-center gap-2 text-sm text-zinc-500">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              載入租盤資料中...
+            </p>
           ) : null}
-          {!selectedManagedProperty ? (
-            <p className="text-sm text-zinc-500">請先選擇一個房屋以查看已上傳圖片。</p>
-          ) : existingGalleryItems.length === 0 ? (
-            <p className="text-sm text-zinc-500">此房屋目前沒有畫廊圖片。</p>
-          ) : (
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
-              {existingGalleryItems.map((item) => (
-                <div key={item.raw} className="rounded-lg border border-zinc-200 bg-white p-2">
-                  <div className="relative">
-                    <img src={item.url} alt={`${item.category} 圖片`} className="h-24 w-full rounded-md object-cover" />
-                    <button
-                      type="button"
-                      onClick={() => void handleDeleteGalleryImage(item)}
-                      disabled={deletingGalleryEntry === item.raw}
-                      className="absolute right-1 top-1 rounded-full bg-red-600 p-1 text-white hover:bg-red-700 disabled:opacity-60"
-                    >
-                      {deletingGalleryEntry === item.raw ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
-                    </button>
-                  </div>
-                  <p className="mt-2 text-xs font-medium text-zinc-600">{item.category}</p>
-                </div>
-              ))}
-            </div>
-          )}
+
+          {editPropertyId && editInitialData && !editLoadingRow ? (
+            <SharedPropertyForm
+              key={`admin-edit-${editPropertyId}-${editFormKey}`}
+              initialData={editInitialData}
+              onSubmit={handleAdminEditSubmit}
+              isSubmitting={editSubmitting}
+              submitButtonText="儲存修改 (Admin權限)"
+            />
+          ) : null}
         </section>
 
         <section className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm sm:p-8">
           <div className="mb-4 flex items-center justify-between gap-3">
             <h2 className="text-lg font-semibold text-[#0f2540]">現有租盤列表</h2>
             <Button type="button" variant="outline" onClick={() => void fetchProperties()} disabled={isLoadingList}>
-              {isLoadingList ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />讀取中...</> : <><RefreshCw className="mr-2 h-4 w-4" />重新整理</>}
+              {isLoadingList ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  讀取中...
+                </>
+              ) : (
+                <>
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                  重新整理
+                </>
+              )}
             </Button>
           </div>
           <div className="mb-5 grid gap-3 rounded-xl border border-zinc-200 bg-zinc-50/70 p-4 md:grid-cols-2 xl:grid-cols-4">
@@ -1231,7 +747,17 @@ export default function AdminPage() {
                       disabled={deletingId === property.id}
                       onClick={() => void handleDelete(property.id)}
                     >
-                      {deletingId === property.id ? <><Loader2 className="mr-1.5 h-4 w-4 animate-spin" />刪除中</> : <><Trash2 className="mr-1.5 h-4 w-4" />刪除此租盤</>}
+                      {deletingId === property.id ? (
+                        <>
+                          <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                          刪除中
+                        </>
+                      ) : (
+                        <>
+                          <Trash2 className="mr-1.5 h-4 w-4" />
+                          刪除此租盤
+                        </>
+                      )}
                     </Button>
                   </div>
                 </div>
@@ -1244,9 +770,7 @@ export default function AdminPage() {
         <DialogContent className="max-h-[85vh] max-w-4xl overflow-hidden p-0">
           <DialogHeader className="border-b border-zinc-200 p-5">
             <DialogTitle>現有業主名單</DialogTitle>
-            <DialogDescription>
-              管理業主官方認證狀態，並按姓名或平均星數排序查看。
-            </DialogDescription>
+            <DialogDescription>管理業主官方認證狀態，並按姓名或平均星數排序查看。</DialogDescription>
           </DialogHeader>
           <div className="overflow-auto p-5">
             {isLoadingLandlords ? (
@@ -1259,13 +783,21 @@ export default function AdminPage() {
                   <tr className="border-b border-zinc-200 text-left text-zinc-600">
                     <th className="px-3 py-2 font-medium">頭像</th>
                     <th className="px-3 py-2 font-medium">
-                      <button type="button" className="inline-flex items-center gap-1 hover:text-zinc-900" onClick={() => toggleLandlordSort("name")}>
+                      <button
+                        type="button"
+                        className="inline-flex items-center gap-1 hover:text-zinc-900"
+                        onClick={() => toggleLandlordSort("name")}
+                      >
                         姓名
                         {sortConfig.key === "name" ? (sortConfig.direction === "asc" ? "↑" : "↓") : ""}
                       </button>
                     </th>
                     <th className="px-3 py-2 font-medium">
-                      <button type="button" className="inline-flex items-center gap-1 hover:text-zinc-900" onClick={() => toggleLandlordSort("rating")}>
+                      <button
+                        type="button"
+                        className="inline-flex items-center gap-1 hover:text-zinc-900"
+                        onClick={() => toggleLandlordSort("rating")}
+                      >
                         平均星數
                         {sortConfig.key === "rating" ? (sortConfig.direction === "asc" ? "↑" : "↓") : ""}
                       </button>
@@ -1278,9 +810,15 @@ export default function AdminPage() {
                     <tr key={landlord.id} className="border-b border-zinc-100">
                       <td className="px-3 py-2">
                         {landlord.avatar_url ? (
-                          <img src={landlord.avatar_url} alt={landlord.display_name} className="h-9 w-9 rounded-full object-cover" />
+                          <img
+                            src={landlord.avatar_url}
+                            alt={landlord.display_name}
+                            className="h-9 w-9 rounded-full object-cover"
+                          />
                         ) : (
-                          <div className="flex h-9 w-9 items-center justify-center rounded-full bg-zinc-200 text-xs text-zinc-600">N/A</div>
+                          <div className="flex h-9 w-9 items-center justify-center rounded-full bg-zinc-200 text-xs text-zinc-600">
+                            N/A
+                          </div>
                         )}
                       </td>
                       <td className="px-3 py-2 font-medium text-zinc-800">{landlord.display_name}</td>
