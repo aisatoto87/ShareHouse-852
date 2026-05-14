@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
@@ -35,6 +35,40 @@ export default function HousingIntentButton({
   const [district, setDistrict] = useState(defaultDistrict);
   const [budgetInput, setBudgetInput] = useState(String(defaultBudget));
   const [submitting, setSubmitting] = useState(false);
+
+  const runMatchInBackground = useCallback(
+    async (payload: { intent_id: string; target_district: string; user_id: string }) => {
+      try {
+        const response = await fetch("/api/match", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const json = (await response.json().catch(() => ({}))) as {
+          matched?: boolean;
+          message?: string;
+          error?: string;
+        };
+
+        if (!response.ok) {
+          console.warn("[HousingIntentButton] /api/match non-OK", response.status, json);
+          router.refresh();
+          return;
+        }
+
+        if (json.matched === true) {
+          toast.success(
+            "🔥 震撼好消息！系統為你找到高度契合的神仙室友，已自動組建群組！"
+          );
+        }
+
+        router.refresh();
+      } catch (e) {
+        console.error("[HousingIntentButton] /api/match failed", e);
+      }
+    },
+    [router]
+  );
 
   useEffect(() => {
     if (!isIntentModalOpen) return;
@@ -90,11 +124,15 @@ export default function HousingIntentButton({
 
     setSubmitting(true);
     try {
-      const { error } = await supabase.from("housing_intents").insert({
-        user_id: user.id,
-        target_district: trimmedDistrict,
-        max_budget: budgetNum,
-      });
+      const { data: inserted, error } = await supabase
+        .from("housing_intents")
+        .insert({
+          user_id: user.id,
+          target_district: trimmedDistrict,
+          max_budget: budgetNum,
+        })
+        .select("intent_id, id")
+        .single();
 
       if (error) {
         console.error("[housing_intents] insert", error);
@@ -102,8 +140,31 @@ export default function HousingIntentButton({
         return;
       }
 
+      const row = inserted as { intent_id?: unknown; id?: unknown } | null;
+      const newIntentId =
+        typeof row?.intent_id === "string" && row.intent_id.trim() !== ""
+          ? row.intent_id.trim()
+          : typeof row?.id === "string" && row.id.trim() !== ""
+            ? row.id.trim()
+            : "";
+
       setIsIntentModalOpen(false);
-      toast.success("成功加入意向池！配對大腦啟動中 🧠");
+      toast.success("成功加入意向池！正在啟動 AI 尋找同區室友 🧠...");
+      router.refresh();
+
+      if (newIntentId) {
+        void runMatchInBackground({
+          intent_id: newIntentId,
+          target_district: trimmedDistrict,
+          user_id: user.id,
+        });
+      } else {
+        console.warn("[housing_intents] insert OK but no intent_id in select() response");
+        router.refresh();
+      }
+    } catch (e) {
+      console.error("[HousingIntentButton] handleConfirmIntent", e);
+      toast.error("提交時發生錯誤，請稍後再試。");
     } finally {
       setSubmitting(false);
     }
