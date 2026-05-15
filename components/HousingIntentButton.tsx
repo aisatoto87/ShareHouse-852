@@ -131,7 +131,7 @@ export default function HousingIntentButton({
           target_district: trimmedDistrict,
           max_budget: budgetNum,
         })
-        .select("intent_id, id")
+        .select("intent_id")
         .single();
 
       if (error) {
@@ -140,13 +140,8 @@ export default function HousingIntentButton({
         return;
       }
 
-      const row = inserted as { intent_id?: unknown; id?: unknown } | null;
-      const newIntentId =
-        typeof row?.intent_id === "string" && row.intent_id.trim() !== ""
-          ? row.intent_id.trim()
-          : typeof row?.id === "string" && row.id.trim() !== ""
-            ? row.id.trim()
-            : "";
+      const row = inserted as { intent_id?: string } | null;
+      const newIntentId = typeof row?.intent_id === "string" ? row.intent_id.trim() : "";
 
       setIsIntentModalOpen(false);
       toast.success("成功加入意向池！正在啟動 AI 尋找同區室友 🧠...");
