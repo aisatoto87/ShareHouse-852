@@ -6,6 +6,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import HabitDefenseSliders from "@/components/HabitDefenseSliders";
+import MatchingOptInPanel from "@/components/MatchingOptInPanel";
 import Navbar from "@/components/Navbar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -28,10 +29,8 @@ import {
   inferSalutationMode,
   inferZhSuffix,
 } from "@/lib/profile-display-name";
-import { mapRowToProperty } from "@/lib/property-mapper";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
-import type { Property } from "@/types/property";
 
 type HabitKey = "habit_cleanliness" | "habit_ac_temp" | "habit_guests" | "habit_noise";
 
@@ -886,6 +885,10 @@ export default function DashboardPage() {
                     </Link>
                   </div>
                 ) : (
+                  <>
+                    {intentRows.some((r) => r.status === "matching") && userId ? (
+                      <MatchingOptInPanel viewerUserId={userId} className="mb-6" />
+                    ) : null}
                   <ul className="space-y-4">
                     {intentRows.map((row) => {
                       const badge = intentStatusBadge(row.status);
@@ -944,6 +947,7 @@ export default function DashboardPage() {
                       );
                     })}
                   </ul>
+                  </>
                 )}
               </div>
             </>
