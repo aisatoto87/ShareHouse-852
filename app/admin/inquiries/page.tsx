@@ -201,7 +201,7 @@ export default async function AdminInquiriesPage() {
                             {status.label}
                           </span>
                         </td>
-                        <td className="px-4 py-4 text-right">
+ <td className="px-4 py-4 text-right">
   {status.isPending ? (
     <form action={markAsContacted}>
       <input type="hidden" name="inquiryId" value={inquiry.id} />
