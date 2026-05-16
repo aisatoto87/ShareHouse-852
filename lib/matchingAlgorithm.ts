@@ -9,6 +9,32 @@ export type UserHabits = {
   habit_noise: number;
 };
 
+export function profileRowToUserHabits(row: {
+  habit_cleanliness: unknown;
+  habit_ac_temp: unknown;
+  habit_guests: unknown;
+  habit_noise: unknown;
+}): UserHabits | null {
+  if (
+    row.habit_cleanliness == null ||
+    row.habit_ac_temp == null ||
+    row.habit_guests == null ||
+    row.habit_noise == null
+  ) {
+    return null;
+  }
+  const habit_cleanliness = Number(row.habit_cleanliness);
+  const habit_ac_temp = Number(row.habit_ac_temp);
+  const habit_guests = Number(row.habit_guests);
+  const habit_noise = Number(row.habit_noise);
+  if (
+    ![habit_cleanliness, habit_ac_temp, habit_guests, habit_noise].every((n) => Number.isFinite(n))
+  ) {
+    return null;
+  }
+  return { habit_cleanliness, habit_ac_temp, habit_guests, habit_noise };
+}
+
 export type MatchResult =
   | { similarity: number; status: "MATCHED" }
   | { similarity: number; status: "REJECTED_THRESHOLD" }
@@ -27,7 +53,11 @@ const WEIGHT_NOISE = 1.5;
 
 const WEIGHTED_DISTANCE_SCALE = 20;
 const MATCH_THRESHOLD_PERCENT = 72;
+/** v4.0 雙人初配：SyncNest 習慣雷達最低契合分 */
+export const HABIT_RADAR_MATCH_MIN_PERCENT = 75;
 const VETO_DIFF_THRESHOLD = 3;
+/** 雙方 max_budget 較低者 / 較高者 須達此比例才算預算相容 */
+const BUDGET_COMPAT_MIN_RATIO = 0.75;
 
 /**
  * 兩位使用者習慣向量之比對：紅線否決 → 加權曼哈頓距離 → 相似度與門檻判定。
@@ -112,6 +142,46 @@ export function calculateUnitMatch(newTenant: UserHabits, existingTenants: UserH
  * @param existingMembers 群組內現有的成員名單 (UserHabits Array)
  * @returns boolean (是否允許加入)
  */
+/**
+ * SyncNest 習慣雷達：兩人四維向量相似度（0–100），含紅線否決。
+ */
+export function calculateHabitRadarSimilarity(userA: UserHabits, userB: UserHabits): number {
+  const result = calculateMatch(userA, userB);
+  if (result.status === "REJECTED_VETO") return 0;
+  return result.similarity;
+}
+
+/** v4.0 初配門檻：習慣雷達分數 >= minPercent（預設 75）且未觸發紅線 */
+export function meetsHabitRadarThreshold(
+  userA: UserHabits,
+  userB: UserHabits,
+  minPercent: number = HABIT_RADAR_MATCH_MIN_PERCENT
+): boolean {
+  const score = calculateHabitRadarSimilarity(userA, userB);
+  return score >= minPercent;
+}
+
+export function parseMaxBudget(raw: unknown): number | null {
+  const n = typeof raw === "number" ? raw : Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return Math.round(n);
+}
+
+/** 雙方最高預算須落在可共租區間（較低 / 較高 >= 75%） */
+export function budgetsCompatible(budgetA: number, budgetB: number): boolean {
+  const max = Math.max(budgetA, budgetB);
+  const min = Math.min(budgetA, budgetB);
+  if (max <= 0) return false;
+  return min / max >= BUDGET_COMPAT_MIN_RATIO;
+}
+
+export function resolveTargetHeadcount(intent: Record<string, unknown>): number {
+  const raw = intent.target_headcount ?? intent.target_size;
+  const n = typeof raw === "number" ? raw : Number(raw);
+  if (Number.isFinite(n) && n >= 2) return Math.round(n);
+  return 2;
+}
+
 export function canJoinGroup(newMember: UserHabits, existingMembers: UserHabits[]): boolean {
   // 如果群組仲未有人，第一個人當然可以自動加入
   if (existingMembers.length === 0) return true;
