@@ -1,5 +1,13 @@
 import { NextResponse } from "next/server";
-import { canJoinGroup, type UserHabits } from "@/lib/matchingAlgorithm";
+import {
+  budgetsCompatible,
+  calculateHabitRadarSimilarity,
+  meetsHabitRadarThreshold,
+  parseMaxBudget,
+  profileRowToUserHabits,
+  resolveTargetHeadcount,
+  type UserHabits,
+} from "@/lib/matchingAlgorithm";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
 export const runtime = "nodejs";
@@ -9,32 +17,6 @@ type MatchRequestBody = {
   target_district?: unknown;
   user_id?: unknown;
 };
-
-function profileRowToUserHabits(row: {
-  habit_cleanliness: unknown;
-  habit_ac_temp: unknown;
-  habit_guests: unknown;
-  habit_noise: unknown;
-}): UserHabits | null {
-  if (
-    row.habit_cleanliness == null ||
-    row.habit_ac_temp == null ||
-    row.habit_guests == null ||
-    row.habit_noise == null
-  ) {
-    return null;
-  }
-  const habit_cleanliness = Number(row.habit_cleanliness);
-  const habit_ac_temp = Number(row.habit_ac_temp);
-  const habit_guests = Number(row.habit_guests);
-  const habit_noise = Number(row.habit_noise);
-  if (
-    ![habit_cleanliness, habit_ac_temp, habit_guests, habit_noise].every((n) => Number.isFinite(n))
-  ) {
-    return null;
-  }
-  return { habit_cleanliness, habit_ac_temp, habit_guests, habit_noise };
-}
 
 function resolveIntentId(row: Record<string, unknown>): string | null {
   if (typeof row.intent_id === "string" && row.intent_id.trim() !== "") {
@@ -121,6 +103,13 @@ export async function POST(request: Request) {
       );
     }
 
+    const ownBudget = parseMaxBudget(ownIntent.max_budget);
+    if (ownBudget == null) {
+      return NextResponse.json({ error: "發起人意向缺少有效最高預算。" }, { status: 422 });
+    }
+
+    const targetSize = resolveTargetHeadcount(ownIntent);
+
     const { data: candidateRows, error: candErr } = await admin
       .from("housing_intents")
       .select("*")
@@ -198,24 +187,45 @@ export async function POST(request: Request) {
         continue;
       }
 
+      const candidateBudget = parseMaxBudget(cand.max_budget);
+      if (candidateBudget == null) {
+        console.log("[api/match] skip candidate (no max_budget)", otherUserId);
+        continue;
+      }
+
+      if (!budgetsCompatible(ownBudget, candidateBudget)) {
+        console.log("[api/match] skip candidate (budget mismatch)", {
+          user_id,
+          otherUserId,
+          ownBudget,
+          candidateBudget,
+        });
+        continue;
+      }
+
       const candidateHabits = habitsByUserId.get(otherUserId);
       if (!candidateHabits) {
         console.log("[api/match] skip candidate (no habits profile)", otherUserId);
         continue;
       }
 
-      const ok = canJoinGroup(currentHabits, [candidateHabits]);
-      console.log("[api/match] canJoinGroup", { user_id, otherUserId, ok });
+      const habitScore = calculateHabitRadarSimilarity(currentHabits, candidateHabits);
+      const habitOk = meetsHabitRadarThreshold(currentHabits, candidateHabits);
+      console.log("[api/match] habit radar", { user_id, otherUserId, habitScore, habitOk });
 
-      if (!ok) continue;
+      if (!habitOk) continue;
 
       const { data: groupRow, error: groupErr } = await admin
         .from("match_groups")
-        .insert({ status: "pending_opt_in" })
+        .insert({
+          status: "pending_opt_in",
+          target_size: targetSize,
+          current_size: 2,
+        })
         .select("group_id")
         .single();
 
-        if (groupErr || !groupRow?.group_id) {
+      if (groupErr || !groupRow?.group_id) {
         console.error("[api/match] match_groups insert failed", groupErr);
         return NextResponse.json(
           { error: groupErr?.message ?? "建立配對群組失敗。" },
@@ -224,7 +234,7 @@ export async function POST(request: Request) {
       }
 
       const groupId = String(groupRow.group_id);
-      console.log("[api/match] created match_group", groupId);
+      console.log("[api/match] created match_group", { groupId, targetSize, current_size: 2 });
 
       const { error: membersErr } = await admin.from("group_members").insert([
         { group_id: groupId, user_id },
@@ -264,13 +274,23 @@ export async function POST(request: Request) {
         console.log("[api/match] intent updated via id", iid);
       }
 
-      console.log("[api/match] success", { groupId, user_id, otherUserId, intentIdsToMatch });
+      console.log("[api/match] success", {
+        groupId,
+        user_id,
+        otherUserId,
+        intentIdsToMatch,
+        habitScore,
+        targetSize,
+      });
 
       return NextResponse.json({
         matched: true,
         group_id: groupId,
         paired_user_id: otherUserId,
         intent_ids: intentIdsToMatch,
+        habit_similarity: habitScore,
+        target_size: targetSize,
+        current_size: 2,
       });
     }
 
@@ -278,7 +298,7 @@ export async function POST(request: Request) {
     return NextResponse.json({
       matched: false,
       reason: "no_algorithm_match",
-      message: "同區有意向的用戶，但習慣向量未通過配對大腦校驗。",
+      message: "同區有意向的用戶，但未通過預算或習慣雷達（≥75 分）校驗。",
     });
   } catch (e) {
     console.error("[api/match] unhandled", e);

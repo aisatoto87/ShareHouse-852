@@ -184,7 +184,8 @@ export default function MatchingOptInPanel({ viewerUserId, className }: Matching
       const json = (await response.json().catch(() => ({}))) as {
         ok?: boolean;
         error?: string;
-        group_matched?: boolean;
+        group_confirmed?: boolean;
+        group_recruiting?: boolean;
       };
 
       if (!response.ok) {
@@ -193,12 +194,18 @@ export default function MatchingOptInPanel({ viewerUserId, className }: Matching
       }
 
       if (action === "accept") {
-        toast.success(json.group_matched ? "全員確認！配對成功！" : "已發送確認！");
+        if (json.group_confirmed) {
+          toast.success("全員確認！人數已齊，配對成功！");
+        } else if (json.group_recruiting) {
+          toast.success("全員同意！群組進入招募中，繼續尋找室友…");
+        } else {
+          toast.success("已發送確認！");
+        }
       } else {
         toast.success("已拒絕配對");
       }
 
-      window.location.reload();
+      setTimeout(() => { window.location.reload(); }, 1500);
     } catch (e) {
       console.error("[MatchingOptInPanel] submitMatchAction", e);
       toast.error("網路錯誤，請稍後再試。");
