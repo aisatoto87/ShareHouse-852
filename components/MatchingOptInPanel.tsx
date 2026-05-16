@@ -39,6 +39,7 @@ export default function MatchingOptInPanel({ viewerUserId, className }: Matching
   const [otherUserId, setOtherUserId] = useState<string | null>(null);
   const [otherLabel, setOtherLabel] = useState<string>("室友 —");
   const [tick, setTick] = useState(0);
+  const [actionLoading, setActionLoading] = useState<"accept" | "reject" | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -166,14 +167,52 @@ export default function MatchingOptInPanel({ viewerUserId, className }: Matching
     }
   }
 
+  async function submitMatchAction(action: "accept" | "reject") {
+    if (actionLoading) return;
+    if (!groupId) {
+      toast.error("找不到配對群組，請重新整理頁面。");
+      return;
+    }
+
+    setActionLoading(action);
+    try {
+      const response = await fetch("/api/match/action", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ groupId, action }),
+      });
+      const json = (await response.json().catch(() => ({}))) as {
+        ok?: boolean;
+        error?: string;
+        group_matched?: boolean;
+      };
+
+      if (!response.ok) {
+        toast.error(json.error ?? "操作失敗，請稍後再試。");
+        return;
+      }
+
+      if (action === "accept") {
+        toast.success(json.group_matched ? "全員確認！配對成功！" : "已發送確認！");
+      } else {
+        toast.success("已拒絕配對");
+      }
+
+      window.location.reload();
+    } catch (e) {
+      console.error("[MatchingOptInPanel] submitMatchAction", e);
+      toast.error("網路錯誤，請稍後再試。");
+    } finally {
+      setActionLoading(null);
+    }
+  }
+
   async function handleAccept() {
-    console.log("[MatchingOptInPanel] handleAccept", { groupId, viewerUserId, otherUserId });
-    toast.info("正在連接後端...");
+    await submitMatchAction("accept");
   }
 
   async function handleReject() {
-    console.log("[MatchingOptInPanel] handleReject", { groupId, viewerUserId, otherUserId });
-    toast.info("正在連接後端...");
+    await submitMatchAction("reject");
   }
 
   if (loading) {
@@ -226,18 +265,34 @@ export default function MatchingOptInPanel({ viewerUserId, className }: Matching
         <div className="flex flex-col gap-3 pt-1 sm:flex-row">
           <Button
             type="button"
+            disabled={actionLoading !== null}
             className="h-12 flex-1 bg-emerald-600 text-base font-semibold text-white hover:bg-emerald-700"
             onClick={() => void handleAccept()}
           >
-            ✅ 同意夾租
+            {actionLoading === "accept" ? (
+              <>
+                <Loader2 className="mr-2 size-4 animate-spin" aria-hidden />
+                處理中…
+              </>
+            ) : (
+              "✅ 同意夾租"
+            )}
           </Button>
           <Button
             type="button"
             variant="outline"
+            disabled={actionLoading !== null}
             className="h-12 flex-1 border-2 border-red-200 bg-white text-base font-semibold text-red-700 hover:bg-red-50"
             onClick={() => void handleReject()}
           >
-            ❌ 殘忍拒絕
+            {actionLoading === "reject" ? (
+              <>
+                <Loader2 className="mr-2 size-4 animate-spin" aria-hidden />
+                處理中…
+              </>
+            ) : (
+              "❌ 殘忍拒絕"
+            )}
           </Button>
         </div>
       </CardContent>

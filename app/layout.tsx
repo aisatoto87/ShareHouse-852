@@ -4,6 +4,7 @@ import FloatingContact from "@/components/FloatingContact";
 import RoleOnboardingGate from "@/components/RoleOnboardingGate";
 import { Toaster } from "@/components/ui/sonner";
 import "./globals.css";
+import OnboardingPrompt from "@/components/OnboardingPrompt";
 
 const notoSansHK = Noto_Sans_HK({
   subsets: ["latin"],
@@ -33,6 +34,7 @@ export default function RootLayout({
         {children}
         <FloatingContact />
         <Toaster richColors position="top-center" closeButton />
+        <OnboardingPrompt />
       </body>
     </html>
   );
