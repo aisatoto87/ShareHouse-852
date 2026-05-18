@@ -21,40 +21,16 @@ async function updateHousingIntentsStatusForUsers(
   status: IntentStatus,
   fromStatus: IntentStatus = "matching"
 ) {
-  if (userIds.length === 0) return;
+  if (!userIds || userIds.length === 0) return;
 
-  const { data: rows, error } = await admin
+  const { error } = await admin
     .from("housing_intents")
-    .select("intent_id, id, user_id, status")
+    .update({ status: status })
     .in("user_id", userIds)
     .eq("status", fromStatus);
 
   if (error) {
     throw new Error(error.message);
-  }
-
-  const intents = Array.isArray(rows) ? rows : [];
-  for (const raw of intents) {
-    const row = raw as Record<string, unknown>;
-    const intentId =
-      typeof row.intent_id === "string" && row.intent_id.trim() !== ""
-        ? row.intent_id.trim()
-        : typeof row.id === "string" && row.id.trim() !== ""
-          ? row.id.trim()
-          : null;
-    if (!intentId) continue;
-
-    const byIntentId = await admin
-      .from("housing_intents")
-      .update({ status })
-      .eq("intent_id", intentId)
-      .select("intent_id");
-    if (!byIntentId.error && byIntentId.data && byIntentId.data.length > 0) continue;
-
-    const byPk = await admin.from("housing_intents").update({ status }).eq("id", intentId).select("id");
-    if (byPk.error || !byPk.data?.length) {
-      throw new Error(byPk.error?.message ?? `更新意向 ${intentId} 失敗。`);
-    }
   }
 }
 

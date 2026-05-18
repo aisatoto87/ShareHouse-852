@@ -98,6 +98,12 @@ function intentStatusBadge(status: string): { className: string; label: string }
           "max-w-full whitespace-normal rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-left font-medium text-amber-900 shadow-sm",
         label: "🔥 撮合中 (已初步鎖定室友)",
       };
+    case "recruiting":
+      return {
+        className:
+          "max-w-full whitespace-normal rounded-lg border border-emerald-200 bg-gradient-to-r from-emerald-50 to-teal-50/90 px-3 py-1.5 text-left font-medium text-emerald-900 shadow-sm",
+        label: "🎉 招募中 (團隊持續尋找下一位室友)",
+      };
     case "matched":
       return {
         className:
@@ -886,7 +892,8 @@ export default function DashboardPageClient() {
                   </div>
                 ) : (
                   <>
-                    {intentRows.some((r) => r.status === "matching") && userId ? (
+                    {intentRows.some((r) => r.status === "matching" || r.status === "recruiting") &&
+                    userId ? (
                       <MatchingOptInPanel viewerUserId={userId} className="mb-6" />
                     ) : null}
                   <ul className="space-y-4">
