@@ -1,5 +1,4 @@
 import { NextResponse } from "next/server";
-import { ACTIVE_INTENT_CONFLICT_MESSAGE } from "@/lib/housing-intent-status";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
 type CreateIntentPayload = {
@@ -59,28 +58,22 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "請先登入。" }, { status: 401 });
     }
 
-    const { data: existingActive, error: activeCheckError } = await supabase
+    const { count: activeCount, error: activeCountError } = await supabase
       .from("housing_intents")
-      .select("intent_id, status")
+      .select("*", { count: "exact", head: true })
       .eq("user_id", user.id)
       .neq("status", "expired")
-      .neq("status", "cancelled")
-      .limit(1);
+      .neq("status", "cancelled");
 
-    if (activeCheckError) {
-      console.error("[api/housing-intents] active intent check", activeCheckError);
+    if (activeCountError) {
+      console.error("[api/housing-intents] active intent count", activeCountError);
       return NextResponse.json(
-        { error: activeCheckError.message || "查詢意向狀態失敗，請稍後再試。" },
+        { error: activeCountError.message || "查詢意向狀態失敗，請稍後再試。" },
         { status: 500 }
       );
     }
 
-    if (Array.isArray(existingActive) && existingActive.length > 0) {
-      return NextResponse.json(
-        { error: ACTIVE_INTENT_CONFLICT_MESSAGE, code: "active_intent_exists" },
-        { status: 409 }
-      );
-    }
+    const preferenceRank = (activeCount ?? 0) + 1;
 
     let targetPropertyId: string | null = null;
     let targetHeadcount = DEFAULT_TARGET_HEADCOUNT;
@@ -118,8 +111,9 @@ export async function POST(request: Request) {
         max_budget: Math.round(maxBudget),
         target_property_id: targetPropertyId,
         target_headcount: targetHeadcount,
+        preference_rank: preferenceRank,
       })
-      .select("intent_id")
+      .select("intent_id, preference_rank")
       .single();
 
     if (insertError) {
@@ -130,12 +124,17 @@ export async function POST(request: Request) {
       );
     }
 
-    const row = inserted as { intent_id?: string } | null;
+    const row = inserted as { intent_id?: string; preference_rank?: number } | null;
     const intentId = typeof row?.intent_id === "string" ? row.intent_id.trim() : "";
+    const insertedRank =
+      typeof row?.preference_rank === "number" && Number.isFinite(row.preference_rank)
+        ? row.preference_rank
+        : preferenceRank;
 
     return NextResponse.json({
       ok: true,
       intent_id: intentId || null,
+      preference_rank: insertedRank,
       target_property_id: targetPropertyId,
       target_headcount: targetHeadcount,
     });

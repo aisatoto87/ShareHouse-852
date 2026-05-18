@@ -14,7 +14,6 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { ACTIVE_INTENT_CONFLICT_MESSAGE } from "@/lib/housing-intent-status";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
 
@@ -25,8 +24,6 @@ type HousingIntentButtonProps = {
   defaultBudget: number;
   /** 樓盤詳情頁傳入時啟用 Property-First 配對 */
   propertyId?: string;
-  /** 由 Server Component 預查：用戶是否已有活躍意向 */
-  hasActiveIntent?: boolean;
   className?: string;
 };
 
@@ -34,7 +31,6 @@ export default function HousingIntentButton({
   defaultDistrict,
   defaultBudget,
   propertyId,
-  hasActiveIntent = false,
   className,
 }: HousingIntentButtonProps) {
   const router = useRouter();
@@ -85,8 +81,6 @@ export default function HousingIntentButton({
   }, [isIntentModalOpen, defaultDistrict, defaultBudget]);
 
   async function handleOpenIntent() {
-    if (hasActiveIntent) return;
-
     const {
       data: { user },
       error: authError,
@@ -153,15 +147,13 @@ export default function HousingIntentButton({
       });
       const json = (await response.json().catch(() => ({}))) as {
         intent_id?: string | null;
+        preference_rank?: number;
         error?: string;
       };
 
       if (!response.ok) {
         console.error("[housing_intents] API", response.status, json);
-        toast.error(
-          json.error ||
-            (response.status === 409 ? ACTIVE_INTENT_CONFLICT_MESSAGE : "提交失敗，請稍後再試。")
-        );
+        toast.error(json.error || "提交失敗，請稍後再試。");
         if (response.status === 401) {
           setIsIntentModalOpen(false);
           router.push("/login");
@@ -173,7 +165,11 @@ export default function HousingIntentButton({
         typeof json.intent_id === "string" ? json.intent_id.trim() : "";
 
       setIsIntentModalOpen(false);
-      toast.success("成功加入意向池！正在啟動 AI 尋找同區室友 🧠...");
+      const rankLabel =
+        typeof json.preference_rank === "number" && json.preference_rank > 0
+          ? `（第 ${json.preference_rank} 志願）`
+          : "";
+      toast.success(`成功加入意向池${rankLabel}！正在啟動 AI 尋找同區室友 🧠...`);
       router.refresh();
 
       if (newIntentId) {
@@ -198,14 +194,10 @@ export default function HousingIntentButton({
     <>
       <Button
         type="button"
-        disabled={hasActiveIntent}
         onClick={() => void handleOpenIntent()}
-        className={cn(
-          className,
-          hasActiveIntent && "cursor-not-allowed opacity-60 hover:bg-[#0f2540]"
-        )}
+        className={cn(className)}
       >
-        {hasActiveIntent ? "您已有進行中的配對" : "✨ 加入心水排隊區"}
+        ✨ 加入心水排隊區
       </Button>
 
       <Dialog open={isIntentModalOpen} onOpenChange={setIsIntentModalOpen}>

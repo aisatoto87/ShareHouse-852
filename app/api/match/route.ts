@@ -9,6 +9,7 @@ import {
   resolveTargetHeadcount,
   type UserHabits,
 } from "@/lib/matchingAlgorithm";
+import { GLOBAL_FROZEN_INTENT_STATUSES } from "@/lib/housing-intent-status";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
 export const runtime = "nodejs";
@@ -22,6 +23,24 @@ type MatchRequestBody = {
 type AdminClient = ReturnType<typeof createSupabaseAdminClient>;
 
 const OPT_IN_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+async function fetchGloballyFrozenUserIds(admin: AdminClient): Promise<Set<string>> {
+  const { data, error } = await admin
+    .from("housing_intents")
+    .select("user_id")
+    .in("status", [...GLOBAL_FROZEN_INTENT_STATUSES]);
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  const ids = new Set<string>();
+  for (const row of data ?? []) {
+    const uid = (row as { user_id?: unknown }).user_id;
+    if (typeof uid === "string" && uid.trim() !== "") ids.add(uid.trim());
+  }
+  return ids;
+}
 
 function resolveIntentId(row: Record<string, unknown>): string | null {
   if (typeof row.intent_id === "string" && row.intent_id.trim() !== "") {
@@ -392,6 +411,26 @@ export async function POST(request: Request) {
       );
     }
 
+    let globallyFrozenUserIds: Set<string>;
+    try {
+      globallyFrozenUserIds = await fetchGloballyFrozenUserIds(admin);
+    } catch (e) {
+      console.error("[api/match] globally frozen user ids query", e);
+      return NextResponse.json(
+        { error: e instanceof Error ? e.message : "查詢全局凍結狀態失敗。" },
+        { status: 500 }
+      );
+    }
+
+    if (globallyFrozenUserIds.has(user_id)) {
+      console.log("[api/match] initiator globally frozen, skipping match", { user_id, intent_id });
+      return NextResponse.json({
+        matched: false,
+        globally_frozen: true,
+        message: "User is globally frozen, skipping match",
+      });
+    }
+
     const ownBudget = parseMaxBudget(ownIntent.max_budget);
     if (ownBudget == null) {
       return NextResponse.json({ error: "發起人意向缺少有效最高預算。" }, { status: 422 });
@@ -453,11 +492,19 @@ export async function POST(request: Request) {
     }
 
     // —— 階段二：尋找 waiting 候選人並建立新群組 ——
+    const frozenUserIdsList = [...globallyFrozenUserIds];
+    const frozenFilter =
+      frozenUserIdsList.length > 0 ? `(${frozenUserIdsList.join(",")})` : null;
+
     let candidatesQuery = admin
       .from("housing_intents")
       .select("*")
       .eq("status", "waiting")
       .neq("user_id", user_id);
+
+    if (frozenFilter) {
+      candidatesQuery = candidatesQuery.not("user_id", "in", frozenFilter);
+    }
 
     if (ownPropertyId) {
       candidatesQuery = candidatesQuery.eq("target_property_id", ownPropertyId);

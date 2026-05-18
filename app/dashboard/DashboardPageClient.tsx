@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState, type ChangeEvent } from "react";
-import { BadgeCheck, Loader2, Save, UserRound } from "lucide-react";
+import { BadgeCheck, ChevronDown, ChevronUp, Loader2, Save, UserRound } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
@@ -29,6 +29,7 @@ import {
   inferSalutationMode,
   inferZhSuffix,
 } from "@/lib/profile-display-name";
+import { isUserGloballyFrozenFromIntents } from "@/lib/housing-intent-status";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
 
@@ -53,6 +54,8 @@ type HousingIntentRow = {
   /** v3.0 意向主鍵（housing_intents.intent_id；若 API 仍回傳 id 則於 map 內對齊） */
   intent_id: string;
   status: string;
+  /** JUPAS 風格志願序（1 起算）；舊資料可能為 null */
+  preference_rank: number | null;
   target_district: string;
   max_budget: number;
   created_at: string;
@@ -103,9 +106,18 @@ function mapHousingIntentRows(rows: unknown[] | null): HousingIntentRow[] {
     const created_at = typeof r.created_at === "string" ? r.created_at : "";
     const { id: target_property_id, title: target_property_title } =
       resolveTargetPropertyFromRow(r);
+    const rawRank = r.preference_rank;
+    let preference_rank: number | null = null;
+    if (typeof rawRank === "number" && Number.isFinite(rawRank) && rawRank > 0) {
+      preference_rank = Math.round(rawRank);
+    } else if (typeof rawRank === "string" && rawRank.trim() !== "") {
+      const n = Number(rawRank);
+      if (Number.isFinite(n) && n > 0) preference_rank = Math.round(n);
+    }
     return {
       intent_id,
       status,
+      preference_rank,
       target_district,
       max_budget,
       created_at,
@@ -115,7 +127,30 @@ function mapHousingIntentRows(rows: unknown[] | null): HousingIntentRow[] {
   });
 }
 
-function intentStatusBadge(status: string): { className: string; label: string } {
+function sortIntentsByPreferenceRank(rows: HousingIntentRow[]): HousingIntentRow[] {
+  return [...rows].sort((a, b) => {
+    const rankA = a.preference_rank;
+    const rankB = b.preference_rank;
+    const hasA = rankA != null && rankA > 0;
+    const hasB = rankB != null && rankB > 0;
+    if (hasA && hasB && rankA !== rankB) return rankA - rankB;
+    if (hasA !== hasB) return hasA ? -1 : 1;
+    return b.created_at.localeCompare(a.created_at);
+  });
+}
+
+function intentStatusBadge(
+  status: string,
+  options?: { isGloballyFrozen?: boolean }
+): { className: string; label: string } {
+  if (status === "waiting" && options?.isGloballyFrozen) {
+    return {
+      className:
+        "max-w-full whitespace-normal rounded-lg border border-zinc-300 bg-zinc-100 px-3 py-1.5 text-left font-medium text-zinc-600 shadow-sm",
+      label: "⏸️ 暫停排隊 (您有另一個意向正在處理中)",
+    };
+  }
+
   switch (status) {
     case "waiting":
       return {
@@ -187,6 +222,17 @@ export default function DashboardPageClient() {
   const [intentRows, setIntentRows] = useState<HousingIntentRow[]>([]);
   const [intentsLoading, setIntentsLoading] = useState(false);
   const [cancellingId, setCancellingId] = useState<string | null>(null);
+  const [reordering, setReordering] = useState(false);
+
+  const isGloballyFrozen = useMemo(
+    () => isUserGloballyFrozenFromIntents(intentRows),
+    [intentRows]
+  );
+
+  const sortedIntentRows = useMemo(
+    () => sortIntentsByPreferenceRank(intentRows),
+    [intentRows]
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -362,7 +408,7 @@ export default function DashboardPageClient() {
       const { data, error } = await supabase
         .from("housing_intents")
         .select(
-          "intent_id, status, target_district, max_budget, created_at, target_property_id, properties:target_property_id(id, title)"
+          "intent_id, status, preference_rank, target_district, max_budget, created_at, target_property_id, properties:target_property_id(id, title)"
         )
         .eq("user_id", userId)
         .order("created_at", { ascending: false });
@@ -374,7 +420,9 @@ export default function DashboardPageClient() {
         return;
       }
 
-      setIntentRows(mapHousingIntentRows((data ?? []) as unknown[]));
+      setIntentRows(
+        sortIntentsByPreferenceRank(mapHousingIntentRows((data ?? []) as unknown[]))
+      );
     } finally {
       setIntentsLoading(false);
     }
@@ -384,6 +432,33 @@ export default function DashboardPageClient() {
     if (activeTab !== "intents" || !userId) return;
     void loadHousingIntents();
   }, [activeTab, userId, loadHousingIntents]);
+
+  const handleSwapPreferenceRank = async (intentIdA: string, intentIdB: string) => {
+    if (!userId || reordering || isGloballyFrozen) return;
+    setReordering(true);
+    try {
+      const response = await fetch("/api/housing-intents/reorder", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ intent_id_a: intentIdA, intent_id_b: intentIdB }),
+      });
+      const json = (await response.json().catch(() => ({}))) as { error?: string };
+
+      if (!response.ok) {
+        toast.error(json.error || "更改志願次序失敗，請稍後再試。");
+        return;
+      }
+
+      await loadHousingIntents();
+      router.refresh();
+      toast.success("志願次序已更新。");
+    } catch (e) {
+      console.error("[dashboard] handleSwapPreferenceRank", e);
+      toast.error("更改志願次序時發生錯誤，請稍後再試。");
+    } finally {
+      setReordering(false);
+    }
+  };
 
   const handleCancelWaiting = async (intentId: string) => {
     if (!userId || cancellingId) return;
@@ -932,26 +1007,113 @@ export default function DashboardPageClient() {
                       <MatchingOptInPanel viewerUserId={userId} className="mb-6" />
                     ) : null}
                   <ul className="space-y-4">
-                    {intentRows.map((row) => {
-                      const badge = intentStatusBadge(row.status);
+                    {sortedIntentRows.map((row, index) => {
+                      const isWaitingFrozen =
+                        row.status === "waiting" && isGloballyFrozen;
+                      const badge = intentStatusBadge(row.status, {
+                        isGloballyFrozen,
+                      });
                       const budgetLabel = new Intl.NumberFormat("zh-HK").format(row.max_budget);
                       const isPropertyFirst = row.target_property_id != null;
                       const propertyLinkLabel =
                         row.target_property_title?.trim() || "查看樓盤詳情";
+                      const reorderDisabled = isGloballyFrozen || reordering;
+                      const neighborUp = index > 0 ? sortedIntentRows[index - 1] : null;
+                      const neighborDown =
+                        index < sortedIntentRows.length - 1
+                          ? sortedIntentRows[index + 1]
+                          : null;
+                      const canMoveUp =
+                        index > 0 &&
+                        neighborUp != null &&
+                        neighborUp.preference_rank != null &&
+                        neighborUp.preference_rank > 0 &&
+                        row.preference_rank != null &&
+                        row.preference_rank > 0;
+                      const canMoveDown =
+                        index < sortedIntentRows.length - 1 &&
+                        neighborDown != null &&
+                        neighborDown.preference_rank != null &&
+                        neighborDown.preference_rank > 0 &&
+                        row.preference_rank != null &&
+                        row.preference_rank > 0;
                       return (
                         <li key={row.intent_id}>
-                          <Card className="overflow-hidden border-zinc-200 shadow-sm transition-shadow hover:shadow-md">
+                          <Card
+                            className={cn(
+                              "overflow-hidden border-zinc-200 shadow-sm transition-shadow hover:shadow-md",
+                              isWaitingFrozen && "opacity-60 grayscale"
+                            )}
+                          >
                             <CardContent className="p-5">
                               <div className="flex flex-wrap items-start justify-between gap-3">
                                 <div className="min-w-0 flex-1 space-y-3">
                                   <Badge variant="secondary" className={cn(badge.className)}>
                                     {badge.label}
                                   </Badge>
-                                  <h3 className="text-lg font-semibold text-zinc-900">
-                                    {isPropertyFirst
-                                      ? "🏠 指定樓盤排隊 · 尋找神仙室友"
-                                      : "🎯 尋找神仙室友與租盤"}
-                                  </h3>
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <h3 className="text-lg font-semibold text-zinc-900">
+                                      {isPropertyFirst
+                                        ? "🏠 指定樓盤排隊 · 尋找神仙室友"
+                                        : "🎯 尋找神仙室友與租盤"}
+                                    </h3>
+                                    {row.preference_rank != null && row.preference_rank > 0 ? (
+                                      <div className="flex flex-wrap items-center gap-1">
+                                        <Badge
+                                          variant="outline"
+                                          className="shrink-0 border-violet-400 bg-violet-50 px-2.5 py-0.5 text-sm font-bold tracking-tight text-violet-900 shadow-sm"
+                                        >
+                                          第 {row.preference_rank} 志願
+                                        </Badge>
+                                        <div className="flex items-center gap-0.5">
+                                          <Button
+                                            type="button"
+                                            variant="outline"
+                                            size="icon"
+                                            className="h-8 w-8 shrink-0 border-zinc-200"
+                                            disabled={reorderDisabled || !canMoveUp}
+                                            aria-label="上移志願"
+                                            title={
+                                              isGloballyFrozen
+                                                ? "配對處理中，暫不可調整志願次序"
+                                                : "上移志願"
+                                            }
+                                            onClick={() => {
+                                              if (!neighborUp || !canMoveUp) return;
+                                              void handleSwapPreferenceRank(
+                                                row.intent_id,
+                                                neighborUp.intent_id
+                                              );
+                                            }}
+                                          >
+                                            <ChevronUp className="h-4 w-4" aria-hidden />
+                                          </Button>
+                                          <Button
+                                            type="button"
+                                            variant="outline"
+                                            size="icon"
+                                            className="h-8 w-8 shrink-0 border-zinc-200"
+                                            disabled={reorderDisabled || !canMoveDown}
+                                            aria-label="下移志願"
+                                            title={
+                                              isGloballyFrozen
+                                                ? "配對處理中，暫不可調整志願次序"
+                                                : "下移志願"
+                                            }
+                                            onClick={() => {
+                                              if (!neighborDown || !canMoveDown) return;
+                                              void handleSwapPreferenceRank(
+                                                row.intent_id,
+                                                neighborDown.intent_id
+                                              );
+                                            }}
+                                          >
+                                            <ChevronDown className="h-4 w-4" aria-hidden />
+                                          </Button>
+                                        </div>
+                                      </div>
+                                    ) : null}
+                                  </div>
                                   {isPropertyFirst ? (
                                     <dl className="grid gap-3 text-sm text-zinc-600">
                                       <div>
