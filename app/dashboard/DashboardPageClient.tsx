@@ -56,7 +56,28 @@ type HousingIntentRow = {
   target_district: string;
   max_budget: number;
   created_at: string;
+  target_property_id: string | null;
+  target_property_title: string | null;
 };
+
+function resolveTargetPropertyFromRow(
+  r: Record<string, unknown>
+): { id: string | null; title: string | null } {
+  const rawId = r.target_property_id;
+  const id =
+    typeof rawId === "string" && rawId.trim() !== "" ? rawId.trim() : null;
+  if (!id) return { id: null, title: null };
+
+  const embedded = r.properties;
+  if (embedded && typeof embedded === "object" && !Array.isArray(embedded)) {
+    const p = embedded as Record<string, unknown>;
+    const title =
+      typeof p.title === "string" && p.title.trim() !== "" ? p.title.trim() : null;
+    return { id, title };
+  }
+
+  return { id, title: null };
+}
 
 function mapHousingIntentRows(rows: unknown[] | null): HousingIntentRow[] {
   if (!Array.isArray(rows)) return [];
@@ -80,7 +101,17 @@ function mapHousingIntentRows(rows: unknown[] | null): HousingIntentRow[] {
         ? rawBudget
         : Number(rawBudget) || 0;
     const created_at = typeof r.created_at === "string" ? r.created_at : "";
-    return { intent_id, status, target_district, max_budget, created_at };
+    const { id: target_property_id, title: target_property_title } =
+      resolveTargetPropertyFromRow(r);
+    return {
+      intent_id,
+      status,
+      target_district,
+      max_budget,
+      created_at,
+      target_property_id,
+      target_property_title,
+    };
   });
 }
 
@@ -330,7 +361,9 @@ export default function DashboardPageClient() {
     try {
       const { data, error } = await supabase
         .from("housing_intents")
-        .select("*")
+        .select(
+          "intent_id, status, target_district, max_budget, created_at, target_property_id, properties:target_property_id(id, title)"
+        )
         .eq("user_id", userId)
         .order("created_at", { ascending: false });
 
@@ -870,7 +903,9 @@ export default function DashboardPageClient() {
             <>
               <div className="flex flex-col space-y-1.5 p-6">
                 <h2 className="text-2xl font-semibold leading-none tracking-tight">🎯 我的租屋意向</h2>
-                <p className="text-sm text-zinc-500">查看你在意向池中的配對狀態與預算／區域設定。</p>
+                <p className="text-sm text-zinc-500">
+                  查看你在意向池中的配對狀態、指定樓盤或區域，以及預算設定。
+                </p>
               </div>
               <div className="space-y-6 p-6 pt-0">
                 {!userId || intentsLoading ? (
@@ -900,6 +935,9 @@ export default function DashboardPageClient() {
                     {intentRows.map((row) => {
                       const badge = intentStatusBadge(row.status);
                       const budgetLabel = new Intl.NumberFormat("zh-HK").format(row.max_budget);
+                      const isPropertyFirst = row.target_property_id != null;
+                      const propertyLinkLabel =
+                        row.target_property_title?.trim() || "查看樓盤詳情";
                       return (
                         <li key={row.intent_id}>
                           <Card className="overflow-hidden border-zinc-200 shadow-sm transition-shadow hover:shadow-md">
@@ -910,23 +948,54 @@ export default function DashboardPageClient() {
                                     {badge.label}
                                   </Badge>
                                   <h3 className="text-lg font-semibold text-zinc-900">
-                                    🎯 尋找神仙室友與租盤
+                                    {isPropertyFirst
+                                      ? "🏠 指定樓盤排隊 · 尋找神仙室友"
+                                      : "🎯 尋找神仙室友與租盤"}
                                   </h3>
-                                  <dl className="grid gap-2 text-sm text-zinc-600 sm:grid-cols-2">
-                                    <div>
-                                      <dt className="font-medium text-zinc-500">目標區域</dt>
-                                      <dd className="mt-0.5 text-base font-semibold text-zinc-900">
-                                        {row.target_district}
-                                      </dd>
-                                    </div>
-                                    <div>
-                                      <dt className="font-medium text-zinc-500">最高預算</dt>
-                                      <dd className="mt-0.5 text-base font-semibold text-[#0f2540]">
-                                        HK$ {budgetLabel}
-                                        <span className="text-sm font-normal text-zinc-500"> / 月</span>
-                                      </dd>
-                                    </div>
-                                  </dl>
+                                  {isPropertyFirst ? (
+                                    <dl className="grid gap-3 text-sm text-zinc-600">
+                                      <div>
+                                        <dt className="font-medium text-zinc-500">指定樓盤</dt>
+                                        <dd className="mt-0.5 text-base font-semibold">
+                                          <Link
+                                            href={`/property/${row.target_property_id}`}
+                                            className="text-[#0f2540] underline-offset-2 hover:text-[#1a3a5c] hover:underline"
+                                          >
+                                            {propertyLinkLabel}
+                                          </Link>
+                                        </dd>
+                                      </div>
+                                      <div>
+                                        <dt className="font-medium text-zinc-500">最高預算</dt>
+                                        <dd className="mt-0.5 text-base font-semibold text-[#0f2540]">
+                                          HK$ {budgetLabel}
+                                          <span className="text-sm font-normal text-zinc-500"> / 月</span>
+                                        </dd>
+                                      </div>
+                                      <div>
+                                        <dt className="text-xs font-medium text-zinc-400">目標區域</dt>
+                                        <dd className="mt-0.5 text-sm text-zinc-600">
+                                          {row.target_district}
+                                        </dd>
+                                      </div>
+                                    </dl>
+                                  ) : (
+                                    <dl className="grid gap-2 text-sm text-zinc-600 sm:grid-cols-2">
+                                      <div>
+                                        <dt className="font-medium text-zinc-500">目標區域</dt>
+                                        <dd className="mt-0.5 text-base font-semibold text-zinc-900">
+                                          {row.target_district}
+                                        </dd>
+                                      </div>
+                                      <div>
+                                        <dt className="font-medium text-zinc-500">最高預算</dt>
+                                        <dd className="mt-0.5 text-base font-semibold text-[#0f2540]">
+                                          HK$ {budgetLabel}
+                                          <span className="text-sm font-normal text-zinc-500"> / 月</span>
+                                        </dd>
+                                      </div>
+                                    </dl>
+                                  )}
                                 </div>
                                 {row.status === "waiting" ? (
                                   <Button

@@ -130,6 +130,28 @@ export default async function PropertyDetailPage({ params }: PageProps) {
 
   const property = mapRowToProperty(row as Record<string, unknown>);
   if (!property) notFound();
+
+  const {
+    data: { user: currentUser },
+  } = await supabase.auth.getUser();
+
+  let hasActiveIntent = false;
+  if (currentUser?.id) {
+    const { data: activeIntentRows, error: activeIntentError } = await supabase
+      .from("housing_intents")
+      .select("intent_id")
+      .eq("user_id", currentUser.id)
+      .neq("status", "expired")
+      .neq("status", "cancelled")
+      .limit(1);
+
+    if (activeIntentError) {
+      console.error("[property detail] active housing_intents check", activeIntentError);
+    } else {
+      hasActiveIntent = Array.isArray(activeIntentRows) && activeIntentRows.length > 0;
+    }
+  }
+
   const rowRec = row as Record<string, unknown>;
   const ownerId =
     (typeof rowRec.owner_id === "string" && rowRec.owner_id.trim() !== "" ? rowRec.owner_id : null) ??
@@ -384,6 +406,8 @@ export default async function PropertyDetailPage({ params }: PageProps) {
                 WhatsApp 聯絡業主
               </a>
               <HousingIntentButton
+                propertyId={property.id}
+                hasActiveIntent={hasActiveIntent}
                 defaultDistrict={intentDefaultDistrict}
                 defaultBudget={intentDefaultBudget}
                 className="mt-3 h-auto min-h-11 w-full whitespace-normal rounded-lg bg-[#0f2540] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#1a3a5c]"

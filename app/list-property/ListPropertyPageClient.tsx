@@ -160,6 +160,7 @@ export default function ListPropertyPageClient() {
       gallery: galleryUploads,
       owner_id: ownerUserId,
       room_count: data.room_count,
+      max_tenants: data.max_tenants,
       pricing_mode: data.pricing_mode,
       room_prices: data.pricing_mode === "custom" ? data.room_prices : {},
     };
