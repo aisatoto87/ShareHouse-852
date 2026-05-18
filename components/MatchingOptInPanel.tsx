@@ -13,6 +13,14 @@ type MatchingOptInPanelProps = {
   className?: string;
 };
 
+type PanelMode = "pending_opt_in" | "recruiting";
+
+function parseGroupSize(value: unknown): number {
+  const n = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(n) || n < 0) return 0;
+  return Math.round(n);
+}
+
 function formatHhMmSs(totalSeconds: number): string {
   const s = Math.max(0, Math.floor(totalSeconds));
   const h = Math.floor(s / 3600);
@@ -34,8 +42,11 @@ export default function MatchingOptInPanel({ viewerUserId, className }: Matching
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
+  const [panelMode, setPanelMode] = useState<PanelMode | null>(null);
   const [groupId, setGroupId] = useState<string | null>(null);
   const [expiresAt, setExpiresAt] = useState<string | null>(null);
+  const [currentSize, setCurrentSize] = useState(0);
+  const [targetSize, setTargetSize] = useState(0);
   const [otherUserId, setOtherUserId] = useState<string | null>(null);
   const [otherLabel, setOtherLabel] = useState<string>("室友 —");
   const [tick, setTick] = useState(0);
@@ -44,9 +55,44 @@ export default function MatchingOptInPanel({ viewerUserId, className }: Matching
   useEffect(() => {
     let cancelled = false;
 
+    async function loadOtherMemberLabel(gid: string) {
+      const { data: otherRows, error: oErr } = await supabase
+        .from("group_members")
+        .select("user_id")
+        .eq("group_id", gid)
+        .neq("user_id", viewerUserId)
+        .limit(1);
+
+      if (cancelled) return;
+      if (oErr) {
+        console.error("[MatchingOptInPanel] other member", oErr);
+        return;
+      }
+
+      const other = otherRows?.[0] as { user_id?: string } | undefined;
+      const oid = typeof other?.user_id === "string" ? other.user_id : null;
+      setOtherUserId(oid);
+
+      if (!oid) {
+        setOtherLabel("室友 —");
+        return;
+      }
+
+      const { data: prof } = await supabase
+        .from("profiles")
+        .select("nickname, display_name")
+        .eq("id", oid)
+        .maybeSingle();
+
+      if (!cancelled) {
+        setOtherLabel(roommateLabel(oid, prof as { nickname?: string | null; display_name?: string | null }));
+      }
+    }
+
     async function load() {
       setLoading(true);
       setFetchError(null);
+      setPanelMode(null);
       try {
         const { data: myRows, error: gmErr } = await supabase
           .from("group_members")
@@ -61,7 +107,13 @@ export default function MatchingOptInPanel({ viewerUserId, className }: Matching
           return;
         }
 
-        const groupIds = [...new Set((myRows ?? []).map((r) => String((r as { group_id?: unknown }).group_id ?? "")).filter(Boolean))];
+        const groupIds = [
+          ...new Set(
+            (myRows ?? [])
+              .map((r) => String((r as { group_id?: unknown }).group_id ?? ""))
+              .filter(Boolean)
+          ),
+        ];
         if (groupIds.length === 0) {
           setFetchError("找不到群組成員紀錄。");
           setLoading(false);
@@ -70,11 +122,9 @@ export default function MatchingOptInPanel({ viewerUserId, className }: Matching
 
         const { data: groups, error: mgErr } = await supabase
           .from("match_groups")
-          .select('group_id, expires_at, status')
-          .in('group_id', groupIds)
-          .eq("status", "pending_opt_in")
-          .order("expires_at", { ascending: true })
-          .limit(1);
+          .select("group_id, expires_at, status, current_size, target_size")
+          .in("group_id", groupIds)
+          .in("status", ["pending_opt_in", "recruiting"]);
 
         if (cancelled) return;
         if (mgErr) {
@@ -84,51 +134,28 @@ export default function MatchingOptInPanel({ viewerUserId, className }: Matching
           return;
         }
 
-        console.log("🔍 照妖鏡 groups:", groups, "mgErr:", mgErr);
-        
-        const g = Array.isArray(groups) && groups[0] ? (groups[0] as Record<string, unknown>) : null;
+        const rows = Array.isArray(groups) ? (groups as Record<string, unknown>[]) : [];
+        const pending = rows.find((r) => String(r.status ?? "") === "pending_opt_in");
+        const recruiting = rows.find((r) => String(r.status ?? "") === "recruiting");
+        const g = pending ?? recruiting ?? null;
+
         if (!g?.group_id) {
-          setFetchError("目前沒有待確認的配對群組（或狀態已變更）。請重新整理。");
+          setFetchError("目前沒有待確認或招募中的配對群組。請重新整理頁面。");
           setLoading(false);
           return;
         }
 
+        const status = String(g.status ?? "");
         const gid = String(g.group_id);
-        const exp = typeof g.expires_at === "string" ? g.expires_at : null;
+        const mode: PanelMode = status === "recruiting" ? "recruiting" : "pending_opt_in";
+
+        setPanelMode(mode);
         setGroupId(gid);
-        setExpiresAt(exp);
+        setExpiresAt(typeof g.expires_at === "string" ? g.expires_at : null);
+        setCurrentSize(parseGroupSize(g.current_size));
+        setTargetSize(Math.max(parseGroupSize(g.target_size), 1));
 
-        const { data: otherRows, error: oErr } = await supabase
-          .from("group_members")
-          .select("user_id")
-          .eq("group_id", gid)
-          .neq("user_id", viewerUserId)
-          .limit(1);
-
-        if (cancelled) return;
-        if (oErr) {
-          console.error("[MatchingOptInPanel] other member", oErr);
-          setFetchError(oErr.message);
-          setLoading(false);
-          return;
-        }
-
-        const other = otherRows?.[0] as { user_id?: string } | undefined;
-        const oid = typeof other?.user_id === "string" ? other.user_id : null;
-        setOtherUserId(oid);
-
-        if (oid) {
-          const { data: prof } = await supabase
-            .from("profiles")
-            .select("nickname, display_name")
-            .eq("id", oid)
-            .maybeSingle();
-          if (!cancelled) {
-            setOtherLabel(roommateLabel(oid, prof as { nickname?: string | null; display_name?: string | null }));
-          }
-        } else {
-          setOtherLabel("室友 —");
-        }
+        await loadOtherMemberLabel(gid);
       } catch (e) {
         console.error("[MatchingOptInPanel] load", e);
         if (!cancelled) setFetchError("讀取配對資料時發生錯誤。");
@@ -144,14 +171,14 @@ export default function MatchingOptInPanel({ viewerUserId, className }: Matching
   }, [supabase, viewerUserId]);
 
   useEffect(() => {
-    if (!expiresAt) return;
+    if (!expiresAt || panelMode !== "pending_opt_in") return;
     const id = window.setInterval(() => setTick((t) => t + 1), 1000);
     return () => window.clearInterval(id);
-  }, [expiresAt]);
+  }, [expiresAt, panelMode]);
 
   let countdownLine = "剩餘確認時間：—（尚無到期時間）";
   let countdownExpired = false;
-  if (expiresAt) {
+  if (expiresAt && panelMode === "pending_opt_in") {
     void tick;
     const end = new Date(expiresAt).getTime();
     if (!Number.isNaN(end)) {
@@ -166,6 +193,9 @@ export default function MatchingOptInPanel({ viewerUserId, className }: Matching
       countdownLine = "剩餘確認時間：—";
     }
   }
+
+  const recruitingProgressPercent =
+    targetSize > 0 ? Math.min(100, Math.round((currentSize / targetSize) * 100)) : 0;
 
   async function submitMatchAction(action: "accept" | "reject") {
     if (actionLoading) return;
@@ -205,7 +235,9 @@ export default function MatchingOptInPanel({ viewerUserId, className }: Matching
         toast.success("已拒絕配對");
       }
 
-      setTimeout(() => { window.location.reload(); }, 1500);
+      setTimeout(() => {
+        window.location.reload();
+      }, 1500);
     } catch (e) {
       console.error("[MatchingOptInPanel] submitMatchAction", e);
       toast.error("網路錯誤，請稍後再試。");
@@ -227,7 +259,7 @@ export default function MatchingOptInPanel({ viewerUserId, className }: Matching
       <Card className={cn("border-amber-200 bg-amber-50/40 shadow-sm", className)}>
         <CardContent className="flex items-center gap-2 py-6 text-amber-900">
           <Loader2 className="size-5 animate-spin shrink-0" aria-hidden />
-          <span className="text-sm font-medium">載入限時確認資料中…</span>
+          <span className="text-sm font-medium">載入配對狀態中…</span>
         </CardContent>
       </Card>
     );
@@ -237,6 +269,59 @@ export default function MatchingOptInPanel({ viewerUserId, className }: Matching
     return (
       <Card className={cn("border-zinc-200 bg-zinc-50 shadow-sm", className)}>
         <CardContent className="py-4 text-sm text-zinc-600">{fetchError}</CardContent>
+      </Card>
+    );
+  }
+
+  if (panelMode === "recruiting") {
+    return (
+      <Card
+        className={cn(
+          "overflow-hidden border-2 border-emerald-300/80 bg-gradient-to-br from-emerald-50 via-white to-teal-50/90 shadow-md",
+          className
+        )}
+      >
+        <CardContent className="space-y-5 p-5 sm:p-6">
+          <div className="space-y-2">
+            <h3 className="text-lg font-bold tracking-tight text-zinc-900 sm:text-xl">
+              🎉 招募中！您已初步結盟神仙室友！
+            </h3>
+            <p className="text-sm leading-relaxed text-zinc-600">
+              系統正在為您的團隊尋找下一位完美室友，請耐心等候...
+            </p>
+          </div>
+
+          {otherUserId ? (
+            <p className="text-sm text-zinc-700">
+              已結盟室友：<span className="font-semibold text-[#0f2540]">{otherLabel}</span>
+            </p>
+          ) : null}
+
+          <div className="space-y-2.5 rounded-xl border border-emerald-200/80 bg-white/70 p-4 shadow-sm">
+            <div className="flex items-center justify-between gap-3 text-sm">
+              <span className="font-semibold text-emerald-900">
+                進度：{currentSize} / {targetSize} 人
+              </span>
+              <span className="tabular-nums font-medium text-emerald-700">{recruitingProgressPercent}%</span>
+            </div>
+            <div
+              className="h-3 overflow-hidden rounded-full bg-emerald-100"
+              role="progressbar"
+              aria-valuenow={currentSize}
+              aria-valuemin={0}
+              aria-valuemax={targetSize}
+              aria-label={`招募進度 ${currentSize} / ${targetSize} 人`}
+            >
+              <div
+                className="h-full rounded-full bg-gradient-to-r from-emerald-500 via-emerald-600 to-teal-500 transition-all duration-500 ease-out"
+                style={{ width: `${recruitingProgressPercent}%` }}
+              />
+            </div>
+            <p className="text-xs text-zinc-500">
+              人數齊全後，系統將自動完成配對並通知您。
+            </p>
+          </div>
+        </CardContent>
       </Card>
     );
   }
