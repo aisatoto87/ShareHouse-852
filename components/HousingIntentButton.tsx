@@ -14,19 +14,27 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { ACTIVE_INTENT_CONFLICT_MESSAGE } from "@/lib/housing-intent-status";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
+import { cn } from "@/lib/utils";
 
 type HousingIntentButtonProps = {
   /** 預填目標區域（例如租盤次區域） */
   defaultDistrict: string;
   /** 預填最高預算（已含 buffer 可由父層計算） */
   defaultBudget: number;
+  /** 樓盤詳情頁傳入時啟用 Property-First 配對 */
+  propertyId?: string;
+  /** 由 Server Component 預查：用戶是否已有活躍意向 */
+  hasActiveIntent?: boolean;
   className?: string;
 };
 
 export default function HousingIntentButton({
   defaultDistrict,
   defaultBudget,
+  propertyId,
+  hasActiveIntent = false,
   className,
 }: HousingIntentButtonProps) {
   const router = useRouter();
@@ -77,6 +85,8 @@ export default function HousingIntentButton({
   }, [isIntentModalOpen, defaultDistrict, defaultBudget]);
 
   async function handleOpenIntent() {
+    if (hasActiveIntent) return;
+
     const {
       data: { user },
       error: authError,
@@ -124,24 +134,43 @@ export default function HousingIntentButton({
 
     setSubmitting(true);
     try {
-      const { data: inserted, error } = await supabase
-        .from("housing_intents")
-        .insert({
-          user_id: user.id,
-          target_district: trimmedDistrict,
-          max_budget: budgetNum,
-        })
-        .select("intent_id")
-        .single();
+      const requestBody: {
+        target_district: string;
+        max_budget: number;
+        property_id?: string;
+      } = {
+        target_district: trimmedDistrict,
+        max_budget: budgetNum,
+      };
+      if (propertyId?.trim()) {
+        requestBody.property_id = propertyId.trim();
+      }
 
-      if (error) {
-        console.error("[housing_intents] insert", error);
-        toast.error(error.message || "提交失敗，請稍後再試。");
+      const response = await fetch("/api/housing-intents", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(requestBody),
+      });
+      const json = (await response.json().catch(() => ({}))) as {
+        intent_id?: string | null;
+        error?: string;
+      };
+
+      if (!response.ok) {
+        console.error("[housing_intents] API", response.status, json);
+        toast.error(
+          json.error ||
+            (response.status === 409 ? ACTIVE_INTENT_CONFLICT_MESSAGE : "提交失敗，請稍後再試。")
+        );
+        if (response.status === 401) {
+          setIsIntentModalOpen(false);
+          router.push("/login");
+        }
         return;
       }
 
-      const row = inserted as { intent_id?: string } | null;
-      const newIntentId = typeof row?.intent_id === "string" ? row.intent_id.trim() : "";
+      const newIntentId =
+        typeof json.intent_id === "string" ? json.intent_id.trim() : "";
 
       setIsIntentModalOpen(false);
       toast.success("成功加入意向池！正在啟動 AI 尋找同區室友 🧠...");
@@ -167,8 +196,16 @@ export default function HousingIntentButton({
 
   return (
     <>
-      <Button type="button" onClick={() => void handleOpenIntent()} className={className}>
-        ✨ 加入心水排隊區
+      <Button
+        type="button"
+        disabled={hasActiveIntent}
+        onClick={() => void handleOpenIntent()}
+        className={cn(
+          className,
+          hasActiveIntent && "cursor-not-allowed opacity-60 hover:bg-[#0f2540]"
+        )}
+      >
+        {hasActiveIntent ? "您已有進行中的配對" : "✨ 加入心水排隊區"}
       </Button>
 
       <Dialog open={isIntentModalOpen} onOpenChange={setIsIntentModalOpen}>

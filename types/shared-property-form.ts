@@ -35,6 +35,8 @@ export interface SharedPropertyFormInitialData {
   amenities?: string[];
   roommates_req?: string[];
   room_count?: number;
+  /** 預計合租總人數（Property-First 配對用） */
+  max_tenants?: number;
   pricing_mode?: "average" | "custom";
   /** 自訂模式下各房金額；長度建議與 `room_count` 一致 */
   room_prices?: number[];
@@ -73,6 +75,7 @@ export interface SharedPropertyFormSubmitPayload {
   roommates_req: string[];
   tags: string[];
   room_count: number;
+  max_tenants: number;
   pricing_mode: "average" | "custom";
   room_prices: number[];
   mainImage: MainImageSubmitField;
@@ -106,6 +109,7 @@ export interface PropertyListingInsertRow {
   gallery: string[];
   owner_id: string;
   room_count: number;
+  max_tenants: number;
   pricing_mode: "average" | "custom";
   /** 平均模式目前送 `{}`；自訂模式為各房金額陣列 */
   room_prices: number[] | Record<string, never>;

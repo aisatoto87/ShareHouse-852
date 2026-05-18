@@ -305,6 +305,7 @@ export default function AdminPageClient() {
         tags: data.tags,
         gallery: galleryStrings,
         room_count: data.room_count,
+        max_tenants: data.max_tenants,
         pricing_mode: data.pricing_mode,
         room_prices,
       };
@@ -407,6 +408,7 @@ export default function AdminPageClient() {
         tags: data.tags,
         gallery: galleryStrings,
         room_count: data.room_count,
+        max_tenants: data.max_tenants,
         pricing_mode: data.pricing_mode,
         room_prices,
       };

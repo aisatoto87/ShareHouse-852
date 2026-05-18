@@ -4,10 +4,20 @@ import {
   type SharedPropertyFormInitialData,
 } from "@/types/shared-property-form";
 
+export const MAX_TENANTS_MIN = 2;
+export const MAX_TENANTS_MAX = 10;
+export const MAX_TENANTS_DEFAULT = 2;
+
 function clampHabitValue(value: unknown): number {
   const n = Number(value);
   const base = Number.isFinite(n) ? n : 3;
   return Math.min(5, Math.max(1, Math.round(base)));
+}
+
+export function clampMaxTenants(value: unknown): number {
+  const n = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(n)) return MAX_TENANTS_DEFAULT;
+  return Math.min(MAX_TENANTS_MAX, Math.max(MAX_TENANTS_MIN, Math.round(n)));
 }
 
 function isGalleryCategory(v: string): v is GalleryCategory {
@@ -78,6 +88,7 @@ export function propertyRowToInitialData(row: Record<string, unknown>): SharedPr
     amenities: Array.isArray(row.amenities) ? row.amenities.map(String) : [],
     roommates_req: Array.isArray(row.roommates_req) ? row.roommates_req.map(String) : [],
     room_count: roomCount,
+    max_tenants: clampMaxTenants(row.max_tenants),
     pricing_mode,
     room_prices,
     existingMainImageUrl,

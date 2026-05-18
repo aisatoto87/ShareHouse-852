@@ -11,6 +11,12 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import {
+  clampMaxTenants,
+  MAX_TENANTS_DEFAULT,
+  MAX_TENANTS_MAX,
+  MAX_TENANTS_MIN,
+} from "@/lib/map-property-row-to-shared-form-initial";
+import {
   GALLERY_CATEGORIES,
   type GalleryCategory,
   type GalleryFileSlot,
@@ -141,6 +147,7 @@ function applyInitialData(data: SharedPropertyFormInitialData): {
   selectedRoommateReqs: string[];
   customSubDistrict: string;
   roomCount: number;
+  maxTenants: number;
   pricingMode: "average" | "custom";
   roomPrices: string[];
 } {
@@ -185,6 +192,7 @@ function applyInitialData(data: SharedPropertyFormInitialData): {
     selectedRoommateReqs: data.roommates_req ? [...data.roommates_req] : [],
     customSubDistrict,
     roomCount,
+    maxTenants: clampMaxTenants(data.max_tenants),
     pricingMode,
     roomPrices,
   };
@@ -212,6 +220,7 @@ export default function SharedPropertyForm({
   const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null);
   const [gallerySlots, setGallerySlots] = useState<GallerySlotItem[]>([]);
   const [roomCount, setRoomCount] = useState(1);
+  const [maxTenants, setMaxTenants] = useState(MAX_TENANTS_DEFAULT);
   const [pricingMode, setPricingMode] = useState<"average" | "custom">("average");
   const [roomPrices, setRoomPrices] = useState<string[]>([""]);
 
@@ -231,6 +240,7 @@ export default function SharedPropertyForm({
         return [];
       });
       setRoomCount(1);
+      setMaxTenants(MAX_TENANTS_DEFAULT);
       setPricingMode("average");
       setRoomPrices([""]);
       setTagQuery("");
@@ -246,6 +256,7 @@ export default function SharedPropertyForm({
     setSelectedRoommateReqs(applied.selectedRoommateReqs);
     setCustomSubDistrict(applied.customSubDistrict);
     setRoomCount(applied.roomCount);
+    setMaxTenants(applied.maxTenants);
     setPricingMode(applied.pricingMode);
     setRoomPrices(applied.roomPrices);
 
@@ -464,6 +475,11 @@ export default function SharedPropertyForm({
       toast.error("出租房間數量必須為 1 或以上。");
       return;
     }
+    const maxTenantsNum = clampMaxTenants(maxTenants);
+    if (maxTenantsNum < MAX_TENANTS_MIN || maxTenantsNum > MAX_TENANTS_MAX) {
+      toast.error(`預計合租總人數須為 ${MAX_TENANTS_MIN} 至 ${MAX_TENANTS_MAX} 之間的整數。`);
+      return;
+    }
     let normalizedRoomPrices: number[] | null = null;
     if (pricingMode === "custom") {
       let sum = 0;
@@ -511,6 +527,7 @@ export default function SharedPropertyForm({
       roommates_req: selectedRoommateReqs,
       tags: selectedTags,
       room_count: roomCount,
+      max_tenants: maxTenantsNum,
       pricing_mode: pricingMode,
       room_prices: pricingMode === "custom" && normalizedRoomPrices ? normalizedRoomPrices : [],
       mainImage,
@@ -639,6 +656,32 @@ export default function SharedPropertyForm({
             placeholder="1"
             className="max-w-xs bg-white"
           />
+          <div className="mt-4">
+            <label className="mb-1 block text-sm font-medium text-zinc-700">
+              預計合租總人數 (包含所有房間) *
+            </label>
+            <Select
+              value={String(maxTenants)}
+              onValueChange={(value) => setMaxTenants(clampMaxTenants(Number(value)))}
+            >
+              <SelectTrigger className="max-w-xs bg-white">
+                <SelectValue placeholder="請選擇人數" />
+              </SelectTrigger>
+              <SelectContent>
+                {Array.from({ length: MAX_TENANTS_MAX - MAX_TENANTS_MIN + 1 }, (_, i) => {
+                  const n = MAX_TENANTS_MIN + i;
+                  return (
+                    <SelectItem key={n} value={String(n)}>
+                      {n} 人
+                    </SelectItem>
+                  );
+                })}
+              </SelectContent>
+            </Select>
+            <p className="mt-1 text-xs text-zinc-500">
+              用於 Property-First 夾租配對：系統會以此人數作為該樓盤的目標合租總人數（預設 2 人）。
+            </p>
+          </div>
           <div className="mt-4">
             <p className="mb-2 text-sm font-medium text-zinc-700">分租定價模式 *</p>
             <div className="flex flex-wrap gap-4 text-sm text-zinc-700">
