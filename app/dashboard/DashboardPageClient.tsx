@@ -1060,7 +1060,7 @@ export default function DashboardPageClient() {
                                     {row.preference_rank != null && row.preference_rank > 0 ? (
                                       <div className="flex flex-wrap items-center gap-1">
                                         <Badge
-                                          variant="outline"
+                                          variant="secondary"
                                           className="shrink-0 border-violet-400 bg-violet-50 px-2.5 py-0.5 text-sm font-bold tracking-tight text-violet-900 shadow-sm"
                                         >
                                           第 {row.preference_rank} 志願
