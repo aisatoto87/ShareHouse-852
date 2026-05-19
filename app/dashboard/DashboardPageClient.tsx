@@ -6,6 +6,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import HabitDefenseSliders from "@/components/HabitDefenseSliders";
+import MatchedTeammates from "@/components/MatchedTeammates";
 import MatchingOptInPanel from "@/components/MatchingOptInPanel";
 import Navbar from "@/components/Navbar";
 import { Badge } from "@/components/ui/badge";
@@ -1158,6 +1159,16 @@ export default function DashboardPageClient() {
                                       </div>
                                     </dl>
                                   )}
+                                  {userId &&
+                                  (row.status === "pending_opt_in" ||
+                                    row.status === "recruiting" ||
+                                    row.status === "matched") ? (
+                                    <MatchedTeammates
+                                      viewerUserId={userId}
+                                      intentStatus={row.status}
+                                      targetPropertyId={row.target_property_id}
+                                    />
+                                  ) : null}
                                 </div>
                                 {row.status === "waiting" ? (
                                   <Button
