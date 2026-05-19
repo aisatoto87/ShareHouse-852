@@ -11,6 +11,10 @@ import type { HabitRadarValues } from "@/components/SyncNestHabitRadarAnalysis";
 import WishlistHeartButton from "@/components/WishlistHeartButton";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  checkProfileCompleteness,
+  profileSetupHref,
+} from "@/lib/profile-completeness";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { mapRowToProperty } from "@/lib/property-mapper";
 
@@ -197,18 +201,30 @@ export default async function PropertyDetailPage({ params }: PageProps) {
     guests: DEFAULT_HABIT_RADAR,
     noise: DEFAULT_HABIT_RADAR,
   };
+  let isProfileComplete = true;
+  let profileSetupLink = "/dashboard?tab=personal";
+
   if (user) {
-    const { data: habitProfile } = await supabase
+    const { data: viewerProfile } = await supabase
       .from("profiles")
-      .select("habit_cleanliness, habit_ac_temp, habit_guests, habit_noise")
+      .select(
+        "full_name, display_name, last_name_zh, last_name_en, nickname, habit_cleanliness, habit_ac_temp, habit_guests, habit_noise"
+      )
       .eq("id", user.id)
       .maybeSingle();
-    if (habitProfile) {
+
+    const completeness = checkProfileCompleteness(
+      (viewerProfile as Record<string, unknown> | null) ?? null
+    );
+    isProfileComplete = completeness.isComplete;
+    profileSetupLink = profileSetupHref(completeness);
+
+    if (viewerProfile) {
       userRadarHabits = {
-        cleanliness: habitScoreForRadar(habitProfile.habit_cleanliness),
-        acTemp: habitScoreForRadar(habitProfile.habit_ac_temp),
-        guests: habitScoreForRadar(habitProfile.habit_guests),
-        noise: habitScoreForRadar(habitProfile.habit_noise),
+        cleanliness: habitScoreForRadar(viewerProfile.habit_cleanliness),
+        acTemp: habitScoreForRadar(viewerProfile.habit_ac_temp),
+        guests: habitScoreForRadar(viewerProfile.habit_guests),
+        noise: habitScoreForRadar(viewerProfile.habit_noise),
       };
     }
   }
@@ -388,6 +404,8 @@ export default async function PropertyDetailPage({ params }: PageProps) {
                 propertyId={property.id}
                 defaultDistrict={intentDefaultDistrict}
                 defaultBudget={intentDefaultBudget}
+                isProfileComplete={isProfileComplete}
+                profileSetupHref={profileSetupLink}
                 className="mt-3 h-auto min-h-11 w-full whitespace-normal rounded-lg bg-[#0f2540] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#1a3a5c]"
               />
               

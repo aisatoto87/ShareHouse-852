@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState, type ChangeEvent } from "react";
 import { BadgeCheck, ChevronDown, ChevronUp, Loader2, Save, UserRound } from "lucide-react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import HabitDefenseSliders from "@/components/HabitDefenseSliders";
 import MatchedTeammates from "@/components/MatchedTeammates";
@@ -192,9 +192,17 @@ function intentStatusBadge(
   }
 }
 
+const DASHBOARD_TABS = ["personal", "profile", "intents", "properties"] as const;
+type DashboardTab = (typeof DASHBOARD_TABS)[number];
+
+function isDashboardTab(value: string | null): value is DashboardTab {
+  return value != null && DASHBOARD_TABS.includes(value as DashboardTab);
+}
+
 export default function DashboardPageClient() {
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [userId, setUserId] = useState<string | null>(null);
   const [userRole, setUserRole] = useState<string>("");
   const [secretCount, setSecretCount] = useState(0);
@@ -401,6 +409,13 @@ export default function DashboardPageClient() {
   useEffect(() => {
     if (userRole === "tenant" && activeTab === "properties") setActiveTab("personal");
   }, [userRole, activeTab]);
+
+  useEffect(() => {
+    const tab = searchParams.get("tab");
+    if (isDashboardTab(tab)) {
+      setActiveTab(tab);
+    }
+  }, [searchParams]);
 
   const loadHousingIntents = useCallback(async () => {
     if (!userId) return;
