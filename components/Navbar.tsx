@@ -7,6 +7,10 @@ import type { Session, User } from "@supabase/supabase-js";
 import { toast } from "sonner";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
+import { hasManagerNavbarAccess } from "@/lib/user-roles";
+
+const navTextLinkClass =
+  "inline-flex items-center rounded-full border border-zinc-300 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-100";
 
 export default function Navbar() {
   const router = useRouter();
@@ -14,21 +18,7 @@ export default function Navbar() {
   const [user, setUser] = useState<User | null>(null);
   const [profileRole, setProfileRole] = useState<string>("");
 
-  // 👇 1. 放喺第 15 行 (即係 useState 同 useEffect 中間)
-  const VIP_EMAILS = [
-    "aisatoto87@gmail.com",
-    "mowangmw@gmail.com",
-    "yushinghei1021@gmail.com"
-  ];
-
-  const isAdmin = 
-    VIP_EMAILS.includes(user?.email || "") || 
-    (Boolean(user) && (
-      user?.app_metadata?.role === "admin" ||
-      user?.user_metadata?.role === "admin" ||
-      user?.app_metadata?.is_admin === true ||
-      user?.user_metadata?.is_admin === true
-    ));
+  const showManagerPortal = hasManagerNavbarAccess(user, profileRole);
 
   useEffect(() => {
     let mounted = true;
@@ -124,23 +114,16 @@ export default function Navbar() {
           >
             免費放盤
           </Button>
-{/* 👇 呢度就係管家後台嘅傳送門 */}
 
-{/* 👇 2. 用 isAdmin 判斷包住佢，只有 Admin 先見到呢個掣！ */}
-      {isAdmin && (
-        <Link 
-          href="/admin" 
-          className="text-sm font-medium text-zinc-700 transition-colors hover:text-[#0f2540]"
-        >
-          管家後台
-        </Link>
-      )}
+          {user && showManagerPortal ? (
+            <Link href="/admin" className={navTextLinkClass}>
+              管家後台
+            </Link>
+          ) : null}
+
           {user ? (
             <>
-              <Link
-                href="/wishlist"
-                className="inline-flex items-center rounded-full border border-zinc-300 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-100"
-              >
+              <Link href="/wishlist" className={navTextLinkClass}>
                 心水清單
               </Link>
               <Link
@@ -160,10 +143,7 @@ export default function Navbar() {
             </>
           ) : (
             <>
-              <Link
-                href="/login"
-                className="inline-flex items-center rounded-full border border-zinc-300 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-100"
-              >
+              <Link href="/login" className={navTextLinkClass}>
                 登入
               </Link>
               <Link
