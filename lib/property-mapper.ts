@@ -1,5 +1,5 @@
 import { toFiniteHabit } from "@/lib/habit-match";
-import type { Property } from "@/types/property";
+import type { Property, PropertyListingStatus } from "@/types/property";
 
 const DISTRICTS: readonly Property["district"][] = ["港島", "九龍", "新界"];
 
@@ -101,6 +101,12 @@ function parsePricingMode(v: unknown): Property["pricing_mode"] {
   return undefined;
 }
 
+function parsePropertyStatus(v: unknown): PropertyListingStatus {
+  const s = String(v ?? "available").toLowerCase();
+  if (s === "held" || s === "rented") return s;
+  return "available";
+}
+
 /**
  * Maps a Supabase `properties` row to the app `Property` shape.
  * Accepts snake_case (Postgres) or camelCase keys for easier migration.
@@ -113,6 +119,7 @@ export function mapRowToProperty(row: Record<string, unknown>): Property {
   return {
     id: pickString(row, "id") || "unknown",
     title: pickString(row, "title") || "未命名租盤",
+    status: parsePropertyStatus(row.status),
     district: parseDistrict(row.district),
     sub_district: pickString(row, "sub_district", "subDistrict"),
     price: toNumber(row.price, 0),

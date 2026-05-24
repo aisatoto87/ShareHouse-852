@@ -2,11 +2,23 @@
 export type SmartMatchedPropertyRow = {
   property: Property;
   similarity: number;
+  /**
+   * 該樓盤存在 status = recruiting 且缺額為 1 的 match_group（由批次查詢衍生，非 DB 欄位）
+   * @see lib/recruiting-fomo.ts
+   */
+  recruitingOneShort?: boolean;
+  /** 最接近成團的 recruiting 群組缺額；僅在需要除「差 1 人」外顯示時使用 */
+  recruitingShortage?: number | null;
 };
+
+/** `properties.status` — 盤源上架狀態 */
+export type PropertyListingStatus = "available" | "held" | "rented";
 
 export interface Property {
   id: string;
   title: string;
+  /** 盤源狀態；預設 available */
+  status?: PropertyListingStatus;
   district: "港島" | "九龍" | "新界";
   sub_district: string;
   price: number;

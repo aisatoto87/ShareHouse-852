@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { createSupabaseServerClient, getServerUser } from "@/lib/supabase/server";
 
 type InquiryPayload = {
   propertyId?: unknown;
@@ -21,9 +21,7 @@ export async function POST(request: Request) {
     }
 
     const supabase = await createSupabaseServerClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
+    const { user } = await getServerUser(supabase);
 
     const { error } = await supabase.from("inquiries").insert({
       property_id: propertyId,

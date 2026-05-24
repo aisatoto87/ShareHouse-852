@@ -2,13 +2,13 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import type { MouseEvent } from "react";
+import type { MouseEvent, ReactNode } from "react";
 import { CheckCircle, MapPin, Maximize2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardFooter } from "@/components/ui/card";
 import WishlistHeartButton from "@/components/WishlistHeartButton";
 import { cn } from "@/lib/utils";
-import type { Property } from "@/types/property";
+import type { Property, PropertyListingStatus } from "@/types/property";
 
 const TAG_STYLES: Record<string, string> = {
   即走盤: "bg-red-100 text-red-800",
@@ -24,6 +24,20 @@ const TAG_STYLES: Record<string, string> = {
 
 const DEFAULT_TAG = "bg-zinc-100 text-zinc-600";
 
+const STATUS_BADGE: Record<
+  Exclude<PropertyListingStatus, "available">,
+  { label: string; className: string }
+> = {
+  held: {
+    label: "⏳ 初步配對中 / 已有人出價",
+    className: "bg-amber-500/95 text-white ring-1 ring-amber-200/60",
+  },
+  rented: {
+    label: "⛔ 已租出",
+    className: "bg-red-700/95 text-white ring-1 ring-red-300/50",
+  },
+};
+
 function buildWhatsAppUrl(title: string, phone: string): string {
   const digits = phone.replace(/\D/g, "");
   const msg = encodeURIComponent(
@@ -36,9 +50,18 @@ interface PropertyCardProps {
   property: Property;
   /** 後端 RPC 契合度 (0–100)；null 不顯示 Badge */
   similarityScore?: number | null;
+  /** 有 recruiting 群組且缺額為 1 時顯示 FOMO 標籤 */
+  recruitingOneShort?: boolean;
+  /** Admin 管家操作選單（僅 admin 頁傳入，渲染於圖片左上角） */
+  adminMenu?: ReactNode;
 }
 
-export default function PropertyCard({ property, similarityScore }: PropertyCardProps) {
+export default function PropertyCard({
+  property,
+  similarityScore,
+  recruitingOneShort = false,
+  adminMenu,
+}: PropertyCardProps) {
   const { id, title, district, sub_district, price, size_sqft, imageUrl, tags, contact_whatsapp } =
     property;
   const formattedPrice = new Intl.NumberFormat("zh-HK").format(price);
@@ -71,9 +94,27 @@ export default function PropertyCard({ property, similarityScore }: PropertyCard
     e.stopPropagation();
   };
 
+  const listingStatus: PropertyListingStatus = property.status ?? "available";
+  const isHeld = listingStatus === "held";
+  const isRented = listingStatus === "rented";
+  const statusBadge = isHeld || isRented ? STATUS_BADGE[listingStatus] : null;
+  const showFomoBadge = recruitingOneShort && !isHeld && !isRented;
+
   return (
-    <Card className="group overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-sm transition-shadow duration-300 hover:shadow-lg">
-      <div className="relative h-48 w-full overflow-hidden rounded-t-2xl">
+    <Card
+      className={cn(
+        "group rounded-2xl border border-zinc-200 bg-white shadow-sm transition-shadow duration-300 hover:shadow-lg",
+        adminMenu ? "overflow-visible" : "overflow-hidden",
+        isHeld && "grayscale opacity-75",
+        isRented && "brightness-50"
+      )}
+    >
+      <div
+        className={cn(
+          "relative h-48 w-full rounded-t-2xl",
+          adminMenu ? "overflow-visible" : "overflow-hidden"
+        )}
+      >
         <Link
           href={detailHref}
           className="block h-full w-full focus-visible:outline-none"
@@ -91,8 +132,49 @@ export default function PropertyCard({ property, similarityScore }: PropertyCard
           <div className="absolute inset-0 bg-gradient-to-t from-black/25 via-transparent to-transparent" />
         </Link>
 
+        {adminMenu ? (
+          <div className="absolute left-2 top-2 z-30" onClick={blockCardNavigation}>
+            {adminMenu}
+          </div>
+        ) : null}
+
+        {statusBadge ? (
+          <div className="pointer-events-none absolute bottom-3 left-3 right-14 z-20">
+            <span
+              className={cn(
+                "inline-flex max-w-full items-center rounded-full px-2.5 py-1 text-[11px] font-bold leading-snug shadow-md",
+                statusBadge.className
+              )}
+            >
+              {statusBadge.label}
+            </span>
+          </div>
+        ) : null}
+
+        {showFomoBadge ? (
+          <div
+            className="pointer-events-none absolute left-1/2 top-3 z-20 max-w-[min(100%,calc(100%-5.5rem))] -translate-x-1/2 px-1"
+            aria-label="差 1 人即成團"
+          >
+            <span
+              className={cn(
+                "inline-flex items-center justify-center rounded-full px-2.5 py-1 text-[11px] font-bold leading-tight text-white shadow-lg",
+                "bg-gradient-to-r from-orange-500 to-red-500 ring-2 ring-white/40",
+                "animate-pulse motion-reduce:animate-none"
+              )}
+            >
+              🔥 差 1 人即成團！
+            </span>
+          </div>
+        ) : null}
+
         {tags.length > 0 && (
-          <div className="absolute left-3 top-3 z-10 flex max-w-[calc(100%-5rem)] flex-wrap gap-1.5">
+          <div
+            className={cn(
+              "absolute z-10 flex max-w-[calc(100%-5rem)] flex-wrap gap-1.5",
+              adminMenu ? "left-12 top-2" : "left-3 top-3"
+            )}
+          >
             {tags.slice(0, 2).map((tag) => (
               <Badge
                 key={tag}
@@ -127,7 +209,13 @@ export default function PropertyCard({ property, similarityScore }: PropertyCard
           className="absolute right-3 top-3 z-10 rounded-full bg-black/40 p-0.5 backdrop-blur-sm"
           onClick={blockCardNavigation}
         >
-          <WishlistHeartButton propertyId={id} variant="onImage" stopPropagation className="h-9 w-9" />
+          <WishlistHeartButton
+            propertyId={id}
+            variant="onImage"
+            stopPropagation
+            disabled={isRented}
+            className="h-9 w-9"
+          />
         </div>
       </div>
 
@@ -165,18 +253,31 @@ export default function PropertyCard({ property, similarityScore }: PropertyCard
       </CardContent>
 
       <CardFooter className="relative z-10 px-4 pb-4 pt-2">
-        <a
-          href={waUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          aria-label={`申請合租媒合 — ${title}`}
-          className={cn(
-            "inline-flex h-10 w-full items-center justify-center gap-2 rounded-xl bg-[#0f2540] px-4 text-sm font-medium text-white shadow-sm transition-all hover:bg-[#1a3a5c] active:scale-[0.98]"
-          )}
-        >
-          <CheckCircle className="h-4 w-4 shrink-0" />
-          申請合租媒合
-        </a>
+        {isRented ? (
+          <button
+            type="button"
+            disabled
+            aria-label="此單位已租出，無法申請媒合"
+            className="inline-flex h-10 w-full cursor-not-allowed items-center justify-center gap-2 rounded-xl bg-zinc-400 px-4 text-sm font-medium text-white opacity-80"
+          >
+            <CheckCircle className="h-4 w-4 shrink-0" />
+            已租出 — 暫停申請
+          </button>
+        ) : (
+          <a
+            href={waUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label={`申請合租媒合 — ${title}`}
+            className={cn(
+              "inline-flex h-10 w-full items-center justify-center gap-2 rounded-xl bg-[#0f2540] px-4 text-sm font-medium text-white shadow-sm transition-all hover:bg-[#1a3a5c] active:scale-[0.98]",
+              isHeld && "pointer-events-none opacity-60"
+            )}
+          >
+            <CheckCircle className="h-4 w-4 shrink-0" />
+            {isHeld ? "配對進行中" : "申請合租媒合"}
+          </a>
+        )}
       </CardFooter>
     </Card>
   );

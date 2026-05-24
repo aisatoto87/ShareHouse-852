@@ -32,7 +32,11 @@ import {
   inferSalutationMode,
   inferZhSuffix,
 } from "@/lib/profile-display-name";
-import { createSupabaseBrowserClient } from "@/lib/supabase/client";
+import {
+  createSupabaseBrowserClient,
+  getBrowserSession,
+  getBrowserUser,
+} from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
 import { needsProfileRoleOnboarding } from "@/types/profile";
 
@@ -115,7 +119,7 @@ export default function RoleOnboardingGate() {
             )
             .eq("id", userId)
             .maybeSingle(),
-          supabase.auth.getUser(),
+          getBrowserUser(supabase).then((r) => ({ data: { user: r.user } })),
         ]);
         if (cancelled) return;
         const u = authData.user;
@@ -205,9 +209,7 @@ export default function RoleOnboardingGate() {
       setUserId(uid);
 
       try {
-        const {
-          data: { session: latest },
-        } = await supabase.auth.getSession();
+        const { session: latest } = await getBrowserSession(supabase);
         if (!latest?.user?.id || latest.user.id !== uid) {
           if (!mounted) return;
           setUserId(null);
@@ -283,7 +285,7 @@ export default function RoleOnboardingGate() {
       }
     }
 
-    void supabase.auth.getSession().then(({ data: { session } }) => {
+    void getBrowserSession(supabase).then(({ session }) => {
       void applySession(session);
     });
 

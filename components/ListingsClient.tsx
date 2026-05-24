@@ -14,6 +14,10 @@ import { applyFilters } from "@/lib/filter";
 import { mapRowToProperty } from "@/lib/property-mapper";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import type { UserHabits } from "@/lib/matchingAlgorithm";
+import {
+  applyRecruitingOneShortToRows,
+  fetchPropertyIdsRecruitingOneShort,
+} from "@/lib/recruiting-fomo";
 import type { Filters, SmartMatchedPropertyRow } from "@/types/property";
 
 const DEFAULT_HABIT_USER: UserHabits = {
@@ -189,10 +193,15 @@ export default function ListingsClient() {
           }
 
           const rows = propertyRows ?? [];
-          const next: SmartMatchedPropertyRow[] = rows.map((row) => ({
+          const base: SmartMatchedPropertyRow[] = rows.map((row) => ({
             property: mapRowToProperty(row as Record<string, unknown>),
             similarity: 0,
           }));
+          const oneShortIds = await fetchPropertyIdsRecruitingOneShort(
+            supabase,
+            base.map((r) => r.property.id)
+          );
+          const next = applyRecruitingOneShortToRows(base, oneShortIds);
           if (isActive()) {
             setMatchedRows(next);
             setHasMore(rows.length === LIMIT);
@@ -269,10 +278,16 @@ export default function ListingsClient() {
           full.push({ property, similarity });
         }
 
+        const oneShortIds = await fetchPropertyIdsRecruitingOneShort(
+          supabase,
+          full.map((r) => r.property.id)
+        );
+        const fullWithFomo = applyRecruitingOneShortToRows(full, oneShortIds);
+
         if (isActive()) {
-          matchedFullCacheRef.current = full;
-          setMatchedRows(full.slice(0, LIMIT));
-          setHasMore(full.length > LIMIT);
+          matchedFullCacheRef.current = fullWithFomo;
+          setMatchedRows(fullWithFomo.slice(0, LIMIT));
+          setHasMore(fullWithFomo.length > LIMIT);
         }
       } catch (error) {
         console.error("Fetch API Error:", error);
@@ -353,8 +368,13 @@ export default function ListingsClient() {
         property: mapRowToProperty(row as Record<string, unknown>),
         similarity: 0,
       }));
+      const oneShortIds = await fetchPropertyIdsRecruitingOneShort(
+        supabase,
+        mapped.map((r) => r.property.id)
+      );
+      const mappedWithFomo = applyRecruitingOneShortToRows(mapped, oneShortIds);
 
-      setMatchedRows((prev) => [...prev, ...mapped]);
+      setMatchedRows((prev) => [...prev, ...mappedWithFomo]);
       setPage((p) => p + 1);
       setHasMore(batch.length === LIMIT);
     } catch (error) {

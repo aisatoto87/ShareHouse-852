@@ -39,11 +39,12 @@ export default function ListingGrid({
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
-          {displayedRows.map(({ property, similarity }) => (
+          {displayedRows.map(({ property, similarity, recruitingOneShort }) => (
             <PropertyCard
               key={property.id}
               property={property}
               similarityScore={showSimilarityBadge ? similarity : null}
+              recruitingOneShort={Boolean(recruitingOneShort)}
             />
           ))}
         </div>

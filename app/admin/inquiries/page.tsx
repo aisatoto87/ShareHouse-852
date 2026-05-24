@@ -1,7 +1,8 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import Navbar from "@/components/Navbar";
-import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { isAdminUser } from "@/lib/admin-auth";
+import { createSupabaseServerClient, getServerUser } from "@/lib/supabase/server";
 import { markInquiryContacted } from "@/app/admin/inquiries/actions";
 import { revalidatePath } from "next/cache";
 
@@ -95,26 +96,9 @@ export default async function AdminInquiriesPage() {
 
   // ... 下面繼續係你原本嘅 const supabase = await createSupabaseServerClient(); 等等 ...
   const supabase = await createSupabaseServerClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const { user } = await getServerUser(supabase);
 
-  const VIP_EMAILS = [
-    "aisatoto87@gmail.com", 
-    "mowangmw@gmail.com",
-    "yushinghei1021@gmail.com"
-  ];
-
-    const isAdmin = 
-    VIP_EMAILS.includes(user?.email || "") || 
-    (Boolean(user) && (
-      user?.app_metadata?.role === "admin" ||
-      user?.user_metadata?.role === "admin" ||
-      user?.app_metadata?.is_admin === true ||
-      user?.user_metadata?.is_admin === true
-    ));  
-
-    if (!isAdmin) {
+  if (!isAdminUser(user)) {
     redirect("/");
   }
 

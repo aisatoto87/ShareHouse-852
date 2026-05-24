@@ -3,9 +3,10 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Loader2, Lock, PlusCircle, RefreshCw, ShieldAlert, Trash2, Pencil } from "lucide-react";
+import { Loader2, Lock, PlusCircle, RefreshCw, ShieldAlert } from "lucide-react";
 import { toast } from "sonner";
 import Navbar from "@/components/Navbar";
+import AdminCardActions from "@/components/admin/AdminCardActions";
 import PropertyCard from "@/components/PropertyCard";
 import SharedPropertyForm from "@/components/SharedPropertyForm";
 import { propertyRowToInitialData, roomPricesArrayToDbObject } from "@/lib/map-property-row-to-shared-form-initial";
@@ -432,8 +433,6 @@ export default function AdminPageClient() {
   }
 
   async function handleDelete(propertyId: string) {
-    const ok = window.confirm("確定要刪除這筆租盤嗎？此操作無法還原。");
-    if (!ok) return;
     setDeletingId(propertyId);
     const { data, error } = await supabase.from("properties").delete().eq("id", propertyId).select();
     setDeletingId(null);
@@ -491,35 +490,6 @@ export default function AdminPageClient() {
     });
     return list;
   }, [landlords, sortConfig]);
-
-  function formatPriceCompact(value: number): string {
-    if (!Number.isFinite(value)) return "0";
-    if (value >= 1000) {
-      const k = value / 1000;
-      return `${Number.isInteger(k) ? k.toFixed(0) : k.toFixed(1)}k`;
-    }
-    return value.toString();
-  }
-
-  function buildAdminRentSubtitle(property: Property): { short: string; full: string } {
-    const roomCount = Math.max(1, property.room_count ?? 1);
-    const averagePrice = Math.round(property.price / roomCount);
-
-    if (property.pricing_mode === "custom") {
-      const roomPrices = Object.values(property.room_prices || {}).filter(
-        (item) => Number.isFinite(item) && item >= 0,
-      );
-      if (roomPrices.length > 0) {
-        const roomDetails = roomPrices.map((item, index) => `房${index + 1} $${formatPriceCompact(item)}`).join(", ");
-        const full = `(自訂: ${roomDetails})`;
-        const short = full.length > 32 ? `${full.slice(0, 31)}...` : full;
-        return { short, full };
-      }
-    }
-
-    const text = `(共 ${roomCount} 房，平均 HK$ ${new Intl.NumberFormat("zh-HK").format(averagePrice)}/房)`;
-    return { short: text, full: text };
-  }
 
   if (!unlocked) {
     return (
@@ -580,6 +550,13 @@ export default function AdminPageClient() {
               className="inline-flex items-center justify-center rounded-lg border border-zinc-300 bg-white px-4 py-2 text-sm font-semibold text-zinc-700 transition-colors hover:bg-zinc-50"
             >
               + 新增租盤
+            </Link>
+
+            <Link
+              href="/admin/groups"
+              className="inline-flex items-center justify-center rounded-lg border border-[#0f2540]/30 bg-[#0f2540]/5 px-4 py-2 text-sm font-semibold text-[#0f2540] transition-colors hover:bg-[#0f2540]/10"
+            >
+              👥 配對群組
             </Link>
 
             <Link
@@ -716,53 +693,24 @@ export default function AdminPageClient() {
           ) : (
             <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
               {filteredProperties.map((property) => (
-                <div key={property.id} className="relative">
-                  <PropertyCard property={property} />
-                  <div className="pointer-events-none absolute inset-x-3 bottom-[3.55rem] z-30 rounded-md bg-white/95 px-2.5 py-1.5 ring-1 ring-zinc-200/90 backdrop-blur-sm">
-                    <p className="text-sm font-semibold text-[#0f2540]">
-                      HK$ {new Intl.NumberFormat("zh-HK").format(property.price)}
-                    </p>
-                    {(() => {
-                      const rentText = buildAdminRentSubtitle(property);
-                      return (
-                        <p className="truncate text-xs text-zinc-500" title={rentText.full}>
-                          {rentText.short}
-                        </p>
-                      );
-                    })()}
-                  </div>
-                  <div className="absolute inset-x-3 bottom-3 z-30 flex gap-2">
-                    <Link href={`/edit-property/${property.id}`} className="flex-1">
-                      <Button
-                        type="button"
-                        variant="outline"
-                        className="w-full border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-100"
-                      >
-                        <Pencil className="mr-1.5 h-4 w-4" />
-                        編輯
-                      </Button>
-                    </Link>
-                    <Button
-                      type="button"
-                      variant="destructive"
-                      className="flex-1 bg-red-600 text-white hover:bg-red-700"
-                      disabled={deletingId === property.id}
-                      onClick={() => void handleDelete(property.id)}
-                    >
-                      {deletingId === property.id ? (
-                        <>
-                          <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-                          刪除中
-                        </>
-                      ) : (
-                        <>
-                          <Trash2 className="mr-1.5 h-4 w-4" />
-                          刪除此租盤
-                        </>
-                      )}
-                    </Button>
-                  </div>
-                </div>
+                <PropertyCard
+                  key={property.id}
+                  property={property}
+                  adminMenu={
+                    <AdminCardActions
+                      propertyId={property.id}
+                      currentStatus={property.status ?? "available"}
+                      enabled={unlocked}
+                      deleting={deletingId === property.id}
+                      onStatusUpdated={(status) => {
+                        setProperties((prev) =>
+                          prev.map((p) => (p.id === property.id ? { ...p, status } : p))
+                        );
+                      }}
+                      onDelete={() => handleDelete(property.id)}
+                    />
+                  }
+                />
               ))}
             </div>
           )}

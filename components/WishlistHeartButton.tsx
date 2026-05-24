@@ -22,6 +22,8 @@ interface WishlistHeartButtonProps {
   variant?: HeartVariant;
   className?: string;
   stopPropagation?: boolean;
+  /** 已租出等狀態下禁用互動 */
+  disabled?: boolean;
   "aria-label"?: string;
 }
 
@@ -30,6 +32,7 @@ export default function WishlistHeartButton({
   variant = "onLight",
   className,
   stopPropagation = false,
+  disabled: disabledProp = false,
   "aria-label": ariaLabel,
 }: WishlistHeartButtonProps) {
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
@@ -88,7 +91,7 @@ export default function WishlistHeartButton({
   }, [propertyId, supabase]);
 
   async function handleToggle() {
-    if (loading || mutatingRef.current) return;
+    if (disabledProp || loading || mutatingRef.current) return;
 
     const {
       data: { user },
@@ -140,7 +143,7 @@ export default function WishlistHeartButton({
   return (
     <button
       type="button"
-      disabled={loading}
+      disabled={loading || disabledProp}
       className={cn(
         "inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full border transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 disabled:cursor-not-allowed disabled:opacity-70",
         variantClass[variant],

@@ -1,16 +1,48 @@
-import { NextResponse } from "next/server";
-import type { NextRequest } from "next/server";
+import { type NextRequest, NextResponse } from "next/server";
+import { getMiddlewareUser } from "@/lib/supabase/middleware";
 
-export function middleware(request: NextRequest) {
-  const cookies = request.cookies.getAll();
-  const hasAuthTokenCookie = cookies.some((cookie) => cookie.name.includes("auth-token"));
-  const hasAnyCookie = cookies.length > 0;
+const PROTECTED_PREFIXES = [
+  "/dashboard",
+  "/list-property",
+  "/add-property",
+  "/edit-property",
+  "/admin",
+] as const;
 
-  if (!hasAuthTokenCookie && !hasAnyCookie) {
-    return NextResponse.redirect(new URL("/", request.url));
+function isProtectedPath(pathname: string): boolean {
+  return PROTECTED_PREFIXES.some(
+    (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`)
+  );
+}
+
+export async function middleware(request: NextRequest) {
+  const { pathname } = request.nextUrl;
+
+  if (!isProtectedPath(pathname)) {
+    return NextResponse.next();
   }
 
-  return NextResponse.next();
+  const response = NextResponse.next({ request });
+  const { user, invalidSession } = await getMiddlewareUser(request, response);
+
+  // Stale refresh token: cookies cleared above; send user to login.
+  if (invalidSession) {
+    const loginUrl = new URL("/login", request.url);
+    loginUrl.searchParams.set("reason", "session_expired");
+    const redirectResponse = NextResponse.redirect(loginUrl);
+    response.cookies.getAll().forEach((cookie) => {
+      redirectResponse.cookies.set(cookie.name, cookie.value, cookie);
+    });
+    return redirectResponse;
+  }
+
+  if (!user) {
+    const loginUrl = new URL("/login", request.url);
+    loginUrl.searchParams.set("next", pathname);
+    return NextResponse.redirect(loginUrl);
+  }
+
+  return response;
 }
 
 export const config = {
