@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
-import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { createSupabaseServerClient, getServerUser } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
 
@@ -51,9 +51,7 @@ export async function POST(request: Request) {
 
   try {
     const supabase = await createSupabaseServerClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
+    const { user } = await getServerUser(supabase);
 
     if (!user?.id) {
       return NextResponse.json({ error: "請先登入。" }, { status: 401 });

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { createSupabaseServerClient, getServerUser } from "@/lib/supabase/server";
 
 type CreateIntentPayload = {
   target_district?: unknown;
@@ -45,14 +45,7 @@ export async function POST(request: Request) {
     }
 
     const supabase = await createSupabaseServerClient();
-    const {
-      data: { user },
-      error: authError,
-    } = await supabase.auth.getUser();
-
-    if (authError) {
-      return NextResponse.json({ error: "讀取登入狀態失敗，請稍後再試。" }, { status: 500 });
-    }
+    const { user } = await getServerUser(supabase);
 
     if (!user) {
       return NextResponse.json({ error: "請先登入。" }, { status: 401 });

@@ -5,7 +5,10 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { Session, User } from "@supabase/supabase-js";
 import { toast } from "sonner";
-import { createSupabaseBrowserClient } from "@/lib/supabase/client";
+import {
+  createSupabaseBrowserClient,
+  getBrowserSession,
+} from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import { hasManagerNavbarAccess } from "@/lib/user-roles";
 
@@ -41,9 +44,7 @@ export default function Navbar() {
     };
 
     const checkSession = async () => {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
+      const { session } = await getBrowserSession(supabase);
       if (!mounted) return;
       await applySession(session);
     };

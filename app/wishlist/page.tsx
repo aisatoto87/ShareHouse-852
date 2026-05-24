@@ -4,7 +4,8 @@ import { Heart, Sparkles } from "lucide-react";
 import Navbar from "@/components/Navbar";
 import PropertyCard from "@/components/PropertyCard";
 import { mapRowToProperty } from "@/lib/property-mapper";
-import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { fetchPropertyIdsRecruitingOneShort } from "@/lib/recruiting-fomo";
+import { createSupabaseServerClient, getServerUser } from "@/lib/supabase/server";
 import type { Property } from "@/types/property";
 
 export const dynamic = "force-dynamic";
@@ -41,9 +42,7 @@ function mapJoinedFavoritesToProperties(rows: FavoriteWithProperty[]): Property[
 
 export default async function WishlistPage() {
   const supabase = await createSupabaseServerClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const { user } = await getServerUser(supabase);
 
   if (!user) {
     redirect("/");
@@ -92,6 +91,11 @@ export default async function WishlistPage() {
     }
   }
 
+  const recruitingOneShortIds = await fetchPropertyIdsRecruitingOneShort(
+    supabase,
+    savedProperties.map((p) => p.id)
+  );
+
   return (
     <div className="min-h-screen bg-zinc-50">
       <Navbar />
@@ -123,7 +127,11 @@ export default async function WishlistPage() {
         ) : (
           <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
             {savedProperties.map((property) => (
-              <PropertyCard key={property.id} property={property} />
+              <PropertyCard
+                key={property.id}
+                property={property}
+                recruitingOneShort={recruitingOneShortIds.has(property.id)}
+              />
             ))}
           </div>
         )}

@@ -15,7 +15,7 @@ import {
   checkProfileCompleteness,
   profileSetupHref,
 } from "@/lib/profile-completeness";
-import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { createSupabaseServerClient, getServerUser } from "@/lib/supabase/server";
 import { mapRowToProperty } from "@/lib/property-mapper";
 
 export const dynamic = "force-dynamic";
@@ -190,9 +190,7 @@ export default async function PropertyDetailPage({ params }: PageProps) {
       ? ownerAvatarUrl
       : null;
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const { user } = await getServerUser(supabase);
   const canEditProperty = isAdminUser(user) || (ownerId.length > 0 && user?.id === ownerId);
 
   let userRadarHabits: HabitRadarValues = {
