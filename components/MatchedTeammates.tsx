@@ -6,7 +6,12 @@ import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
 
 /** 意向已入群時顯示隊友資訊 */
-const TEAMMATE_INTENT_STATUSES = ["pending_opt_in", "recruiting", "matched"] as const;
+const ACTIVE_MATCH_GROUP_STATUSES = [
+  "pending_opt_in",
+  "recruiting",
+  "confirmed",
+  "matched",
+] as const;
 
 type TeammateProfile = {
   userId: string;
@@ -21,6 +26,7 @@ type TeammateProfile = {
 export type MatchedTeammatesProps = {
   viewerUserId: string;
   intentStatus: string;
+  groupStatus?: string | null;
   targetPropertyId?: string | null;
   className?: string;
 };
@@ -52,22 +58,6 @@ function avatarInitial(name: string): string {
   return first ?? "?";
 }
 
-function groupStatusMatchesIntent(
-  groupStatus: string,
-  intentStatus: string
-): boolean {
-  if (intentStatus === "pending_opt_in") {
-    return groupStatus === "pending_opt_in";
-  }
-  if (intentStatus === "recruiting") {
-    return groupStatus === "recruiting";
-  }
-  if (intentStatus === "matched") {
-    return groupStatus === "confirmed" || groupStatus === "recruiting";
-  }
-  return false;
-}
-
 function propertyIdMatches(
   groupPropertyId: unknown,
   intentPropertyId: string | null | undefined
@@ -84,9 +74,17 @@ function propertyIdMatches(
   return groupProp == null;
 }
 
+function isActiveMatchGroupStatus(status: unknown): status is (typeof ACTIVE_MATCH_GROUP_STATUSES)[number] {
+  if (typeof status !== "string") return false;
+  return ACTIVE_MATCH_GROUP_STATUSES.includes(
+    status.trim().toLowerCase() as (typeof ACTIVE_MATCH_GROUP_STATUSES)[number]
+  );
+}
+
 export default function MatchedTeammates({
   viewerUserId,
   intentStatus,
+  groupStatus = null,
   targetPropertyId = null,
   className,
 }: MatchedTeammatesProps) {
@@ -95,9 +93,13 @@ export default function MatchedTeammates({
   const [teammates, setTeammates] = useState<TeammateProfile[]>([]);
   const [fetchError, setFetchError] = useState<string | null>(null);
 
-  const shouldFetch = TEAMMATE_INTENT_STATUSES.includes(
-    intentStatus as (typeof TEAMMATE_INTENT_STATUSES)[number]
-  );
+  void intentStatus;
+  const normalizedGroupStatus = isActiveMatchGroupStatus(groupStatus)
+    ? groupStatus
+    : null;
+  const shouldFetch = normalizedGroupStatus != null;
+  const canRevealContact =
+    normalizedGroupStatus === "confirmed" || normalizedGroupStatus === "matched";
 
   useEffect(() => {
     if (!shouldFetch || !viewerUserId) {
@@ -156,7 +158,7 @@ export default function MatchedTeammates({
           if (!gid) return false;
           const gs = String(g.status ?? "");
           return (
-            groupStatusMatchesIntent(gs, intentStatus) &&
+            gs === normalizedGroupStatus &&
             propertyIdMatches(g.property_id, targetPropertyId)
           );
         });
@@ -284,7 +286,7 @@ export default function MatchedTeammates({
     return () => {
       cancelled = true;
     };
-  }, [supabase, viewerUserId, intentStatus, targetPropertyId, shouldFetch]);
+  }, [supabase, viewerUserId, normalizedGroupStatus, targetPropertyId, shouldFetch]);
 
   if (!shouldFetch) return null;
 
@@ -341,6 +343,14 @@ export default function MatchedTeammates({
                     </span>
                   )}
                 </p>
+                {canRevealContact ? (
+                  <button
+                    type="button"
+                    className="mt-2 inline-flex items-center rounded-md bg-[#0f2540] px-2.5 py-1 text-xs font-medium text-white hover:bg-[#1a3a5c]"
+                  >
+                    💬 聯絡室友
+                  </button>
+                ) : null}
               </div>
             </li>
           ))}

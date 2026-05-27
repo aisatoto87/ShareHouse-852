@@ -1,17 +1,17 @@
--- Optional RPC: batch resolve「差 1 人即成團」樓盤（避免 client 多次 round-trip）
--- Run in Supabase SQL Editor, then call: supabase.rpc('get_property_ids_recruiting_one_short', { p_property_ids: [...] })
+-- RPC: 批次解析「差 1 人即成團」樓盤（SECURITY DEFINER，繞過 housing_intents RLS）
+-- Run in Supabase SQL Editor, then call:
+--   supabase.rpc('get_fomo_properties', { p_property_ids: [...] })
 --
 -- Case A: recruiting match_groups 缺額 = 1
 -- Case B: 該樓盤 waiting housing_intents 人數，目標人數 - waiting = 1
 
-CREATE OR REPLACE FUNCTION public.get_property_ids_recruiting_one_short(p_property_ids uuid[])
+CREATE OR REPLACE FUNCTION public.get_fomo_properties(p_property_ids uuid[])
 RETURNS TABLE(property_id uuid)
 LANGUAGE sql
 STABLE
 SECURITY DEFINER
 SET search_path = public
 AS $$
-  -- Case A: recruiting 群組差 1 人
   SELECT DISTINCT mg.property_id
   FROM match_groups mg
   INNER JOIN LATERAL (
@@ -26,8 +26,7 @@ AS $$
 
   UNION
 
-  -- Case B: 單獨排隊 waiting 意向差 1 人
-  SELECT DISTINCT hi.target_property_id
+  SELECT DISTINCT wc.target_property_id
   FROM (
     SELECT
       hi.target_property_id,
@@ -49,4 +48,4 @@ AS $$
   ) - wc.waiting_count = 1;
 $$;
 
-GRANT EXECUTE ON FUNCTION public.get_property_ids_recruiting_one_short(uuid[]) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.get_fomo_properties(uuid[]) TO anon, authenticated;

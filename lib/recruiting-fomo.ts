@@ -1,13 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-type GroupMembersCountEmbed = { count: number } | { count: number }[];
-
-type RecruitingGroupRow = {
-  property_id: string | null;
-  target_size: number | null;
-  group_members: GroupMembersCountEmbed | null;
-};
-
 /** 與配對 API 一致：target_size 至少為 2 */
 export function resolveGroupTargetSize(raw: unknown): number {
   const n = typeof raw === "number" ? raw : Number(raw);
@@ -15,31 +7,13 @@ export function resolveGroupTargetSize(raw: unknown): number {
   return Math.max(Math.round(n), 2);
 }
 
-export function extractGroupMemberCount(
-  embedded: GroupMembersCountEmbed | null | undefined
-): number {
-  if (!embedded) return 0;
-  if (Array.isArray(embedded)) {
-    const first = embedded[0];
-    return typeof first?.count === "number" && Number.isFinite(first.count) ? first.count : 0;
-  }
-  return typeof embedded.count === "number" && Number.isFinite(embedded.count)
-    ? embedded.count
-    : 0;
-}
-
-/** 缺額 = target_size - group_members 人數 */
-export function computeRecruitingShortage(
-  targetSize: unknown,
-  memberCount: number
-): number {
-  const target = resolveGroupTargetSize(targetSize);
-  return target - memberCount;
-}
+type FomoPropertyRpcRow = {
+  property_id?: string | null;
+};
 
 /**
- * 一次查詢所有 recruiting 群組（含 member count），回傳「差 1 人即成團」的 property_id。
- * 避免對每張卡片 N+1 查詢。
+ * 透過 DB RPC `get_fomo_properties` 批次取得「差 1 人即成團」樓盤。
+ * 邏輯在 SECURITY DEFINER RPC 內完成，可繞過 housing_intents RLS 限制。
  */
 export async function fetchPropertyIdsRecruitingOneShort(
   supabase: SupabaseClient,
@@ -48,30 +22,20 @@ export async function fetchPropertyIdsRecruitingOneShort(
   const unique = [...new Set(propertyIds.filter((id) => typeof id === "string" && id.length > 0))];
   if (unique.length === 0) return new Set();
 
-  const { data, error } = await supabase
-    .from("match_groups")
-    .select("property_id, target_size, group_members(count)")
-    .eq("status", "recruiting")
-    .in("property_id", unique);
+  const { data, error } = await supabase.rpc("get_fomo_properties", {
+    p_property_ids: unique,
+  });
 
   if (error) {
-    console.error("[recruiting-fomo] match_groups batch query", error.message);
+    console.error("[recruiting-fomo] get_fomo_properties RPC", error.message);
     return new Set();
   }
 
   const oneShort = new Set<string>();
-  for (const raw of data ?? []) {
-    const row = raw as RecruitingGroupRow;
-    const propertyId = row.property_id;
-    if (!propertyId) continue;
-
-    const shortage = computeRecruitingShortage(
-      row.target_size,
-      extractGroupMemberCount(row.group_members)
-    );
-    if (shortage === 1) {
-      oneShort.add(propertyId);
-    }
+  for (const row of (data ?? []) as FomoPropertyRpcRow[]) {
+    const propertyId =
+      typeof row.property_id === "string" ? row.property_id.trim() : "";
+    if (propertyId) oneShort.add(propertyId);
   }
 
   return oneShort;

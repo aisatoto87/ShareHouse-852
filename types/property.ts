@@ -3,7 +3,7 @@ export type SmartMatchedPropertyRow = {
   property: Property;
   similarity: number;
   /**
-   * 該樓盤存在 status = recruiting 且缺額為 1 的 match_group（由批次查詢衍生，非 DB 欄位）
+   * 該樓盤「差 1 人即成團」：recruiting 群組缺額為 1，或 waiting 意向距目標人數差 1（批次查詢衍生）
    * @see lib/recruiting-fomo.ts
    */
   recruitingOneShort?: boolean;

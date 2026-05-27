@@ -62,7 +62,32 @@ type HousingIntentRow = {
   created_at: string;
   target_property_id: string | null;
   target_property_title: string | null;
+  match_group_status?: string | null;
+  match_group_current_size?: number | null;
+  match_group_target_size?: number | null;
 };
+
+type MatchGroupSummary = {
+  group_id: string;
+  status: string;
+  property_id: string | null;
+  current_size: number;
+  target_size: number;
+};
+
+const ACTIVE_MATCH_GROUP_STATUSES = [
+  "pending_opt_in",
+  "recruiting",
+  "confirmed",
+  "matched",
+] as const;
+
+function isActiveMatchGroupStatus(status: unknown): status is (typeof ACTIVE_MATCH_GROUP_STATUSES)[number] {
+  if (typeof status !== "string") return false;
+  return ACTIVE_MATCH_GROUP_STATUSES.includes(
+    status.trim().toLowerCase() as (typeof ACTIVE_MATCH_GROUP_STATUSES)[number]
+  );
+}
 
 function resolveTargetPropertyFromRow(
   r: Record<string, unknown>
@@ -142,8 +167,48 @@ function sortIntentsByPreferenceRank(rows: HousingIntentRow[]): HousingIntentRow
 
 function intentStatusBadge(
   status: string,
-  options?: { isGloballyFrozen?: boolean }
+  options?: {
+    isGloballyFrozen?: boolean;
+    groupStatus?: string | null;
+    recruitingShortage?: number | null;
+    isPropertyOffline?: boolean;
+  }
 ): { className: string; label: string } {
+  if (options?.isPropertyOffline) {
+    return {
+      className:
+        "max-w-full whitespace-normal rounded-lg border border-zinc-300 bg-zinc-100 px-3 py-1.5 text-left font-medium text-zinc-600 shadow-sm",
+      label: "此樓盤已下架",
+    };
+  }
+
+  const groupStatus = options?.groupStatus ?? null;
+  if (groupStatus === "recruiting") {
+    const shortage = options?.recruitingShortage;
+    return {
+      className:
+        "max-w-full whitespace-normal rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-left font-medium text-amber-900 shadow-sm",
+      label:
+        shortage != null && shortage > 0
+          ? `⏳ 正在招募室友 (差 ${shortage} 人)`
+          : "⏳ 正在招募室友",
+    };
+  }
+  if (groupStatus === "pending_opt_in") {
+    return {
+      className:
+        "max-w-full whitespace-normal rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-left font-medium text-blue-900 shadow-sm",
+      label: "🔔 等待全體確認 (24小時生死鎖)",
+    };
+  }
+  if (groupStatus === "confirmed" || groupStatus === "matched") {
+    return {
+      className:
+        "max-w-full whitespace-normal rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-left font-medium text-emerald-900 shadow-sm",
+      label: "✅ 配對成功",
+    };
+  }
+
   if (status === "waiting" && options?.isGloballyFrozen) {
     return {
       className:
@@ -436,9 +501,102 @@ export default function DashboardPageClient() {
         return;
       }
 
-      setIntentRows(
-        sortIntentsByPreferenceRank(mapHousingIntentRows((data ?? []) as unknown[]))
+      const mappedRows = sortIntentsByPreferenceRank(
+        mapHousingIntentRows((data ?? []) as unknown[])
       );
+
+      const { data: membershipRows, error: membershipErr } = await supabase
+        .from("group_members")
+        .select("group_id")
+        .eq("user_id", userId);
+      if (membershipErr) {
+        console.error("[dashboard] group_members", membershipErr);
+        setIntentRows(mappedRows);
+        return;
+      }
+
+      const groupIds = [
+        ...new Set(
+          (membershipRows ?? [])
+            .map((row) => String((row as { group_id?: unknown }).group_id ?? ""))
+            .filter(Boolean)
+        ),
+      ];
+      if (groupIds.length === 0) {
+        setIntentRows(mappedRows);
+        return;
+      }
+
+      const { data: groupsData, error: groupsErr } = await supabase
+        .from("match_groups")
+        .select("group_id, status, property_id, current_size, target_size")
+        .in("group_id", groupIds);
+      if (groupsErr) {
+        console.error("[dashboard] match_groups", groupsErr);
+        setIntentRows(mappedRows);
+        return;
+      }
+
+      const groups: MatchGroupSummary[] = (groupsData ?? [])
+        .map((raw) => {
+          const row = raw as Record<string, unknown>;
+          const groupId =
+            typeof row.group_id === "string" ? row.group_id.trim() : "";
+          if (!groupId) return null;
+          const propertyId =
+            typeof row.property_id === "string" && row.property_id.trim() !== ""
+              ? row.property_id.trim()
+              : null;
+          const status =
+            typeof row.status === "string" ? row.status.trim() : "";
+          const currentSize = Number(row.current_size);
+          const targetSize = Number(row.target_size);
+          return {
+            group_id: groupId,
+            status,
+            property_id: propertyId,
+            current_size:
+              Number.isFinite(currentSize) && currentSize >= 0
+                ? Math.round(currentSize)
+                : 0,
+            target_size:
+              Number.isFinite(targetSize) && targetSize >= 0
+                ? Math.round(targetSize)
+                : 0,
+          };
+        })
+        .filter((group): group is MatchGroupSummary => group != null);
+
+      const statusPriority = new Map<string, number>([
+        ["pending_opt_in", 0],
+        ["recruiting", 1],
+        ["confirmed", 2],
+        ["matched", 3],
+      ]);
+
+      const enrichedRows = mappedRows.map((row) => {
+        const candidates = groups
+          .filter((group) =>
+            row.target_property_id
+              ? group.property_id === row.target_property_id
+              : group.property_id == null
+          )
+          .filter((group) => isActiveMatchGroupStatus(group.status))
+          .sort(
+            (a, b) =>
+              (statusPriority.get(a.status) ?? 99) -
+              (statusPriority.get(b.status) ?? 99)
+          );
+        const matchedGroup = candidates[0] ?? null;
+        return {
+          ...row,
+          match_group_status: matchedGroup?.status ?? null,
+          match_group_current_size: matchedGroup?.current_size ?? null,
+          match_group_target_size: matchedGroup?.target_size ?? null,
+        };
+      });
+
+      setIntentRows(enrichedRows);
     } finally {
       setIntentsLoading(false);
     }
@@ -524,6 +682,7 @@ export default function DashboardPageClient() {
     }
 
     toast.success("✅ 習慣設定已更新，助你配對完美室友！");
+    router.refresh();
   };
 
   const handleAvatarFileChange = async (e: ChangeEvent<HTMLInputElement>) => {
@@ -594,6 +753,7 @@ export default function DashboardPageClient() {
     }
     setDisplayName(assembled);
     toast.success("個人資料已儲存。");
+    router.refresh();
   };
 
   return (
@@ -1024,10 +1184,38 @@ export default function DashboardPageClient() {
                     ) : null}
                   <ul className="space-y-4">
                     {sortedIntentRows.map((row, index) => {
+                      const effectiveGroupStatus = isActiveMatchGroupStatus(
+                        row.match_group_status
+                      )
+                        ? row.match_group_status
+                        : null;
+                      const effectiveIntentStatus = effectiveGroupStatus
+                        ? row.status
+                        : "waiting";
                       const isWaitingFrozen =
-                        row.status === "waiting" && isGloballyFrozen;
-                      const badge = intentStatusBadge(row.status, {
+                        effectiveIntentStatus === "waiting" && isGloballyFrozen;
+                      const isPropertyOffline =
+                        row.target_property_id != null && !row.target_property_title;
+                      const currentSize =
+                        typeof row.match_group_current_size === "number"
+                          ? row.match_group_current_size
+                          : null;
+                      const targetSize =
+                        typeof row.match_group_target_size === "number"
+                          ? row.match_group_target_size
+                          : null;
+                      const recruitingShortage =
+                        effectiveGroupStatus === "recruiting" &&
+                        currentSize != null &&
+                        targetSize != null &&
+                        targetSize > currentSize
+                          ? targetSize - currentSize
+                          : null;
+                      const badge = intentStatusBadge(effectiveIntentStatus, {
                         isGloballyFrozen,
+                        groupStatus: effectiveGroupStatus,
+                        recruitingShortage,
+                        isPropertyOffline,
                       });
                       const budgetLabel = new Intl.NumberFormat("zh-HK").format(row.max_budget);
                       const isPropertyFirst = row.target_property_id != null;
@@ -1135,12 +1323,16 @@ export default function DashboardPageClient() {
                                       <div>
                                         <dt className="font-medium text-zinc-500">指定樓盤</dt>
                                         <dd className="mt-0.5 text-base font-semibold">
-                                          <Link
-                                            href={`/property/${row.target_property_id}`}
-                                            className="text-[#0f2540] underline-offset-2 hover:text-[#1a3a5c] hover:underline"
-                                          >
-                                            {propertyLinkLabel}
-                                          </Link>
+                                          {isPropertyOffline ? (
+                                            <span className="text-zinc-500">此樓盤已下架</span>
+                                          ) : (
+                                            <Link
+                                              href={`/property/${row.target_property_id}`}
+                                              className="text-[#0f2540] underline-offset-2 hover:text-[#1a3a5c] hover:underline"
+                                            >
+                                              {propertyLinkLabel}
+                                            </Link>
+                                          )}
                                         </dd>
                                       </div>
                                       <div>
@@ -1175,17 +1367,17 @@ export default function DashboardPageClient() {
                                     </dl>
                                   )}
                                   {userId &&
-                                  (row.status === "pending_opt_in" ||
-                                    row.status === "recruiting" ||
-                                    row.status === "matched") ? (
+                                  !isPropertyOffline &&
+                                  effectiveGroupStatus ? (
                                     <MatchedTeammates
                                       viewerUserId={userId}
-                                      intentStatus={row.status}
+                                      intentStatus={effectiveIntentStatus}
+                                      groupStatus={effectiveGroupStatus}
                                       targetPropertyId={row.target_property_id}
                                     />
                                   ) : null}
                                 </div>
-                                {row.status === "waiting" ? (
+                                {effectiveIntentStatus !== "pending_opt_in" ? (
                                   <Button
                                     type="button"
                                     variant="outline"

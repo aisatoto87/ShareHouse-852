@@ -13,6 +13,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   checkProfileCompleteness,
+  formatProfileIncompleteHint,
   profileSetupHref,
 } from "@/lib/profile-completeness";
 import { createSupabaseServerClient, getServerUser } from "@/lib/supabase/server";
@@ -201,12 +202,13 @@ export default async function PropertyDetailPage({ params }: PageProps) {
   };
   let isProfileComplete = true;
   let profileSetupLink = "/dashboard?tab=personal";
+  let profileIncompleteHint = "";
 
   if (user) {
     const { data: viewerProfile } = await supabase
       .from("profiles")
       .select(
-        "full_name, display_name, last_name_zh, last_name_en, nickname, habit_cleanliness, habit_ac_temp, habit_guests, habit_noise"
+        "display_name, phone, habit_cleanliness, habit_ac_temp, habit_guests, habit_noise"
       )
       .eq("id", user.id)
       .maybeSingle();
@@ -216,6 +218,7 @@ export default async function PropertyDetailPage({ params }: PageProps) {
     );
     isProfileComplete = completeness.isComplete;
     profileSetupLink = profileSetupHref(completeness);
+    profileIncompleteHint = formatProfileIncompleteHint(completeness.missingLabels);
 
     if (viewerProfile) {
       userRadarHabits = {
@@ -404,6 +407,7 @@ export default async function PropertyDetailPage({ params }: PageProps) {
                 defaultBudget={intentDefaultBudget}
                 isProfileComplete={isProfileComplete}
                 profileSetupHref={profileSetupLink}
+                profileIncompleteHint={profileIncompleteHint}
                 className="mt-3 h-auto min-h-11 w-full whitespace-normal rounded-lg bg-[#0f2540] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#1a3a5c]"
               />
               

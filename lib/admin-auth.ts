@@ -19,3 +19,54 @@ export function isAdminUser(user: User | null | undefined): boolean {
     user.user_metadata?.is_admin === true
   );
 }
+
+function normalizeRole(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const role = value.trim().toLowerCase();
+  return role.length > 0 ? role : null;
+}
+
+export type AdminAccessCheck = {
+  isAdmin: boolean;
+  profileRole: string | null;
+};
+
+/** Server-side admin check: auth metadata + profiles.role */
+export async function checkAdminAccessFromProfile(
+  supabase: any,
+  user: User | null | undefined
+): Promise<AdminAccessCheck> {
+  if (!user?.id) {
+    return { isAdmin: false, profileRole: null };
+  }
+
+  let profileRole: string | null = null;
+  try {
+    const { data, error } = await supabase
+      .from("profiles")
+      .select("role")
+      .eq("id", user.id)
+      .maybeSingle();
+
+    if (error) {
+      console.error("[admin-auth] profile role query failed", {
+        userId: user.id,
+        message: error.message ?? "unknown error",
+      });
+    } else {
+      profileRole = normalizeRole(data?.role);
+    }
+  } catch (error) {
+    console.error("[admin-auth] profile role query exception", {
+      userId: user.id,
+      error,
+    });
+  }
+
+  const metadataAdmin = isAdminUser(user);
+  const profileAdmin = profileRole === "admin";
+  return {
+    isAdmin: metadataAdmin || profileAdmin,
+    profileRole,
+  };
+}

@@ -2,7 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import AdminGroupsClient from "@/app/admin/groups/AdminGroupsClient";
 import Navbar from "@/components/Navbar";
-import { isAdminUser } from "@/lib/admin-auth";
+import { checkAdminAccessFromProfile } from "@/lib/admin-auth";
 import { fetchActiveAdminGroups } from "@/lib/admin-groups";
 import { createSupabaseServerClient, getServerUser } from "@/lib/supabase/server";
 
@@ -15,8 +15,14 @@ export const metadata = {
 export default async function AdminGroupsPage() {
   const supabase = await createSupabaseServerClient();
   const { user } = await getServerUser(supabase);
+  const { isAdmin, profileRole } = await checkAdminAccessFromProfile(supabase as any, user);
 
-  if (!isAdminUser(user)) {
+  if (!isAdmin) {
+    console.log("Admin Check Failed:", {
+      user: user ? { id: user.id, email: user.email ?? null } : null,
+      profileRole,
+      requiredRole: "admin",
+    });
     redirect("/");
   }
 

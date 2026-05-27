@@ -26,10 +26,12 @@ type HousingIntentButtonProps = {
   defaultBudget: number;
   /** 樓盤詳情頁傳入時啟用 Property-First 配對 */
   propertyId?: string;
-  /** Server 端判定：姓名 + SyncNest 生活習慣均已填寫 */
+  /** Server 端判定：display_name + phone + 四項生活習慣均已填寫 */
   isProfileComplete?: boolean;
   /** 資料未完成時導向的設定頁（預設 Dashboard 個人資料分頁） */
   profileSetupHref?: string;
+  /** 未完成時的 tooltip，例如「尚欠：聯絡電話、生活習慣評分」 */
+  profileIncompleteHint?: string;
   className?: string;
 };
 
@@ -39,6 +41,7 @@ export default function HousingIntentButton({
   propertyId,
   isProfileComplete = true,
   profileSetupHref = DEFAULT_PROFILE_SETUP_HREF,
+  profileIncompleteHint = "",
   className,
 }: HousingIntentButtonProps) {
   const router = useRouter();
@@ -88,6 +91,19 @@ export default function HousingIntentButton({
     setBudgetInput(String(Math.max(0, Math.round(defaultBudget))));
   }, [isIntentModalOpen, defaultDistrict, defaultBudget]);
 
+  useEffect(() => {
+    if (isProfileComplete) return;
+
+    function onVisible() {
+      if (document.visibilityState === "visible") {
+        router.refresh();
+      }
+    }
+
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [isProfileComplete, router]);
+
   async function handlePrimaryClick() {
     const {
       data: { user },
@@ -104,10 +120,7 @@ export default function HousingIntentButton({
       return;
     }
 
-    if (!isProfileComplete) {
-      router.push(profileSetupHref);
-      return;
-    }
+    if (!isProfileComplete) return;
 
     setIsIntentModalOpen(true);
   }
@@ -115,10 +128,7 @@ export default function HousingIntentButton({
   async function handleConfirmIntent() {
     if (submitting) return;
 
-    if (!isProfileComplete) {
-      router.push(profileSetupHref);
-      return;
-    }
+    if (!isProfileComplete) return;
 
     const {
       data: { user },
@@ -208,21 +218,49 @@ export default function HousingIntentButton({
     }
   }
 
+  const incompleteTooltip =
+    profileIncompleteHint.trim() ||
+    "尚欠：顯示名稱、聯絡電話或生活習慣評分。請至「我的帳號」完善後再試。";
+
   return (
     <>
-      <Button
-        type="button"
-        onClick={() => void handlePrimaryClick()}
-        className={cn(
-          className,
-          !isProfileComplete &&
-            "border-amber-500 bg-amber-500 text-white hover:bg-amber-600 hover:text-white"
-        )}
+      <span
+        className="block w-full"
+        title={!isProfileComplete ? incompleteTooltip : undefined}
       >
-        {isProfileComplete
-          ? "✨ 加入心水排隊區"
-          : "⚠️ 請先完善個人資料與生活評分"}
-      </Button>
+        <Button
+          type="button"
+          disabled={!isProfileComplete}
+          aria-disabled={!isProfileComplete}
+          aria-label={
+            isProfileComplete
+              ? "加入心水排隊區"
+              : `請先完善個人資料與生活評分。${incompleteTooltip}`
+          }
+          onClick={() => void handlePrimaryClick()}
+          className={cn(
+            className,
+            !isProfileComplete &&
+              "cursor-not-allowed border-amber-500 bg-amber-500 text-white opacity-95 hover:bg-amber-500 hover:text-white disabled:opacity-95"
+          )}
+        >
+          {isProfileComplete
+            ? "✨ 加入心水排隊區"
+            : "⚠️ 請先完善個人資料與生活評分"}
+        </Button>
+      </span>
+      {!isProfileComplete ? (
+        <p className="mt-1.5 text-center text-xs text-amber-800/90" role="status">
+          {incompleteTooltip}
+          {" · "}
+          <a
+            href={profileSetupHref}
+            className="font-medium text-[#0f2540] underline-offset-2 hover:underline"
+          >
+            前往完善
+          </a>
+        </p>
+      ) : null}
 
       {isProfileComplete ? (
         <Dialog open={isIntentModalOpen} onOpenChange={setIsIntentModalOpen}>
