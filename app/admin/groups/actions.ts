@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { isAdminUser } from "@/lib/admin-auth";
+import { checkAdminAccessFromProfile } from "@/lib/admin-auth";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { createSupabaseServerClient, getServerUser } from "@/lib/supabase/server";
 
@@ -17,8 +17,14 @@ async function requireAdminRpcClient(): Promise<
 > {
   const authClient = await createSupabaseServerClient();
   const { user } = await getServerUser(authClient);
+  const { isAdmin, profileRole } = await checkAdminAccessFromProfile(authClient as any, user);
 
-  if (!isAdminUser(user)) {
+  if (!isAdmin) {
+    console.log("Admin Check Failed:", {
+      user: user ? { id: user.id, email: user.email ?? null } : null,
+      profileRole,
+      requiredRole: "admin",
+    });
     return { ok: false, error: "無權限執行此操作。" };
   }
 

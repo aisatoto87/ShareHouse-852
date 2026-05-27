@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import Navbar from "@/components/Navbar";
-import { isAdminUser } from "@/lib/admin-auth";
+import { checkAdminAccessFromProfile } from "@/lib/admin-auth";
 import { createSupabaseServerClient, getServerUser } from "@/lib/supabase/server";
 import { markInquiryContacted } from "@/app/admin/inquiries/actions";
 import { revalidatePath } from "next/cache";
@@ -97,8 +97,14 @@ export default async function AdminInquiriesPage() {
   // ... 下面繼續係你原本嘅 const supabase = await createSupabaseServerClient(); 等等 ...
   const supabase = await createSupabaseServerClient();
   const { user } = await getServerUser(supabase);
+  const { isAdmin, profileRole } = await checkAdminAccessFromProfile(supabase as any, user);
 
-  if (!isAdminUser(user)) {
+  if (!isAdmin) {
+    console.log("Admin Check Failed:", {
+      user: user ? { id: user.id, email: user.email ?? null } : null,
+      profileRole,
+      requiredRole: "admin",
+    });
     redirect("/");
   }
 
