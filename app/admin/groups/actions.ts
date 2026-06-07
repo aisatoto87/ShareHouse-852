@@ -1,13 +1,16 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { invokeProcessGroupMatchV2IfFull } from "@/lib/process-group-match-v2";
 import { checkAdminAccessFromProfile } from "@/lib/admin-auth";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { createSupabaseServerClient, getServerUser } from "@/lib/supabase/server";
 
 export type AdminGroupActionResult = { ok: true } | { ok: false; error: string };
 
-export type AdminAddToGroupResult = AdminGroupActionResult;
+export type AdminAddToGroupResult =
+  | { ok: true; groupMatchProcessed?: boolean }
+  | { ok: false; error: string };
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -57,8 +60,13 @@ export async function adminAddToGroupAction(
       return { ok: false, error: error.message || "加入群組失敗。" };
     }
 
+    const rpcResult = await invokeProcessGroupMatchV2IfFull(gate.rpc, trimmedGroupId);
+    if (rpcResult.error) {
+      return { ok: false, error: rpcResult.error };
+    }
+
     revalidatePath("/admin/groups");
-    return { ok: true };
+    return { ok: true, groupMatchProcessed: rpcResult.invoked || undefined };
   } catch (e) {
     const message = e instanceof Error ? e.message : "伺服器錯誤";
     return { ok: false, error: message };

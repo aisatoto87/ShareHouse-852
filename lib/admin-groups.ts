@@ -90,7 +90,7 @@ export async function fetchActiveAdminGroups(): Promise<{
     `
     )
     .in("status", ["recruiting", "pending_opt_in"])
-    .order("created_at", { ascending: false });
+    .order("created_at", { ascending: true });
 
   if (error) {
     console.error("[admin-groups] fetch", error.message);

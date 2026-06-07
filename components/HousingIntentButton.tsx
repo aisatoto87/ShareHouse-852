@@ -63,6 +63,7 @@ export default function HousingIntentButton({
           matched?: boolean;
           message?: string;
           error?: string;
+          group_match_processed?: boolean;
         };
 
         if (!response.ok) {

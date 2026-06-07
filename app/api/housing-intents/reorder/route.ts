@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { isUserGloballyFrozenFromIntents } from "@/lib/housing-intent-status";
+import { isUserGloballyFrozenOnServer } from "@/lib/global-freeze";
 import { createSupabaseServerClient, getServerUser } from "@/lib/supabase/server";
 
 type ReorderPayload = {
@@ -122,7 +122,18 @@ export async function POST(request: Request) {
       .map((row) => normalizeIntentRow(row as Record<string, unknown>))
       .filter((row): row is IntentRow => row != null);
 
-    if (isUserGloballyFrozenFromIntents(allIntents)) {
+    let globallyFrozen = false;
+    try {
+      globallyFrozen = await isUserGloballyFrozenOnServer(supabase, user.id);
+    } catch (e) {
+      console.error("[api/housing-intents/reorder] global freeze check", e);
+      return NextResponse.json(
+        { error: e instanceof Error ? e.message : "查詢全局凍結狀態失敗。" },
+        { status: 500 }
+      );
+    }
+
+    if (globallyFrozen) {
       return NextResponse.json(
         {
           error: "您有配對正在處理中，暫時無法更改志願次序。",
