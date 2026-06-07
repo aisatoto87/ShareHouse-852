@@ -242,14 +242,16 @@ export default function MatchedTeammates({
           return;
         }
 
-        const profileSelect = canRevealContact
-          ? "id, display_name, nickname, avatar_url, phone"
-          : "id, display_name, nickname, avatar_url";
-
         const [{ data: profileRows, error: profErr }, { data: reviewRows, error: revErr }] =
           await Promise.all([
-            supabase.from("profiles").select(profileSelect).in("id", otherUserIds),
-            supabase.from("reviews").select("reviewee_id, rating").in("reviewee_id", otherUserIds),
+            supabase
+              .from("profiles")
+              .select("id, display_name, nickname, avatar_url, phone")
+              .in("id", otherUserIds),
+            supabase
+              .from("reviews")
+              .select("reviewee_id, rating")
+              .in("reviewee_id", otherUserIds),
           ]);
 
         if (cancelled) return;
@@ -264,7 +266,7 @@ export default function MatchedTeammates({
 
         const profileById = new Map<string, Record<string, unknown>>();
         for (const row of profileRows ?? []) {
-          const r = row as Record<string, unknown>;
+          const r = row as unknown as Record<string, unknown>;
           const id = typeof r.id === "string" ? r.id : String(r.id ?? "");
           if (id) profileById.set(id, r);
         }
