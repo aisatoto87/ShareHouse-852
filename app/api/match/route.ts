@@ -9,7 +9,8 @@ import {
   resolveTargetHeadcount,
   type UserHabits,
 } from "@/lib/matchingAlgorithm";
-import { GLOBAL_FROZEN_INTENT_STATUSES } from "@/lib/housing-intent-status";
+import { fetchGloballyFrozenUserIds } from "@/lib/global-freeze";
+import { invokeProcessGroupMatchV2IfFull } from "@/lib/process-group-match-v2";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
 export const runtime = "nodejs";
@@ -23,24 +24,6 @@ type MatchRequestBody = {
 type AdminClient = ReturnType<typeof createSupabaseAdminClient>;
 
 const OPT_IN_WINDOW_MS = 24 * 60 * 60 * 1000;
-
-async function fetchGloballyFrozenUserIds(admin: AdminClient): Promise<Set<string>> {
-  const { data, error } = await admin
-    .from("housing_intents")
-    .select("user_id")
-    .in("status", [...GLOBAL_FROZEN_INTENT_STATUSES]);
-
-  if (error) {
-    throw new Error(error.message);
-  }
-
-  const ids = new Set<string>();
-  for (const row of data ?? []) {
-    const uid = (row as { user_id?: unknown }).user_id;
-    if (typeof uid === "string" && uid.trim() !== "") ids.add(uid.trim());
-  }
-  return ids;
-}
 
 function resolveIntentId(row: Record<string, unknown>): string | null {
   if (typeof row.intent_id === "string" && row.intent_id.trim() !== "") {
@@ -148,6 +131,7 @@ type JoinRecruitingGroupResult =
       group_confirmed: boolean;
       property_id: string | null;
       match_mode: string;
+      group_match_processed?: boolean;
     };
 
 /** 階段一：嘗試加入正在招募中的現有群組 */
@@ -173,6 +157,9 @@ async function tryJoinRecruitingGroup(params: {
   } else {
     recruitingQuery = recruitingQuery.is("property_id", null);
   }
+
+  // 優先填滿最舊的 recruiting 群組，避免資源分散開新 group
+  recruitingQuery = recruitingQuery.order("created_at", { ascending: true });
 
   const { data: recruitingRows, error: recruitingErr } = await recruitingQuery;
 
@@ -302,6 +289,15 @@ async function tryJoinRecruitingGroup(params: {
       throw new Error(groupUpdateErr.message);
     }
 
+    let groupMatchProcessed = false;
+    if (isFullyStaffed) {
+      const rpcResult = await invokeProcessGroupMatchV2IfFull(admin, groupId);
+      if (rpcResult.error) {
+        throw new Error(rpcResult.error);
+      }
+      groupMatchProcessed = rpcResult.invoked;
+    }
+
     if (isFullyStaffed) {
       const allUserIds = [...new Set([...memberUserIds, user_id])];
       try {
@@ -334,6 +330,7 @@ async function tryJoinRecruitingGroup(params: {
       group_confirmed: isFullyStaffed,
       property_id: ownPropertyId,
       match_mode: matchMode,
+      group_match_processed: groupMatchProcessed || undefined,
     };
   }
 
@@ -476,6 +473,7 @@ export async function POST(request: Request) {
           current_size: joinResult.current_size,
           target_size: joinResult.target_size,
           group_confirmed: joinResult.group_confirmed,
+          group_match_processed: joinResult.group_match_processed ?? false,
           match_mode: joinResult.match_mode,
           property_id: joinResult.property_id,
           message: joinResult.group_confirmed
@@ -635,6 +633,11 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: membersErr.message }, { status: 500 });
       }
 
+      const rpcResult = await invokeProcessGroupMatchV2IfFull(admin, groupId);
+      if (rpcResult.error) {
+        return NextResponse.json({ error: rpcResult.error }, { status: 500 });
+      }
+
       const intentIdsToMatch = [...new Set([ownResolvedIntentId, otherIntentId])];
 
       for (const iid of intentIdsToMatch) {
@@ -668,6 +671,7 @@ export async function POST(request: Request) {
         habit_similarity: habitScore,
         target_size: targetSize,
         current_size: 2,
+        group_match_processed: rpcResult.invoked,
         match_mode: matchMode,
         property_id: ownPropertyId,
       });

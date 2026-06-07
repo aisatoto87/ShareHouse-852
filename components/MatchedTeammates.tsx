@@ -1,32 +1,31 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Loader2, User } from "lucide-react";
+import { Loader2, MessageCircle } from "lucide-react";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
+import { isActiveMatchGroupStatus } from "@/lib/intent-group-ui";
 import { cn } from "@/lib/utils";
-
-/** 意向已入群時顯示隊友資訊 */
-const ACTIVE_MATCH_GROUP_STATUSES = [
-  "pending_opt_in",
-  "recruiting",
-  "confirmed",
-  "matched",
-] as const;
 
 type TeammateProfile = {
   userId: string;
   displayName: string;
   avatarUrl: string | null;
-  /** 來自 reviews 聚合；profiles 表目前無 rating 欄位，無評價時顯示預設 5.0 */
+  /** 來自 reviews 聚合；無評價時顯示「新室友」標籤 */
   ratingLabel: string;
   reviewCount: number;
   ratingIsPlaceholder: boolean;
+  phone: string | null;
 };
+
+const CONTACT_LOCK_LABEL = "🔒 齊人後解鎖聯絡方式";
+const CONTACT_LOCK_TOOLTIP = "當群組滿員並確認後，即可與室友交換聯絡方式";
 
 export type MatchedTeammatesProps = {
   viewerUserId: string;
   intentStatus: string;
   groupStatus?: string | null;
+  /** 父層已校驗的群組 ID；若 DB 查無此實體則不渲染 */
+  groupId?: string | null;
   targetPropertyId?: string | null;
   className?: string;
 };
@@ -35,20 +34,29 @@ function isHttpUrl(value: string): boolean {
   return value.startsWith("http://") || value.startsWith("https://");
 }
 
-function resolveDisplayName(profile: {
+function resolveTeammateDisplayName(profile: {
   display_name?: string | null;
   nickname?: string | null;
-  full_name?: string | null;
 } | null): string {
-  const full =
-    typeof profile?.full_name === "string" ? profile.full_name.trim() : "";
-  if (full) return full;
   const display =
     typeof profile?.display_name === "string" ? profile.display_name.trim() : "";
   if (display) return display;
   const nick = typeof profile?.nickname === "string" ? profile.nickname.trim() : "";
   if (nick) return nick;
   return "室友";
+}
+
+function normalizePhone(value: unknown): string | null {
+  const raw = typeof value === "string" ? value.trim() : "";
+  return raw.length > 0 ? raw : null;
+}
+
+function buildTeammateWhatsAppUrl(phone: string, displayName: string): string {
+  const digits = phone.replace(/\D/g, "");
+  const msg = encodeURIComponent(
+    `你好！我們在 ShareHouse 852 已配對成功，我是你的室友，想跟你聯絡一下～（${displayName}）`
+  );
+  return `https://wa.me/${digits}?text=${msg}`;
 }
 
 function avatarInitial(name: string): string {
@@ -74,17 +82,11 @@ function propertyIdMatches(
   return groupProp == null;
 }
 
-function isActiveMatchGroupStatus(status: unknown): status is (typeof ACTIVE_MATCH_GROUP_STATUSES)[number] {
-  if (typeof status !== "string") return false;
-  return ACTIVE_MATCH_GROUP_STATUSES.includes(
-    status.trim().toLowerCase() as (typeof ACTIVE_MATCH_GROUP_STATUSES)[number]
-  );
-}
-
 export default function MatchedTeammates({
   viewerUserId,
   intentStatus,
   groupStatus = null,
+  groupId: expectedGroupId = null,
   targetPropertyId = null,
   className,
 }: MatchedTeammatesProps) {
@@ -92,6 +94,7 @@ export default function MatchedTeammates({
   const [loading, setLoading] = useState(true);
   const [teammates, setTeammates] = useState<TeammateProfile[]>([]);
   const [fetchError, setFetchError] = useState<string | null>(null);
+  const [groupEntityFound, setGroupEntityFound] = useState<boolean | null>(null);
 
   void intentStatus;
   const normalizedGroupStatus = isActiveMatchGroupStatus(groupStatus)
@@ -105,6 +108,7 @@ export default function MatchedTeammates({
     if (!shouldFetch || !viewerUserId) {
       setLoading(false);
       setTeammates([]);
+      setGroupEntityFound(null);
       return;
     }
 
@@ -114,8 +118,14 @@ export default function MatchedTeammates({
       setLoading(true);
       setFetchError(null);
       setTeammates([]);
+      setGroupEntityFound(null);
 
       try {
+        const trimmedExpectedGroupId =
+          typeof expectedGroupId === "string" && expectedGroupId.trim() !== ""
+            ? expectedGroupId.trim()
+            : null;
+
         const { data: myMemberships, error: gmErr } = await supabase
           .from("group_members")
           .select("group_id")
@@ -125,10 +135,11 @@ export default function MatchedTeammates({
         if (gmErr) {
           console.error("[MatchedTeammates] group_members", gmErr);
           setFetchError(gmErr.message);
+          setGroupEntityFound(false);
           return;
         }
 
-        const groupIds = [
+        const memberGroupIds = [
           ...new Set(
             (myMemberships ?? [])
               .map((r) => String((r as { group_id?: unknown }).group_id ?? ""))
@@ -136,19 +147,30 @@ export default function MatchedTeammates({
           ),
         ];
 
-        if (groupIds.length === 0) {
+        if (memberGroupIds.length === 0) {
+          setGroupEntityFound(false);
+          return;
+        }
+
+        const groupIdsToQuery = trimmedExpectedGroupId
+          ? memberGroupIds.filter((id) => id === trimmedExpectedGroupId)
+          : memberGroupIds;
+
+        if (groupIdsToQuery.length === 0) {
+          setGroupEntityFound(false);
           return;
         }
 
         const { data: groups, error: mgErr } = await supabase
           .from("match_groups")
           .select("group_id, status, property_id")
-          .in("group_id", groupIds);
+          .in("group_id", groupIdsToQuery);
 
         if (cancelled) return;
         if (mgErr) {
           console.error("[MatchedTeammates] match_groups", mgErr);
           setFetchError(mgErr.message);
+          setGroupEntityFound(false);
           return;
         }
 
@@ -156,6 +178,7 @@ export default function MatchedTeammates({
           const g = raw as Record<string, unknown>;
           const gid = typeof g.group_id === "string" ? g.group_id : "";
           if (!gid) return false;
+          if (trimmedExpectedGroupId && gid !== trimmedExpectedGroupId) return false;
           const gs = String(g.status ?? "");
           return (
             gs === normalizedGroupStatus &&
@@ -170,8 +193,29 @@ export default function MatchedTeammates({
             : null;
 
         if (!groupId) {
+          setGroupEntityFound(false);
           return;
         }
+
+        const { count: memberCount, error: memberCountErr } = await supabase
+          .from("group_members")
+          .select("user_id", { count: "exact", head: true })
+          .eq("group_id", groupId);
+
+        if (cancelled) return;
+        if (memberCountErr) {
+          console.error("[MatchedTeammates] member count", memberCountErr);
+          setFetchError(memberCountErr.message);
+          setGroupEntityFound(false);
+          return;
+        }
+
+        if (!memberCount || memberCount < 1) {
+          setGroupEntityFound(false);
+          return;
+        }
+
+        setGroupEntityFound(true);
 
         const { data: memberRows, error: membersErr } = await supabase
           .from("group_members")
@@ -202,9 +246,12 @@ export default function MatchedTeammates({
           await Promise.all([
             supabase
               .from("profiles")
-              .select("id, display_name, nickname, avatar_url")
+              .select("id, display_name, nickname, avatar_url, phone")
               .in("id", otherUserIds),
-            supabase.from("reviews").select("reviewee_id, rating").in("reviewee_id", otherUserIds),
+            supabase
+              .from("reviews")
+              .select("reviewee_id, rating")
+              .in("reviewee_id", otherUserIds),
           ]);
 
         if (cancelled) return;
@@ -219,7 +266,7 @@ export default function MatchedTeammates({
 
         const profileById = new Map<string, Record<string, unknown>>();
         for (const row of profileRows ?? []) {
-          const r = row as Record<string, unknown>;
+          const r = row as unknown as Record<string, unknown>;
           const id = typeof r.id === "string" ? r.id : String(r.id ?? "");
           if (id) profileById.set(id, r);
         }
@@ -237,15 +284,12 @@ export default function MatchedTeammates({
           ratingAgg.set(uid, { sum: prev.sum + rating, count: prev.count + 1 });
         }
 
-        const DEFAULT_PLACEHOLDER_RATING = 5.0;
-
         const loaded: TeammateProfile[] = otherUserIds.map((uid) => {
           const profile = profileById.get(uid) ?? null;
-          const displayName = resolveDisplayName(
+          const displayName = resolveTeammateDisplayName(
             profile as {
               display_name?: string | null;
               nickname?: string | null;
-              full_name?: string | null;
             } | null
           );
           const rawAvatar =
@@ -260,8 +304,12 @@ export default function MatchedTeammates({
             ratingLabel = (Math.round((agg.sum / reviewCount) * 10) / 10).toFixed(1);
           } else {
             ratingIsPlaceholder = true;
-            ratingLabel = DEFAULT_PLACEHOLDER_RATING.toFixed(1);
+            ratingLabel = "";
           }
+
+          const phone = canRevealContact
+            ? normalizePhone((profile as { phone?: unknown } | null)?.phone)
+            : null;
 
           return {
             userId: uid,
@@ -270,13 +318,17 @@ export default function MatchedTeammates({
             ratingLabel,
             reviewCount,
             ratingIsPlaceholder,
+            phone,
           };
         });
 
         if (!cancelled) setTeammates(loaded);
       } catch (e) {
         console.error("[MatchedTeammates] load", e);
-        if (!cancelled) setFetchError("讀取室友資料時發生錯誤。");
+        if (!cancelled) {
+          setFetchError("讀取室友資料時發生錯誤。");
+          setGroupEntityFound(false);
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -286,9 +338,18 @@ export default function MatchedTeammates({
     return () => {
       cancelled = true;
     };
-  }, [supabase, viewerUserId, normalizedGroupStatus, targetPropertyId, shouldFetch]);
+  }, [
+    supabase,
+    viewerUserId,
+    normalizedGroupStatus,
+    expectedGroupId,
+    targetPropertyId,
+    shouldFetch,
+    canRevealContact,
+  ]);
 
   if (!shouldFetch) return null;
+  if (!loading && groupEntityFound === false) return null;
 
   return (
     <div
@@ -309,49 +370,86 @@ export default function MatchedTeammates({
       ) : teammates.length === 0 ? (
         <p className="mt-2 text-xs text-zinc-500">群組內暫無其他室友</p>
       ) : (
-        <ul className="mt-3 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
+        <ul className="mt-3 grid grid-cols-1 gap-3 min-[420px]:grid-cols-2 sm:grid-cols-2 lg:grid-cols-3">
           {teammates.map((mate) => (
             <li
               key={mate.userId}
-              className="flex min-w-0 flex-1 items-center gap-3 rounded-lg border border-zinc-100 bg-white px-3 py-2.5 shadow-sm sm:min-w-[12rem] sm:max-w-[14rem]"
+              className="flex min-w-0 flex-col gap-2.5 rounded-lg border border-zinc-100 bg-white p-3 shadow-sm"
             >
-              {mate.avatarUrl ? (
-                <img
-                  src={mate.avatarUrl}
-                  alt=""
-                  className="h-11 w-11 shrink-0 rounded-full object-cover"
-                />
-              ) : (
-                <div
-                  className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[#0f2540]/10 text-sm font-bold text-[#0f2540]"
-                  aria-hidden
-                >
-                  {avatarInitial(mate.displayName)}
-                </div>
-              )}
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-semibold text-zinc-900">
-                  {mate.displayName}
-                </p>
-                <p className="mt-0.5 text-xs font-medium text-amber-700">
-                  <span aria-hidden>⭐</span> {mate.ratingLabel}
-                  {mate.ratingIsPlaceholder ? (
-                    <span className="ml-1 font-normal text-zinc-400">(新室友)</span>
-                  ) : (
-                    <span className="ml-1 font-normal text-zinc-500">
-                      ({mate.reviewCount} 則評價)
-                    </span>
-                  )}
-                </p>
-                {canRevealContact ? (
-                  <button
-                    type="button"
-                    className="mt-2 inline-flex items-center rounded-md bg-[#0f2540] px-2.5 py-1 text-xs font-medium text-white hover:bg-[#1a3a5c]"
+              <div className="flex min-w-0 items-center gap-3">
+                {mate.avatarUrl ? (
+                  <img
+                    src={mate.avatarUrl}
+                    alt=""
+                    className="h-11 w-11 shrink-0 rounded-full object-cover"
+                  />
+                ) : (
+                  <div
+                    className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[#0f2540]/10 text-sm font-bold text-[#0f2540]"
+                    aria-hidden
                   >
-                    💬 聯絡室友
-                  </button>
-                ) : null}
+                    {avatarInitial(mate.displayName)}
+                  </div>
+                )}
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-semibold text-zinc-900">
+                    {mate.displayName}
+                  </p>
+                  {mate.ratingIsPlaceholder ? (
+                    <span className="mt-0.5 inline-flex rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] font-medium text-zinc-600">
+                      新室友
+                    </span>
+                  ) : (
+                    <p className="mt-0.5 text-xs font-medium text-amber-700">
+                      <span aria-hidden>⭐</span> {mate.ratingLabel}
+                      <span className="ml-1 font-normal text-zinc-500">
+                        ({mate.reviewCount} 則評價)
+                      </span>
+                    </p>
+                  )}
+                </div>
               </div>
+
+              {canRevealContact ? (
+                <div className="space-y-2 border-t border-zinc-100 pt-2.5">
+                  {mate.phone ? (
+                    <p className="text-xs text-zinc-600">
+                      <span className="font-medium text-zinc-500">電話：</span>
+                      <a
+                        href={`tel:${mate.phone.replace(/\s/g, "")}`}
+                        className="font-semibold text-[#0f2540] underline-offset-2 hover:underline"
+                      >
+                        {mate.phone}
+                      </a>
+                    </p>
+                  ) : null}
+                  <div className="flex flex-wrap gap-1.5">
+                    {mate.phone ? (
+                      <a
+                        href={buildTeammateWhatsAppUrl(mate.phone, mate.displayName)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 rounded-md bg-[#25D366] px-2.5 py-1 text-xs font-medium text-white hover:bg-[#1fb855]"
+                      >
+                        <MessageCircle className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                        WhatsApp
+                      </a>
+                    ) : (
+                      <p className="text-xs text-zinc-500">室友尚未提供聯絡方式</p>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  disabled
+                  title={CONTACT_LOCK_TOOLTIP}
+                  aria-label={`${CONTACT_LOCK_LABEL}。${CONTACT_LOCK_TOOLTIP}`}
+                  className="inline-flex w-full cursor-not-allowed items-center justify-center rounded-md border border-zinc-200/80 bg-zinc-100/70 px-2.5 py-1.5 text-xs font-medium text-zinc-400 opacity-70"
+                >
+                  {CONTACT_LOCK_LABEL}
+                </button>
+              )}
             </li>
           ))}
         </ul>

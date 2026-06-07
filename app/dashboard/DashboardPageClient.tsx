@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, type ChangeEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import { BadgeCheck, ChevronDown, ChevronUp, Loader2, Save, UserRound } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -31,6 +31,13 @@ import {
   inferZhSuffix,
 } from "@/lib/profile-display-name";
 import { isUserGloballyFrozenFromIntents } from "@/lib/housing-intent-status";
+import {
+  isActiveMatchGroupStatus,
+  isValidMatchGroupEntity,
+  parseGroupSize,
+  resolveIntentCardUi,
+  type IntentGroupEntity,
+} from "@/lib/intent-group-ui";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
 
@@ -62,9 +69,12 @@ type HousingIntentRow = {
   created_at: string;
   target_property_id: string | null;
   target_property_title: string | null;
+  match_group_id?: string | null;
   match_group_status?: string | null;
   match_group_current_size?: number | null;
   match_group_target_size?: number | null;
+  match_group_member_count?: number | null;
+  match_group_has_agreed?: boolean | null;
 };
 
 type MatchGroupSummary = {
@@ -73,21 +83,8 @@ type MatchGroupSummary = {
   property_id: string | null;
   current_size: number;
   target_size: number;
+  member_count: number;
 };
-
-const ACTIVE_MATCH_GROUP_STATUSES = [
-  "pending_opt_in",
-  "recruiting",
-  "confirmed",
-  "matched",
-] as const;
-
-function isActiveMatchGroupStatus(status: unknown): status is (typeof ACTIVE_MATCH_GROUP_STATUSES)[number] {
-  if (typeof status !== "string") return false;
-  return ACTIVE_MATCH_GROUP_STATUSES.includes(
-    status.trim().toLowerCase() as (typeof ACTIVE_MATCH_GROUP_STATUSES)[number]
-  );
-}
 
 function resolveTargetPropertyFromRow(
   r: Record<string, unknown>
@@ -153,6 +150,35 @@ function mapHousingIntentRows(rows: unknown[] | null): HousingIntentRow[] {
   });
 }
 
+async function reconcileStalePausedIntents(
+  supabase: ReturnType<typeof createSupabaseBrowserClient>,
+  userId: string,
+  rows: HousingIntentRow[]
+): Promise<HousingIntentRow[]> {
+  if (isUserGloballyFrozenFromIntents(rows)) return rows;
+
+  const stalePausedIds = rows
+    .filter((row) => row.status.trim().toLowerCase() === "paused")
+    .map((row) => row.intent_id);
+  if (stalePausedIds.length === 0) return rows;
+
+  const { error: restoreErr } = await supabase
+    .from("housing_intents")
+    .update({ status: "waiting" })
+    .eq("user_id", userId)
+    .eq("status", "paused")
+    .in("intent_id", stalePausedIds);
+
+  if (restoreErr) {
+    console.warn("[dashboard] restore stale paused intents", restoreErr.message);
+    return rows;
+  }
+
+  return rows.map((row) =>
+    stalePausedIds.includes(row.intent_id) ? { ...row, status: "waiting" } : row
+  );
+}
+
 function sortIntentsByPreferenceRank(rows: HousingIntentRow[]): HousingIntentRow[] {
   return [...rows].sort((a, b) => {
     const rankA = a.preference_rank;
@@ -165,6 +191,31 @@ function sortIntentsByPreferenceRank(rows: HousingIntentRow[]): HousingIntentRow
   });
 }
 
+function toIntentGroupEntity(row: HousingIntentRow): IntentGroupEntity | null {
+  const groupId =
+    typeof row.match_group_id === "string" && row.match_group_id.trim() !== ""
+      ? row.match_group_id.trim()
+      : null;
+  if (!groupId) return null;
+  const status =
+    typeof row.match_group_status === "string" ? row.match_group_status.trim() : "";
+  const currentSize =
+    typeof row.match_group_current_size === "number"
+      ? row.match_group_current_size
+      : 0;
+  const targetSize =
+    typeof row.match_group_target_size === "number" ? row.match_group_target_size : 0;
+  const memberCount =
+    typeof row.match_group_member_count === "number" ? row.match_group_member_count : 0;
+  return {
+    groupId,
+    status,
+    currentSize,
+    targetSize,
+    memberCount,
+  };
+}
+
 function intentStatusBadge(
   status: string,
   options?: {
@@ -172,6 +223,7 @@ function intentStatusBadge(
     groupStatus?: string | null;
     recruitingShortage?: number | null;
     isPropertyOffline?: boolean;
+    viewerHasAgreed?: boolean | null;
   }
 ): { className: string; label: string } {
   if (options?.isPropertyOffline) {
@@ -195,10 +247,17 @@ function intentStatusBadge(
     };
   }
   if (groupStatus === "pending_opt_in") {
+    if (options?.viewerHasAgreed === true) {
+      return {
+        className:
+          "max-w-full whitespace-normal rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-left font-medium text-emerald-800 shadow-sm",
+        label: "⏳ 您已同意，等待室友作實",
+      };
+    }
     return {
       className:
-        "max-w-full whitespace-normal rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-left font-medium text-blue-900 shadow-sm",
-      label: "🔔 等待全體確認 (24小時生死鎖)",
+        "max-w-full whitespace-normal rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-left font-medium text-amber-900 shadow-sm",
+      label: "🔔 等待您確認 (24小時生死鎖)",
     };
   }
   if (groupStatus === "confirmed" || groupStatus === "matched") {
@@ -214,6 +273,14 @@ function intentStatusBadge(
       className:
         "max-w-full whitespace-normal rounded-lg border border-zinc-300 bg-zinc-100 px-3 py-1.5 text-left font-medium text-zinc-600 shadow-sm",
       label: "⏸️ 暫停排隊 (您有另一個意向正在處理中)",
+    };
+  }
+
+  if (status === "paused") {
+    return {
+      className:
+        "max-w-full whitespace-normal rounded-lg border border-zinc-300 bg-zinc-100 px-3 py-1.5 text-left font-medium text-zinc-600 shadow-sm",
+      label: "⏸️ 暫停排隊",
     };
   }
 
@@ -297,6 +364,7 @@ export default function DashboardPageClient() {
   const [intentsLoading, setIntentsLoading] = useState(false);
   const [cancellingId, setCancellingId] = useState<string | null>(null);
   const [reordering, setReordering] = useState(false);
+  const expiredCleanupStartedRef = useRef(false);
 
   const isGloballyFrozen = useMemo(
     () => isUserGloballyFrozenFromIntents(intentRows),
@@ -507,12 +575,19 @@ export default function DashboardPageClient() {
 
       const { data: membershipRows, error: membershipErr } = await supabase
         .from("group_members")
-        .select("group_id")
+        .select("group_id, has_agreed")
         .eq("user_id", userId);
       if (membershipErr) {
         console.error("[dashboard] group_members", membershipErr);
-        setIntentRows(mappedRows);
+        setIntentRows(await reconcileStalePausedIntents(supabase, userId, mappedRows));
         return;
+      }
+
+      const hasAgreedByGroup = new Map<string, boolean>();
+      for (const row of membershipRows ?? []) {
+        const gid = String((row as { group_id?: unknown }).group_id ?? "").trim();
+        if (!gid) continue;
+        hasAgreedByGroup.set(gid, (row as { has_agreed?: boolean }).has_agreed === true);
       }
 
       const groupIds = [
@@ -523,7 +598,7 @@ export default function DashboardPageClient() {
         ),
       ];
       if (groupIds.length === 0) {
-        setIntentRows(mappedRows);
+        setIntentRows(await reconcileStalePausedIntents(supabase, userId, mappedRows));
         return;
       }
 
@@ -533,8 +608,25 @@ export default function DashboardPageClient() {
         .in("group_id", groupIds);
       if (groupsErr) {
         console.error("[dashboard] match_groups", groupsErr);
-        setIntentRows(mappedRows);
+        setIntentRows(await reconcileStalePausedIntents(supabase, userId, mappedRows));
         return;
+      }
+
+      const { data: allMemberRows, error: allMembersErr } = await supabase
+        .from("group_members")
+        .select("group_id")
+        .in("group_id", groupIds);
+      if (allMembersErr) {
+        console.error("[dashboard] group_members counts", allMembersErr);
+        setIntentRows(await reconcileStalePausedIntents(supabase, userId, mappedRows));
+        return;
+      }
+
+      const memberCountByGroup = new Map<string, number>();
+      for (const row of allMemberRows ?? []) {
+        const gid = String((row as { group_id?: unknown }).group_id ?? "").trim();
+        if (!gid) continue;
+        memberCountByGroup.set(gid, (memberCountByGroup.get(gid) ?? 0) + 1);
       }
 
       const groups: MatchGroupSummary[] = (groupsData ?? [])
@@ -549,29 +641,22 @@ export default function DashboardPageClient() {
               : null;
           const status =
             typeof row.status === "string" ? row.status.trim() : "";
-          const currentSize = Number(row.current_size);
-          const targetSize = Number(row.target_size);
           return {
             group_id: groupId,
             status,
             property_id: propertyId,
-            current_size:
-              Number.isFinite(currentSize) && currentSize >= 0
-                ? Math.round(currentSize)
-                : 0,
-            target_size:
-              Number.isFinite(targetSize) && targetSize >= 0
-                ? Math.round(targetSize)
-                : 0,
+            current_size: parseGroupSize(row.current_size),
+            target_size: parseGroupSize(row.target_size),
+            member_count: memberCountByGroup.get(groupId) ?? 0,
           };
         })
         .filter((group): group is MatchGroupSummary => group != null);
 
       const statusPriority = new Map<string, number>([
-        ["pending_opt_in", 0],
-        ["recruiting", 1],
-        ["confirmed", 2],
-        ["matched", 3],
+        ["confirmed", 0],
+        ["matched", 0],
+        ["pending_opt_in", 1],
+        ["recruiting", 2],
       ]);
 
       const enrichedRows = mappedRows.map((row) => {
@@ -587,16 +672,29 @@ export default function DashboardPageClient() {
               (statusPriority.get(a.status) ?? 99) -
               (statusPriority.get(b.status) ?? 99)
           );
-        const matchedGroup = candidates[0] ?? null;
+        const matchedGroup = candidates.find((group) =>
+          isValidMatchGroupEntity({
+            groupId: group.group_id,
+            status: group.status,
+            currentSize: group.current_size,
+            targetSize: group.target_size,
+            memberCount: group.member_count,
+          })
+        ) ?? null;
         return {
           ...row,
+          match_group_id: matchedGroup?.group_id ?? null,
           match_group_status: matchedGroup?.status ?? null,
           match_group_current_size: matchedGroup?.current_size ?? null,
           match_group_target_size: matchedGroup?.target_size ?? null,
+          match_group_member_count: matchedGroup?.member_count ?? null,
+          match_group_has_agreed: matchedGroup
+            ? hasAgreedByGroup.get(matchedGroup.group_id) ?? false
+            : null,
         };
       });
 
-      setIntentRows(enrichedRows);
+      setIntentRows(await reconcileStalePausedIntents(supabase, userId, enrichedRows));
     } finally {
       setIntentsLoading(false);
     }
@@ -606,6 +704,37 @@ export default function DashboardPageClient() {
     if (activeTab !== "intents" || !userId) return;
     void loadHousingIntents();
   }, [activeTab, userId, loadHousingIntents]);
+
+  useEffect(() => {
+    if (!userId || expiredCleanupStartedRef.current) return;
+    expiredCleanupStartedRef.current = true;
+
+    void (async () => {
+      try {
+        const { data, error } = await supabase.rpc("cleanup_expired_groups");
+        if (error) {
+          console.warn("[dashboard] cleanup_expired_groups", error.message);
+          return;
+        }
+
+        const processed =
+          typeof (data as { groups_processed?: unknown } | null)?.groups_processed ===
+            "number" &&
+          Number.isFinite(
+            (data as { groups_processed: number }).groups_processed
+          )
+            ? Math.round((data as { groups_processed: number }).groups_processed)
+            : 0;
+
+        if (processed > 0) {
+          router.refresh();
+          void loadHousingIntents();
+        }
+      } catch (e) {
+        console.warn("[dashboard] cleanup_expired_groups", e);
+      }
+    })();
+  }, [userId, supabase, router, loadHousingIntents]);
 
   const handleSwapPreferenceRank = async (intentIdA: string, intentIdB: string) => {
     if (!userId || reordering || isGloballyFrozen) return;
@@ -1178,22 +1307,25 @@ export default function DashboardPageClient() {
                   </div>
                 ) : (
                   <>
-                    {intentRows.some((r) => r.status === "matching" || r.status === "recruiting") &&
-                    userId ? (
+                    {intentRows.some((r) => {
+                      const ui = resolveIntentCardUi(r.status, toIntentGroupEntity(r), {
+                        isGloballyFrozen,
+                      });
+                      return (
+                        ui.effectiveGroupStatus === "pending_opt_in" ||
+                        ui.effectiveGroupStatus === "recruiting"
+                      );
+                    }) && userId ? (
                       <MatchingOptInPanel viewerUserId={userId} className="mb-6" />
                     ) : null}
                   <ul className="space-y-4">
                     {sortedIntentRows.map((row, index) => {
-                      const effectiveGroupStatus = isActiveMatchGroupStatus(
-                        row.match_group_status
-                      )
-                        ? row.match_group_status
-                        : null;
-                      const effectiveIntentStatus = effectiveGroupStatus
-                        ? row.status
-                        : "waiting";
-                      const isWaitingFrozen =
-                        effectiveIntentStatus === "waiting" && isGloballyFrozen;
+                      const groupEntity = toIntentGroupEntity(row);
+                      const cardUi = resolveIntentCardUi(row.status, groupEntity, {
+                        isGloballyFrozen,
+                      });
+                      const effectiveGroupStatus = cardUi.effectiveGroupStatus;
+                      const effectiveIntentStatus = cardUi.effectiveIntentStatus;
                       const isPropertyOffline =
                         row.target_property_id != null && !row.target_property_title;
                       const currentSize =
@@ -1216,6 +1348,10 @@ export default function DashboardPageClient() {
                         groupStatus: effectiveGroupStatus,
                         recruitingShortage,
                         isPropertyOffline,
+                        viewerHasAgreed:
+                          effectiveGroupStatus === "pending_opt_in"
+                            ? row.match_group_has_agreed === true
+                            : undefined,
                       });
                       const budgetLabel = new Intl.NumberFormat("zh-HK").format(row.max_budget);
                       const isPropertyFirst = row.target_property_id != null;
@@ -1246,7 +1382,7 @@ export default function DashboardPageClient() {
                           <Card
                             className={cn(
                               "overflow-hidden border-zinc-200 shadow-sm transition-shadow hover:shadow-md",
-                              isWaitingFrozen && "opacity-60 grayscale"
+                              cardUi.isCardMuted && "opacity-60 grayscale"
                             )}
                           >
                             <CardContent className="p-5">
@@ -1368,11 +1504,13 @@ export default function DashboardPageClient() {
                                   )}
                                   {userId &&
                                   !isPropertyOffline &&
-                                  effectiveGroupStatus ? (
+                                  cardUi.showMatchedTeammates &&
+                                  row.match_group_id ? (
                                     <MatchedTeammates
                                       viewerUserId={userId}
                                       intentStatus={effectiveIntentStatus}
                                       groupStatus={effectiveGroupStatus}
+                                      groupId={row.match_group_id}
                                       targetPropertyId={row.target_property_id}
                                     />
                                   ) : null}
