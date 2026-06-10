@@ -1,4 +1,6 @@
+import { revalidatePath } from "next/cache";
 import { NextResponse } from "next/server";
+import { invokeProcessGroupMatchV2IfFull } from "@/lib/process-group-match-v2";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { createSupabaseServerClient, getServerUser } from "@/lib/supabase/server";
 
@@ -9,35 +11,45 @@ type MatchActionBody = {
   action?: unknown;
 };
 
-type IntentStatus = "waiting" | "matching" | "recruiting" | "matched";
-
 function isLikelyUuid(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
-}
-
-async function updateHousingIntentsStatusForUsers(
-  admin: ReturnType<typeof createSupabaseAdminClient>,
-  userIds: string[],
-  status: IntentStatus,
-  fromStatus: IntentStatus = "matching"
-) {
-  if (!userIds || userIds.length === 0) return;
-
-  const { error } = await admin
-    .from("housing_intents")
-    .update({ status: status })
-    .in("user_id", userIds)
-    .eq("status", fromStatus);
-
-  if (error) {
-    throw new Error(error.message);
-  }
 }
 
 function parseGroupSize(value: unknown): number {
   const n = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(n) || n < 0) return 0;
   return Math.round(n);
+}
+
+async function updateMemberIntentsForGroup(
+  admin: ReturnType<typeof createSupabaseAdminClient>,
+  userIds: string[],
+  status: "matched" | "recruiting" | "waiting",
+  propertyId: string | null
+): Promise<void> {
+  if (userIds.length === 0) return;
+
+  const fromStatuses =
+    status === "waiting"
+      ? ["matching", "pending_opt_in", "recruiting", "matched", "confirmed"]
+      : ["matching", "pending_opt_in", "recruiting", "waiting"];
+
+  let query = admin
+    .from("housing_intents")
+    .update({ status })
+    .in("user_id", userIds)
+    .in("status", fromStatuses);
+
+  if (propertyId) {
+    query = query.eq("target_property_id", propertyId);
+  } else {
+    query = query.is("target_property_id", null);
+  }
+
+  const { error } = await query;
+  if (error) {
+    throw new Error(error.message);
+  }
 }
 
 export async function POST(request: Request) {
@@ -87,7 +99,7 @@ export async function POST(request: Request) {
 
     const { data: groupRow, error: groupErr } = await admin
       .from("match_groups")
-      .select("group_id, status, current_size, target_size")
+      .select("group_id, status, current_size, target_size, property_id")
       .eq("group_id", groupId)
       .maybeSingle();
 
@@ -100,12 +112,48 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "找不到配對群組。" }, { status: 404 });
     }
 
-    if (String((groupRow as { status?: unknown }).status ?? "") !== "pending_opt_in") {
+    const initialGroupStatus = String((groupRow as { status?: unknown }).status ?? "");
+
+    if (action === "reject" && initialGroupStatus !== "pending_opt_in") {
       return NextResponse.json(
-        { error: "此群組已不在待確認狀態。", status: (groupRow as { status?: unknown }).status },
+        { error: "此群組已不在待確認狀態。", status: initialGroupStatus },
         { status: 409 }
       );
     }
+
+    if (action === "accept" && initialGroupStatus === "confirmed") {
+      revalidatePath("/dashboard", "page");
+      return NextResponse.json({
+        ok: true,
+        action: "accept",
+        group_confirmed: true,
+        group_status: "confirmed",
+        already_confirmed: true,
+      });
+    }
+
+    if (action === "accept" && initialGroupStatus === "recruiting") {
+      revalidatePath("/dashboard", "page");
+      return NextResponse.json({
+        ok: true,
+        action: "accept",
+        awaiting_others: true,
+        group_status: "recruiting",
+        already_recruiting: true,
+      });
+    }
+
+    if (action === "accept" && initialGroupStatus !== "pending_opt_in") {
+      return NextResponse.json(
+        { error: "此群組已不在待確認狀態。", status: initialGroupStatus },
+        { status: 409 }
+      );
+    }
+
+    const propertyId =
+      typeof (groupRow as { property_id?: unknown }).property_id === "string"
+        ? String((groupRow as { property_id: string }).property_id)
+        : null;
 
     const { data: memberRows, error: membersErr } = await admin
       .from("group_members")
@@ -128,7 +176,7 @@ export async function POST(request: Request) {
     if (action === "reject") {
       const { error: rejectGroupErr } = await admin
         .from("match_groups")
-        .update({ status: "expired" })
+        .update({ status: "expired", expires_at: null })
         .eq("group_id", groupId);
 
       if (rejectGroupErr) {
@@ -137,7 +185,7 @@ export async function POST(request: Request) {
       }
 
       try {
-        await updateHousingIntentsStatusForUsers(admin, memberUserIds, "waiting");
+        await updateMemberIntentsForGroup(admin, memberUserIds, "waiting", propertyId);
       } catch (e) {
         console.error("[api/match/action] reject intents", e);
         return NextResponse.json(
@@ -146,18 +194,35 @@ export async function POST(request: Request) {
         );
       }
 
+      revalidatePath("/dashboard", "page");
       return NextResponse.json({ ok: true, action: "reject" });
     }
 
-    const { error: optInErr } = await admin
+    const { data: selfMember, error: selfMemberErr } = await admin
       .from("group_members")
-      .update({ has_agreed: true })
+      .select("has_agreed")
       .eq("group_id", groupId)
-      .eq("user_id", user.id);
+      .eq("user_id", user.id)
+      .maybeSingle();
 
-    if (optInErr) {
-      console.error("[api/match/action] opt_in update", optInErr);
-      return NextResponse.json({ error: optInErr.message }, { status: 500 });
+    if (selfMemberErr) {
+      console.error("[api/match/action] self member fetch", selfMemberErr);
+      return NextResponse.json({ error: selfMemberErr.message }, { status: 500 });
+    }
+
+    const alreadyAgreed = (selfMember as { has_agreed?: boolean } | null)?.has_agreed === true;
+
+    if (!alreadyAgreed) {
+      const { error: optInErr } = await admin
+        .from("group_members")
+        .update({ has_agreed: true })
+        .eq("group_id", groupId)
+        .eq("user_id", user.id);
+
+      if (optInErr) {
+        console.error("[api/match/action] opt_in update", optInErr);
+        return NextResponse.json({ error: optInErr.message }, { status: 500 });
+      }
     }
 
     const { data: allMembers, error: allMemErr } = await admin
@@ -171,58 +236,85 @@ export async function POST(request: Request) {
     }
 
     const members = Array.isArray(allMembers) ? allMembers : [];
-    const allAgreed =
-      members.length > 0 &&
-      members.every((m) => (m as { has_agreed?: boolean }).has_agreed === true);
+    const memberCount = members.length;
+    const agreedCount = members.filter(
+      (m) => (m as { has_agreed?: boolean }).has_agreed === true
+    ).length;
+    const targetSize = Math.max(
+      parseGroupSize((groupRow as { target_size?: unknown }).target_size),
+      2
+    );
+    const allCurrentMembersAgreed =
+      memberCount > 0 && agreedCount === memberCount;
 
-    if (allAgreed) {
-      const currentSize = parseGroupSize((groupRow as { current_size?: unknown }).current_size);
-      const targetSize = parseGroupSize((groupRow as { target_size?: unknown }).target_size);
-      const effectiveTarget = targetSize > 0 ? targetSize : memberUserIds.length;
-      const isFullyStaffed = currentSize >= effectiveTarget;
+    console.log("[api/match/action] opt-in settlement", {
+      groupId,
+      memberCount,
+      agreedCount,
+      targetSize,
+      allCurrentMembersAgreed,
+    });
 
-      if (!isFullyStaffed) {
-        const { error: recruitingGroupErr } = await admin
-          .from("match_groups")
-          .update({ status: "recruiting" })
-          .eq("group_id", groupId);
+    const shouldConfirmGroup =
+      allCurrentMembersAgreed &&
+      agreedCount === targetSize &&
+      memberCount === targetSize;
 
-        if (recruitingGroupErr) {
-          console.error("[api/match/action] recruiting group", recruitingGroupErr);
-          return NextResponse.json({ error: recruitingGroupErr.message }, { status: 500 });
-        }
-
-        try {
-          await updateHousingIntentsStatusForUsers(admin, memberUserIds, "recruiting");
-        } catch (e) {
-          console.error("[api/match/action] recruiting intents", e);
-          return NextResponse.json(
-            { error: e instanceof Error ? e.message : "更新意向狀態失敗。" },
-            { status: 500 }
-          );
-        }
-
-        return NextResponse.json({
-          ok: true,
-          action: "accept",
-          group_recruiting: true,
-          current_size: currentSize,
-          target_size: effectiveTarget,
-        });
-      }
-
-      const { error: confirmedGroupErr } = await admin
+    // 全員同意且人數已達 target_size → confirmed
+    if (shouldConfirmGroup) {
+      const { data: confirmedRow, error: confirmedGroupErr } = await admin
         .from("match_groups")
-        .update({ status: "confirmed" })
-        .eq("group_id", groupId);
+        .update({
+          status: "confirmed",
+          current_size: memberCount,
+          expires_at: null,
+        })
+        .eq("group_id", groupId)
+        .eq("status", "pending_opt_in")
+        .select("status")
+        .maybeSingle();
 
       if (confirmedGroupErr) {
         console.error("[api/match/action] confirmed group", confirmedGroupErr);
         return NextResponse.json({ error: confirmedGroupErr.message }, { status: 500 });
       }
 
+      const confirmedStatus = String(
+        (confirmedRow as { status?: unknown } | null)?.status ?? ""
+      );
+
+      if (confirmedStatus !== "confirmed") {
+        const { data: latestGroup } = await admin
+          .from("match_groups")
+          .select("status")
+          .eq("group_id", groupId)
+          .maybeSingle();
+        const latestStatus = String((latestGroup as { status?: unknown } | null)?.status ?? "");
+
+        if (latestStatus === "confirmed") {
+          revalidatePath("/dashboard", "page");
+          return NextResponse.json({
+            ok: true,
+            action: "accept",
+            group_confirmed: true,
+            group_status: "confirmed",
+            agreed_count: agreedCount,
+            current_size: memberCount,
+            target_size: targetSize,
+          });
+        }
+
+        return NextResponse.json(
+          {
+            error: "群組結算失敗，狀態未能轉為 confirmed。",
+            group_status: latestStatus,
+          },
+          { status: 500 }
+        );
+      }
+
       try {
-        await updateHousingIntentsStatusForUsers(admin, memberUserIds, "matched");
+        await updateMemberIntentsForGroup(admin, memberUserIds, "matched", propertyId);
       } catch (e) {
         console.error("[api/match/action] matched intents", e);
         return NextResponse.json(
@@ -231,16 +323,87 @@ export async function POST(request: Request) {
         );
       }
 
+      const rpcResult = await invokeProcessGroupMatchV2IfFull(admin, groupId);
+      if (rpcResult.error) {
+        console.warn("[api/match/action] process_group_match_v2", rpcResult.error);
+      }
+
+      revalidatePath("/dashboard", "page");
+
       return NextResponse.json({
         ok: true,
         action: "accept",
         group_confirmed: true,
-        current_size: currentSize,
-        target_size: effectiveTarget,
+        group_status: "confirmed",
+        agreed_count: agreedCount,
+        current_size: memberCount,
+        target_size: targetSize,
+        group_match_processed: rpcResult.invoked,
       });
     }
 
-    return NextResponse.json({ ok: true, action: "accept", awaiting_others: true });
+    // 現有成員全員同意但未滿員 → recruiting
+    if (allCurrentMembersAgreed && memberCount < targetSize) {
+      const { data: recruitingRow, error: recruitingGroupErr } = await admin
+        .from("match_groups")
+        .update({
+          status: "recruiting",
+          current_size: memberCount,
+          expires_at: null,
+        })
+        .eq("group_id", groupId)
+        .eq("status", "pending_opt_in")
+        .select("status")
+        .maybeSingle();
+
+      if (recruitingGroupErr) {
+        console.error("[api/match/action] recruiting group", recruitingGroupErr);
+        return NextResponse.json({ error: recruitingGroupErr.message }, { status: 500 });
+      }
+
+      const recruitingStatus = String(
+        (recruitingRow as { status?: unknown } | null)?.status ?? ""
+      );
+      if (recruitingStatus !== "recruiting") {
+        return NextResponse.json(
+          { error: "群組結算失敗，狀態未能轉為 recruiting。", group_status: recruitingStatus },
+          { status: 500 }
+        );
+      }
+
+      try {
+        await updateMemberIntentsForGroup(admin, memberUserIds, "recruiting", propertyId);
+      } catch (e) {
+        console.error("[api/match/action] recruiting intents", e);
+        return NextResponse.json(
+          { error: e instanceof Error ? e.message : "更新意向狀態失敗。" },
+          { status: 500 }
+        );
+      }
+
+      revalidatePath("/dashboard", "page");
+
+      return NextResponse.json({
+        ok: true,
+        action: "accept",
+        group_recruiting: true,
+        group_status: "recruiting",
+        agreed_count: agreedCount,
+        current_size: memberCount,
+        target_size: targetSize,
+      });
+    }
+
+    revalidatePath("/dashboard", "page");
+
+    return NextResponse.json({
+      ok: true,
+      action: "accept",
+      awaiting_others: true,
+      group_status: "pending_opt_in",
+      agreed_count: agreedCount,
+      target_size: targetSize,
+    });
   } catch (e) {
     console.error("[api/match/action] unhandled", e);
     return NextResponse.json({ error: "處理配對動作時發生錯誤。" }, { status: 500 });

@@ -1,4 +1,7 @@
+import { revalidatePath } from "next/cache";
 import { NextResponse } from "next/server";
+import { executeIntentMatch } from "@/lib/match-engine";
+import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { createSupabaseServerClient, getServerUser } from "@/lib/supabase/server";
 
 type CreateIntentPayload = {
@@ -94,6 +97,29 @@ export async function POST(request: Request) {
       targetHeadcount = resolveMaxTenants(
         (propertyRow as { max_tenants?: unknown }).max_tenants
       );
+
+      const { count: duplicateCount, error: duplicateError } = await supabase
+        .from("housing_intents")
+        .select("*", { count: "exact", head: true })
+        .eq("user_id", user.id)
+        .eq("target_property_id", propertyId)
+        .neq("status", "expired")
+        .neq("status", "cancelled");
+
+      if (duplicateError) {
+        console.error("[api/housing-intents] duplicate property check", duplicateError);
+        return NextResponse.json(
+          { error: duplicateError.message || "查詢意向狀態失敗，請稍後再試。" },
+          { status: 500 }
+        );
+      }
+
+      if ((duplicateCount ?? 0) > 0) {
+        return NextResponse.json(
+          { error: "您已經在排隊隊伍中，不能重複申請同一個樓盤", code: "duplicate_property_intent" },
+          { status: 400 }
+        );
+      }
     }
 
     const { data: inserted, error: insertError } = await supabase
@@ -124,12 +150,30 @@ export async function POST(request: Request) {
         ? row.preference_rank
         : preferenceRank;
 
+    let matchResult: Awaited<ReturnType<typeof executeIntentMatch>> | null = null;
+
+    if (intentId) {
+      try {
+        const admin = createSupabaseAdminClient();
+        matchResult = await executeIntentMatch(admin, {
+          intent_id: intentId,
+          target_district: targetDistrict,
+          user_id: user.id,
+        });
+      } catch (matchErr) {
+        console.error("[api/housing-intents] immediate match failed", matchErr);
+      }
+    }
+
+    revalidatePath("/dashboard");
+
     return NextResponse.json({
       ok: true,
       intent_id: intentId || null,
       preference_rank: insertedRank,
       target_property_id: targetPropertyId,
       target_headcount: targetHeadcount,
+      match: matchResult,
     });
   } catch (e) {
     console.error("[api/housing-intents] POST", e);

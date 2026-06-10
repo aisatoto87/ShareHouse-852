@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
@@ -58,6 +58,7 @@ export default function MatchingOptInPanel({ viewerUserId, className }: Matching
   const [otherLabel, setOtherLabel] = useState<string>("室友 —");
   const [tick, setTick] = useState(0);
   const [actionLoading, setActionLoading] = useState<"accept" | "reject" | null>(null);
+  const settlementRefreshScheduledRef = useRef(false);
 
   const loadOtherMemberLabel = useCallback(
     async (gid: string) => {
@@ -136,7 +137,8 @@ export default function MatchingOptInPanel({ viewerUserId, className }: Matching
       }
 
       const rows = Array.isArray(groups) ? (groups as Record<string, unknown>[]) : [];
-      const g = pickHighestPriorityBannerGroup(rows);
+      const bannerCandidates = rows.filter((row) => shouldShowMatchingOptInBanner(row));
+      const g = pickHighestPriorityBannerGroup(bannerCandidates);
 
       if (!g?.group_id || !shouldShowMatchingOptInBanner(g)) {
         setPanelMode("hidden");
@@ -148,6 +150,22 @@ export default function MatchingOptInPanel({ viewerUserId, className }: Matching
       const gid = String(g.group_id);
       const mode: PanelMode = status === "recruiting" ? "recruiting" : "pending_opt_in";
 
+      const { count: memberCount, error: memberCountErr } = await supabase
+        .from("group_members")
+        .select("user_id", { count: "exact", head: true })
+        .eq("group_id", gid);
+
+      if (memberCountErr) {
+        console.error("[MatchingOptInPanel] member count", memberCountErr);
+        setFetchError(memberCountErr.message);
+        return;
+      }
+
+      const actualMemberCount =
+        typeof memberCount === "number" && memberCount > 0
+          ? memberCount
+          : parseGroupSize(g.current_size);
+
       const myMembership = (myRows ?? []).find(
         (row) => String((row as { group_id?: unknown }).group_id ?? "") === gid
       ) as { has_agreed?: boolean | null } | undefined;
@@ -156,7 +174,7 @@ export default function MatchingOptInPanel({ viewerUserId, className }: Matching
       setPanelMode(mode);
       setGroupId(gid);
       setExpiresAt(typeof g.expires_at === "string" ? g.expires_at : null);
-      setCurrentSize(parseGroupSize(g.current_size));
+      setCurrentSize(actualMemberCount);
       setTargetSize(Math.max(parseGroupSize(g.target_size), 1));
       setHasAgreed(viewerHasAgreed);
 
@@ -200,8 +218,21 @@ export default function MatchingOptInPanel({ viewerUserId, className }: Matching
   const recruitingProgressPercent =
     targetSize > 0 ? Math.min(100, Math.round((currentSize / targetSize) * 100)) : 0;
 
+  function scheduleSettlementRefresh(message: string) {
+    if (settlementRefreshScheduledRef.current) return;
+    settlementRefreshScheduledRef.current = true;
+    setPanelMode("hidden");
+    toast.success(message);
+    setTimeout(() => {
+      router.refresh();
+      void loadPanel().finally(() => {
+        settlementRefreshScheduledRef.current = false;
+      });
+    }, 1500);
+  }
+
   async function submitMatchAction(action: "accept" | "reject") {
-    if (actionLoading) return;
+    if (actionLoading || settlementRefreshScheduledRef.current) return;
     if (!groupId) {
       toast.error("找不到配對群組，請重新整理頁面。");
       return;
@@ -220,6 +251,7 @@ export default function MatchingOptInPanel({ viewerUserId, className }: Matching
         group_confirmed?: boolean;
         group_recruiting?: boolean;
         awaiting_others?: boolean;
+        group_status?: string;
       };
 
       if (!response.ok) {
@@ -228,22 +260,22 @@ export default function MatchingOptInPanel({ viewerUserId, className }: Matching
       }
 
       if (action === "accept") {
-        if (json.group_confirmed) {
-          toast.success("全員確認！人數已齊，配對成功！");
-        } else if (json.group_recruiting) {
-          toast.success("全員同意！群組進入招募中，繼續尋找室友…");
-        } else {
-          toast.success("已發送確認！");
-          setHasAgreed(true);
+        if (json.group_confirmed === true && json.group_status === "confirmed") {
+          scheduleSettlementRefresh("已確認！正刷新狀態...");
+          return;
         }
+        if (json.group_recruiting === true && json.group_status === "recruiting") {
+          scheduleSettlementRefresh("全員同意！群組進入招募中，正刷新狀態...");
+          return;
+        }
+        toast.success("已發送確認！");
+        setHasAgreed(true);
       } else {
         toast.success("已拒絕配對");
       }
 
       router.refresh();
-      if (json.group_confirmed || json.group_recruiting || action === "reject") {
-        await loadPanel();
-      }
+      await loadPanel();
     } catch (e) {
       console.error("[MatchingOptInPanel] submitMatchAction", e);
       toast.error("網路錯誤，請稍後再試。");

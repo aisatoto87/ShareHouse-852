@@ -1,24 +1,30 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Loader2, MessageCircle } from "lucide-react";
-import { createSupabaseBrowserClient } from "@/lib/supabase/client";
+import { Loader2, Lock, MessageCircle } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent, CardFooter } from "@/components/ui/card";
 import { isActiveMatchGroupStatus } from "@/lib/intent-group-ui";
+import {
+  calculateHabitRadarSimilarity,
+  profileRowToUserHabits,
+  type UserHabits,
+} from "@/lib/matchingAlgorithm";
+import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
 
 type TeammateProfile = {
   userId: string;
   displayName: string;
   avatarUrl: string | null;
-  /** 來自 reviews 聚合；無評價時顯示「新室友」標籤 */
-  ratingLabel: string;
-  reviewCount: number;
-  ratingIsPlaceholder: boolean;
   phone: string | null;
+  /** SyncNest 習慣雷達契合度；null 時顯示「新室友」 */
+  syncNestScore: number | null;
 };
 
-const CONTACT_LOCK_LABEL = "🔒 齊人後解鎖聯絡方式";
-const CONTACT_LOCK_TOOLTIP = "當群組滿員並確認後，即可與室友交換聯絡方式";
+const CONTACT_LOCK_LABEL = "齊人後解鎖聯絡方式";
+const CONTACT_LOCK_TOOLTIP =
+  "當群組滿員並全體確認後，即可解鎖與室友對話";
 
 export type MatchedTeammatesProps = {
   viewerUserId: string;
@@ -51,6 +57,28 @@ function normalizePhone(value: unknown): string | null {
   return raw.length > 0 ? raw : null;
 }
 
+/** 鎖定狀態下遮蔽尾碼，保留 FOMO 提示（例：+852 9123 ****） */
+function maskPhone(phone: string): string {
+  const trimmed = phone.trim();
+  const digits = trimmed.replace(/\D/g, "");
+  if (digits.length < 4) return "****";
+
+  const visibleTail = digits.slice(-4);
+  const prefixDigits = digits.slice(0, -4);
+
+  if (prefixDigits.startsWith("852") && prefixDigits.length >= 7) {
+    const local = prefixDigits.slice(3);
+    const chunk = local.length >= 4 ? local.slice(0, 4) : local;
+    return `+852 ${chunk} ****`;
+  }
+
+  if (prefixDigits.length >= 4) {
+    return `${prefixDigits.slice(0, 4)} ****`;
+  }
+
+  return `${visibleTail.slice(0, 1)}*** ****`;
+}
+
 function buildTeammateWhatsAppUrl(phone: string, displayName: string): string {
   const digits = phone.replace(/\D/g, "");
   const msg = encodeURIComponent(
@@ -80,6 +108,158 @@ function propertyIdMatches(
       : null;
   if (intentProp) return groupProp === intentProp;
   return groupProp == null;
+}
+
+function syncNestBadgeClass(score: number): string {
+  if (score >= 72) {
+    return "border-emerald-200/80 bg-gradient-to-r from-emerald-50 to-teal-50/90 text-emerald-800";
+  }
+  if (score >= 55) {
+    return "border-amber-200/80 bg-gradient-to-r from-amber-50 to-orange-50/80 text-amber-900";
+  }
+  return "border-zinc-200 bg-zinc-100 text-zinc-700";
+}
+
+function TeammateTrustBadge({ score }: { score: number | null }) {
+  if (score == null) {
+    return (
+      <Badge
+        variant="secondary"
+        className="border-violet-200/80 bg-gradient-to-r from-violet-50 to-indigo-50/80 px-2 py-0.5 text-[11px] font-semibold text-violet-800 shadow-sm"
+      >
+        ✨ 新室友
+      </Badge>
+    );
+  }
+
+  return (
+    <Badge
+      variant="secondary"
+      className={cn(
+        "px-2 py-0.5 text-[11px] font-bold tabular-nums shadow-sm",
+        syncNestBadgeClass(score)
+      )}
+    >
+      🔥 {score}% SyncNest 契合
+    </Badge>
+  );
+}
+
+function TeammateAvatar({ name, avatarUrl }: { name: string; avatarUrl: string | null }) {
+  if (avatarUrl) {
+    return (
+      <div className="relative shrink-0">
+        <img
+          src={avatarUrl}
+          alt=""
+          className="h-14 w-14 rounded-full object-cover ring-2 ring-white shadow-md"
+        />
+        <span className="absolute inset-0 rounded-full ring-1 ring-inset ring-black/5" aria-hidden />
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-[#0f2540] via-[#1a3a5c] to-[#2d5a87] text-lg font-bold text-white shadow-md ring-2 ring-white"
+      aria-hidden
+    >
+      {avatarInitial(name)}
+    </div>
+  );
+}
+
+function ContactLockButton() {
+  return (
+    <div className="group/tooltip relative w-full">
+      <button
+        type="button"
+        disabled
+        aria-label={`${CONTACT_LOCK_LABEL}。${CONTACT_LOCK_TOOLTIP}`}
+        className="inline-flex w-full cursor-not-allowed items-center justify-center gap-2 rounded-lg border border-zinc-200/90 bg-zinc-100/80 px-3 py-2.5 text-xs font-semibold text-zinc-400 opacity-80 transition-colors"
+      >
+        <Lock className="h-3.5 w-3.5 shrink-0" aria-hidden />
+        <span aria-hidden>🔒</span>
+        {CONTACT_LOCK_LABEL}
+      </button>
+      <p
+        role="tooltip"
+        className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-2 w-[min(100%,14rem)] -translate-x-1/2 rounded-md border border-zinc-200 bg-zinc-900 px-2.5 py-1.5 text-center text-[10px] leading-snug text-zinc-100 opacity-0 shadow-lg transition-opacity duration-200 group-hover/tooltip:opacity-100 group-focus-within/tooltip:opacity-100"
+      >
+        {CONTACT_LOCK_TOOLTIP}
+      </p>
+    </div>
+  );
+}
+
+function TeammateCard({
+  mate,
+  canRevealContact,
+}: {
+  mate: TeammateProfile;
+  canRevealContact: boolean;
+}) {
+  return (
+    <Card
+      className={cn(
+        "flex min-w-0 flex-col overflow-hidden border-zinc-200/90 bg-white shadow-sm",
+        "transition-all duration-200 hover:-translate-y-0.5 hover:border-zinc-300 hover:shadow-md"
+      )}
+    >
+      <CardContent className="flex min-w-0 flex-1 flex-col gap-3 p-4">
+        <div className="flex min-w-0 items-start gap-3">
+          <TeammateAvatar name={mate.displayName} avatarUrl={mate.avatarUrl} />
+          <div className="min-w-0 flex-1 space-y-1.5">
+            <p className="truncate text-base font-semibold tracking-tight text-zinc-900">
+              {mate.displayName}
+            </p>
+            <TeammateTrustBadge score={mate.syncNestScore} />
+          </div>
+        </div>
+
+        {mate.phone ? (
+          <p className="text-xs text-zinc-600">
+            <span className="font-medium text-zinc-500">電話：</span>
+            {canRevealContact ? (
+              <a
+                href={`tel:${mate.phone.replace(/\s/g, "")}`}
+                className="font-semibold text-[#0f2540] underline-offset-2 hover:underline"
+              >
+                {mate.phone}
+              </a>
+            ) : (
+              <span className="font-mono font-medium tracking-wide text-zinc-400">
+                {maskPhone(mate.phone)}
+              </span>
+            )}
+          </p>
+        ) : null}
+      </CardContent>
+
+      <CardFooter className="border-t border-zinc-100 bg-zinc-50/50 p-3 pt-0">
+        {canRevealContact ? (
+          mate.phone ? (
+            <a
+              href={buildTeammateWhatsAppUrl(mate.phone, mate.displayName)}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-[#25D366] px-3 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-[#1fb855] hover:shadow-md active:scale-[0.98]"
+            >
+              <MessageCircle className="h-4 w-4 shrink-0" aria-hidden />
+              <span aria-hidden>💬</span>
+              WhatsApp 聯絡室友
+            </a>
+          ) : (
+            <p className="w-full py-2 text-center text-xs text-zinc-500">
+              室友尚未提供聯絡方式
+            </p>
+          )
+        ) : (
+          <ContactLockButton />
+        )}
+      </CardFooter>
+    </Card>
+  );
 }
 
 export default function MatchedTeammates({
@@ -217,6 +397,8 @@ export default function MatchedTeammates({
 
         setGroupEntityFound(true);
 
+        const allUserIdsForHabits = [viewerUserId];
+
         const { data: memberRows, error: membersErr } = await supabase
           .from("group_members")
           .select("user_id")
@@ -242,17 +424,14 @@ export default function MatchedTeammates({
           return;
         }
 
-        const [{ data: profileRows, error: profErr }, { data: reviewRows, error: revErr }] =
-          await Promise.all([
-            supabase
-              .from("profiles")
-              .select("id, display_name, nickname, avatar_url, phone")
-              .in("id", otherUserIds),
-            supabase
-              .from("reviews")
-              .select("reviewee_id, rating")
-              .in("reviewee_id", otherUserIds),
-          ]);
+        allUserIdsForHabits.push(...otherUserIds);
+
+        const { data: profileRows, error: profErr } = await supabase
+          .from("profiles")
+          .select(
+            "id, display_name, nickname, avatar_url, phone, habit_cleanliness, habit_ac_temp, habit_guests, habit_noise"
+          )
+          .in("id", allUserIdsForHabits);
 
         if (cancelled) return;
         if (profErr) {
@@ -260,29 +439,24 @@ export default function MatchedTeammates({
           setFetchError(profErr.message);
           return;
         }
-        if (revErr) {
-          console.error("[MatchedTeammates] reviews", revErr);
-        }
 
         const profileById = new Map<string, Record<string, unknown>>();
+        const habitsById = new Map<string, UserHabits>();
         for (const row of profileRows ?? []) {
           const r = row as unknown as Record<string, unknown>;
           const id = typeof r.id === "string" ? r.id : String(r.id ?? "");
-          if (id) profileById.set(id, r);
+          if (!id) continue;
+          profileById.set(id, r);
+          const habits = profileRowToUserHabits({
+            habit_cleanliness: r.habit_cleanliness,
+            habit_ac_temp: r.habit_ac_temp,
+            habit_guests: r.habit_guests,
+            habit_noise: r.habit_noise,
+          });
+          if (habits) habitsById.set(id, habits);
         }
 
-        const ratingAgg = new Map<string, { sum: number; count: number }>();
-        for (const row of reviewRows ?? []) {
-          const r = row as { reviewee_id?: unknown; rating?: unknown };
-          const uid =
-            typeof r.reviewee_id === "string" ? r.reviewee_id : String(r.reviewee_id ?? "");
-          if (!uid) continue;
-          const rating =
-            typeof r.rating === "number" ? r.rating : Number(r.rating);
-          if (!Number.isFinite(rating)) continue;
-          const prev = ratingAgg.get(uid) ?? { sum: 0, count: 0 };
-          ratingAgg.set(uid, { sum: prev.sum + rating, count: prev.count + 1 });
-        }
+        const viewerHabits = habitsById.get(viewerUserId) ?? null;
 
         const loaded: TeammateProfile[] = otherUserIds.map((uid) => {
           const profile = profileById.get(uid) ?? null;
@@ -295,30 +469,21 @@ export default function MatchedTeammates({
           const rawAvatar =
             typeof profile?.avatar_url === "string" ? profile.avatar_url.trim() : "";
           const avatarUrl = rawAvatar && isHttpUrl(rawAvatar) ? rawAvatar : null;
+          const phone = normalizePhone(profile?.phone);
 
-          const agg = ratingAgg.get(uid);
-          const reviewCount = agg?.count ?? 0;
-          let ratingIsPlaceholder = false;
-          let ratingLabel: string;
-          if (reviewCount > 0 && agg) {
-            ratingLabel = (Math.round((agg.sum / reviewCount) * 10) / 10).toFixed(1);
-          } else {
-            ratingIsPlaceholder = true;
-            ratingLabel = "";
+          const teammateHabits = habitsById.get(uid) ?? null;
+          let syncNestScore: number | null = null;
+          if (viewerHabits && teammateHabits) {
+            const score = calculateHabitRadarSimilarity(viewerHabits, teammateHabits);
+            syncNestScore = score > 0 ? score : null;
           }
-
-          const phone = canRevealContact
-            ? normalizePhone((profile as { phone?: unknown } | null)?.phone)
-            : null;
 
           return {
             userId: uid,
             displayName,
             avatarUrl,
-            ratingLabel,
-            reviewCount,
-            ratingIsPlaceholder,
             phone,
+            syncNestScore,
           };
         });
 
@@ -345,115 +510,44 @@ export default function MatchedTeammates({
     expectedGroupId,
     targetPropertyId,
     shouldFetch,
-    canRevealContact,
   ]);
 
   if (!shouldFetch) return null;
   if (!loading && groupEntityFound === false) return null;
 
   return (
-    <div
+    <section
       className={cn(
-        "mt-4 rounded-lg border border-zinc-200/80 bg-zinc-50/90 p-3",
+        "mt-4 rounded-xl border border-zinc-200/80 bg-gradient-to-br from-zinc-50/95 via-white to-slate-50/80 p-4 shadow-sm",
         className
       )}
+      aria-label="神仙室友通訊錄"
     >
-      <p className="text-sm font-semibold text-zinc-900">✨ 您的神仙室友</p>
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h3 className="text-sm font-bold tracking-tight text-zinc-900">✨ 您的神仙室友</h3>
+        {!canRevealContact ? (
+          <p className="text-[11px] font-medium text-zinc-500">聯絡方式已鎖定 · 齊人後解鎖</p>
+        ) : null}
+      </div>
 
       {loading ? (
-        <div className="mt-3 flex items-center gap-2 text-sm text-zinc-500">
-          <Loader2 className="h-4 w-4 animate-spin shrink-0" aria-hidden />
+        <div className="mt-4 flex items-center gap-2 text-sm text-zinc-500">
+          <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden />
           載入室友資料中…
         </div>
       ) : fetchError ? (
-        <p className="mt-2 text-xs text-zinc-500">暫無法載入室友資料</p>
+        <p className="mt-3 text-xs text-zinc-500">暫無法載入室友資料</p>
       ) : teammates.length === 0 ? (
-        <p className="mt-2 text-xs text-zinc-500">群組內暫無其他室友</p>
+        <p className="mt-3 text-xs text-zinc-500">群組內暫無其他室友</p>
       ) : (
-        <ul className="mt-3 grid grid-cols-1 gap-3 min-[420px]:grid-cols-2 sm:grid-cols-2 lg:grid-cols-3">
+        <ul className="mt-4 grid grid-cols-1 gap-3 min-[400px]:grid-cols-2 lg:grid-cols-3">
           {teammates.map((mate) => (
-            <li
-              key={mate.userId}
-              className="flex min-w-0 flex-col gap-2.5 rounded-lg border border-zinc-100 bg-white p-3 shadow-sm"
-            >
-              <div className="flex min-w-0 items-center gap-3">
-                {mate.avatarUrl ? (
-                  <img
-                    src={mate.avatarUrl}
-                    alt=""
-                    className="h-11 w-11 shrink-0 rounded-full object-cover"
-                  />
-                ) : (
-                  <div
-                    className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[#0f2540]/10 text-sm font-bold text-[#0f2540]"
-                    aria-hidden
-                  >
-                    {avatarInitial(mate.displayName)}
-                  </div>
-                )}
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-semibold text-zinc-900">
-                    {mate.displayName}
-                  </p>
-                  {mate.ratingIsPlaceholder ? (
-                    <span className="mt-0.5 inline-flex rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] font-medium text-zinc-600">
-                      新室友
-                    </span>
-                  ) : (
-                    <p className="mt-0.5 text-xs font-medium text-amber-700">
-                      <span aria-hidden>⭐</span> {mate.ratingLabel}
-                      <span className="ml-1 font-normal text-zinc-500">
-                        ({mate.reviewCount} 則評價)
-                      </span>
-                    </p>
-                  )}
-                </div>
-              </div>
-
-              {canRevealContact ? (
-                <div className="space-y-2 border-t border-zinc-100 pt-2.5">
-                  {mate.phone ? (
-                    <p className="text-xs text-zinc-600">
-                      <span className="font-medium text-zinc-500">電話：</span>
-                      <a
-                        href={`tel:${mate.phone.replace(/\s/g, "")}`}
-                        className="font-semibold text-[#0f2540] underline-offset-2 hover:underline"
-                      >
-                        {mate.phone}
-                      </a>
-                    </p>
-                  ) : null}
-                  <div className="flex flex-wrap gap-1.5">
-                    {mate.phone ? (
-                      <a
-                        href={buildTeammateWhatsAppUrl(mate.phone, mate.displayName)}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1 rounded-md bg-[#25D366] px-2.5 py-1 text-xs font-medium text-white hover:bg-[#1fb855]"
-                      >
-                        <MessageCircle className="h-3.5 w-3.5 shrink-0" aria-hidden />
-                        WhatsApp
-                      </a>
-                    ) : (
-                      <p className="text-xs text-zinc-500">室友尚未提供聯絡方式</p>
-                    )}
-                  </div>
-                </div>
-              ) : (
-                <button
-                  type="button"
-                  disabled
-                  title={CONTACT_LOCK_TOOLTIP}
-                  aria-label={`${CONTACT_LOCK_LABEL}。${CONTACT_LOCK_TOOLTIP}`}
-                  className="inline-flex w-full cursor-not-allowed items-center justify-center rounded-md border border-zinc-200/80 bg-zinc-100/70 px-2.5 py-1.5 text-xs font-medium text-zinc-400 opacity-70"
-                >
-                  {CONTACT_LOCK_LABEL}
-                </button>
-              )}
+            <li key={mate.userId} className="min-w-0">
+              <TeammateCard mate={mate} canRevealContact={canRevealContact} />
             </li>
           ))}
         </ul>
       )}
-    </div>
+    </section>
   );
 }

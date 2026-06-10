@@ -50,6 +50,62 @@ export default function HousingIntentButton({
   const [district, setDistrict] = useState(defaultDistrict);
   const [budgetInput, setBudgetInput] = useState(String(defaultBudget));
   const [submitting, setSubmitting] = useState(false);
+  const [alreadyInQueue, setAlreadyInQueue] = useState(false);
+  const [queueCheckLoading, setQueueCheckLoading] = useState(Boolean(propertyId?.trim()));
+
+  const trimmedPropertyId = propertyId?.trim() ?? "";
+
+  useEffect(() => {
+    if (!trimmedPropertyId) {
+      setAlreadyInQueue(false);
+      setQueueCheckLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+
+    async function checkDuplicatePropertyIntent() {
+      setQueueCheckLoading(true);
+      try {
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+
+        if (cancelled) return;
+
+        if (!user) {
+          setAlreadyInQueue(false);
+          return;
+        }
+
+        const { data, error } = await supabase
+          .from("housing_intents")
+          .select("intent_id")
+          .eq("user_id", user.id)
+          .eq("target_property_id", trimmedPropertyId)
+          .neq("status", "expired")
+          .neq("status", "cancelled")
+          .limit(1);
+
+        if (cancelled) return;
+
+        if (error) {
+          console.warn("[HousingIntentButton] duplicate property check", error);
+          setAlreadyInQueue(false);
+          return;
+        }
+
+        setAlreadyInQueue((data?.length ?? 0) > 0);
+      } finally {
+        if (!cancelled) setQueueCheckLoading(false);
+      }
+    }
+
+    void checkDuplicatePropertyIntent();
+    return () => {
+      cancelled = true;
+    };
+  }, [supabase, trimmedPropertyId]);
 
   const runMatchInBackground = useCallback(
     async (payload: { intent_id: string; target_district: string; user_id: string }) => {
@@ -121,7 +177,7 @@ export default function HousingIntentButton({
       return;
     }
 
-    if (!isProfileComplete) return;
+    if (!isProfileComplete || alreadyInQueue) return;
 
     setIsIntentModalOpen(true);
   }
@@ -178,6 +234,7 @@ export default function HousingIntentButton({
         intent_id?: string | null;
         preference_rank?: number;
         error?: string;
+        match?: { matched?: boolean; message?: string };
       };
 
       if (!response.ok) {
@@ -194,20 +251,28 @@ export default function HousingIntentButton({
         typeof json.intent_id === "string" ? json.intent_id.trim() : "";
 
       setIsIntentModalOpen(false);
+      if (trimmedPropertyId) setAlreadyInQueue(true);
       const rankLabel =
         typeof json.preference_rank === "number" && json.preference_rank > 0
           ? `（第 ${json.preference_rank} 志願）`
           : "";
-      toast.success(`成功加入意向池${rankLabel}！正在啟動 AI 尋找同區室友 🧠...`);
+      if (json.match?.matched === true) {
+        toast.success(
+          json.match.message ||
+            "🔥 震撼好消息！系統為你找到高度契合的神仙室友，已自動組建群組！"
+        );
+      } else {
+        toast.success(`成功加入意向池${rankLabel}！正在啟動 AI 尋找同區室友 🧠...`);
+      }
       router.refresh();
 
-      if (newIntentId) {
+      if (newIntentId && json.match?.matched !== true) {
         void runMatchInBackground({
           intent_id: newIntentId,
           target_district: trimmedDistrict,
           user_id: user.id,
         });
-      } else {
+      } else if (!newIntentId) {
         console.warn("[housing_intents] insert OK but no intent_id in select() response");
         router.refresh();
       }
@@ -223,31 +288,58 @@ export default function HousingIntentButton({
     profileIncompleteHint.trim() ||
     "尚欠：顯示名稱、聯絡電話或生活習慣評分。請至「我的帳號」完善後再試。";
 
+  const buttonDisabled =
+    !isProfileComplete || alreadyInQueue || (Boolean(trimmedPropertyId) && queueCheckLoading);
+
+  const buttonLabel = alreadyInQueue
+    ? "已在排隊池中"
+    : queueCheckLoading && trimmedPropertyId
+      ? "檢查排隊狀態…"
+      : isProfileComplete
+        ? "✨ 加入心水排隊區"
+        : "⚠️ 請先完善個人資料與生活評分";
+
   return (
     <>
       <span
         className="block w-full"
-        title={!isProfileComplete ? incompleteTooltip : undefined}
+        title={
+          alreadyInQueue
+            ? "您已為此樓盤提交過租屋意向，請至「我的租屋意向」查看進度"
+            : !isProfileComplete
+              ? incompleteTooltip
+              : undefined
+        }
       >
         <Button
           type="button"
-          disabled={!isProfileComplete}
-          aria-disabled={!isProfileComplete}
+          disabled={buttonDisabled}
+          aria-disabled={buttonDisabled}
           aria-label={
-            isProfileComplete
-              ? "加入心水排隊區"
-              : `請先完善個人資料與生活評分。${incompleteTooltip}`
+            alreadyInQueue
+              ? "已在排隊池中"
+              : isProfileComplete
+                ? "加入心水排隊區"
+                : `請先完善個人資料與生活評分。${incompleteTooltip}`
           }
           onClick={() => void handlePrimaryClick()}
           className={cn(
             className,
+            alreadyInQueue &&
+              "cursor-not-allowed border-zinc-300 bg-zinc-200 text-zinc-600 opacity-100 hover:bg-zinc-200 hover:text-zinc-600 disabled:opacity-100",
             !isProfileComplete &&
+              !alreadyInQueue &&
               "cursor-not-allowed border-amber-500 bg-amber-500 text-white opacity-95 hover:bg-amber-500 hover:text-white disabled:opacity-95"
           )}
         >
-          {isProfileComplete
-            ? "✨ 加入心水排隊區"
-            : "⚠️ 請先完善個人資料與生活評分"}
+          {queueCheckLoading && trimmedPropertyId ? (
+            <>
+              <Loader2 className="mr-2 size-4 animate-spin shrink-0" aria-hidden />
+              {buttonLabel}
+            </>
+          ) : (
+            buttonLabel
+          )}
         </Button>
       </span>
       {!isProfileComplete ? (
