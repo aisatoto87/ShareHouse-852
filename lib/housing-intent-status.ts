@@ -37,14 +37,21 @@ export type IntentWithOptionalGroupStatus = {
   match_group_status?: string | null;
 };
 
+/** 用戶是否擁有鎖定階段的 live 群組（唯一 Global Freeze 依據） */
+export function userHasLockingMatchGroup(
+  groups: ReadonlyArray<{ status: string }>
+): boolean {
+  return groups.some((g) => isGloballyFrozenGroupStatus(g.status));
+}
+
+/**
+ * 從意向列推斷 Global Freeze：僅看 match_group_status，不以 housing_intents.status 為準
+ * （避免 recruiting 群組但意向仍為 matching / pending_opt_in 時誤凍結）。
+ */
 export function isUserGloballyFrozenFromIntents(
   intents: ReadonlyArray<IntentWithOptionalGroupStatus>
 ): boolean {
-  return intents.some(
-    (row) =>
-      isGloballyFrozenHousingIntentStatus(row.status) ||
-      isGloballyFrozenGroupStatus(row.match_group_status)
-  );
+  return intents.some((row) => isGloballyFrozenGroupStatus(row.match_group_status));
 }
 
 export const ACTIVE_INTENT_CONFLICT_MESSAGE =

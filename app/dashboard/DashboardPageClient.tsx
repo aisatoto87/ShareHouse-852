@@ -30,7 +30,7 @@ import {
   inferSalutationMode,
   inferZhSuffix,
 } from "@/lib/profile-display-name";
-import { isUserGloballyFrozenFromIntents } from "@/lib/housing-intent-status";
+import { userHasLockingMatchGroup } from "@/lib/housing-intent-status";
 import {
   isActiveMatchGroupStatus,
   isValidMatchGroupEntity,
@@ -153,9 +153,10 @@ function mapHousingIntentRows(rows: unknown[] | null): HousingIntentRow[] {
 async function reconcileStalePausedIntents(
   supabase: ReturnType<typeof createSupabaseBrowserClient>,
   userId: string,
-  rows: HousingIntentRow[]
+  rows: HousingIntentRow[],
+  hasLockingGroup = false
 ): Promise<HousingIntentRow[]> {
-  if (isUserGloballyFrozenFromIntents(rows)) return rows;
+  if (hasLockingGroup) return rows;
 
   const stalePausedIds = rows
     .filter((row) => row.status.trim().toLowerCase() === "paused")
@@ -200,9 +201,11 @@ function toIntentGroupEntity(row: HousingIntentRow): IntentGroupEntity | null {
   const status =
     typeof row.match_group_status === "string" ? row.match_group_status.trim() : "";
   const currentSize =
-    typeof row.match_group_current_size === "number"
-      ? row.match_group_current_size
-      : 0;
+    typeof row.match_group_member_count === "number" && row.match_group_member_count > 0
+      ? row.match_group_member_count
+      : typeof row.match_group_current_size === "number"
+        ? row.match_group_current_size
+        : 0;
   const targetSize =
     typeof row.match_group_target_size === "number" ? row.match_group_target_size : 0;
   const memberCount =
@@ -364,12 +367,10 @@ export default function DashboardPageClient() {
   const [intentsLoading, setIntentsLoading] = useState(false);
   const [cancellingId, setCancellingId] = useState<string | null>(null);
   const [reordering, setReordering] = useState(false);
+  const [userHasLockingGroup, setUserHasLockingGroup] = useState(false);
   const expiredCleanupStartedRef = useRef(false);
 
-  const isGloballyFrozen = useMemo(
-    () => isUserGloballyFrozenFromIntents(intentRows),
-    [intentRows]
-  );
+  const isGloballyFrozen = userHasLockingGroup;
 
   const sortedIntentRows = useMemo(
     () => sortIntentsByPreferenceRank(intentRows),
@@ -565,6 +566,7 @@ export default function DashboardPageClient() {
       if (error) {
         console.error("[dashboard] housing_intents", error);
         toast.error("讀取租屋意向失敗，請稍後再試。");
+        setUserHasLockingGroup(false);
         setIntentRows([]);
         return;
       }
@@ -579,6 +581,7 @@ export default function DashboardPageClient() {
         .eq("user_id", userId);
       if (membershipErr) {
         console.error("[dashboard] group_members", membershipErr);
+        setUserHasLockingGroup(false);
         setIntentRows(await reconcileStalePausedIntents(supabase, userId, mappedRows));
         return;
       }
@@ -598,6 +601,7 @@ export default function DashboardPageClient() {
         ),
       ];
       if (groupIds.length === 0) {
+        setUserHasLockingGroup(false);
         setIntentRows(await reconcileStalePausedIntents(supabase, userId, mappedRows));
         return;
       }
@@ -608,6 +612,7 @@ export default function DashboardPageClient() {
         .in("group_id", groupIds);
       if (groupsErr) {
         console.error("[dashboard] match_groups", groupsErr);
+        setUserHasLockingGroup(false);
         setIntentRows(await reconcileStalePausedIntents(supabase, userId, mappedRows));
         return;
       }
@@ -618,6 +623,7 @@ export default function DashboardPageClient() {
         .in("group_id", groupIds);
       if (allMembersErr) {
         console.error("[dashboard] group_members counts", allMembersErr);
+        setUserHasLockingGroup(false);
         setIntentRows(await reconcileStalePausedIntents(supabase, userId, mappedRows));
         return;
       }
@@ -681,11 +687,15 @@ export default function DashboardPageClient() {
             memberCount: group.member_count,
           })
         ) ?? null;
+        const liveMemberCount = matchedGroup?.member_count ?? 0;
+        const liveCurrentSize =
+          liveMemberCount > 0 ? liveMemberCount : (matchedGroup?.current_size ?? null);
+
         return {
           ...row,
           match_group_id: matchedGroup?.group_id ?? null,
           match_group_status: matchedGroup?.status ?? null,
-          match_group_current_size: matchedGroup?.current_size ?? null,
+          match_group_current_size: liveCurrentSize,
           match_group_target_size: matchedGroup?.target_size ?? null,
           match_group_member_count: matchedGroup?.member_count ?? null,
           match_group_has_agreed: matchedGroup
@@ -694,7 +704,11 @@ export default function DashboardPageClient() {
         };
       });
 
-      setIntentRows(await reconcileStalePausedIntents(supabase, userId, enrichedRows));
+      const locking = userHasLockingMatchGroup(groups);
+      setUserHasLockingGroup(locking);
+      setIntentRows(
+        await reconcileStalePausedIntents(supabase, userId, enrichedRows, locking)
+      );
     } finally {
       setIntentsLoading(false);
     }
@@ -767,17 +781,19 @@ export default function DashboardPageClient() {
     if (!userId || cancellingId) return;
     setCancellingId(intentId);
     try {
-      const { error } = await supabase
-        .from("housing_intents")
-        .delete()
-        .eq("intent_id", intentId)
-        .eq("user_id", userId);
+      const response = await fetch("/api/housing-intents/cancel", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ intent_id: intentId }),
+      });
+      const json = (await response.json().catch(() => ({}))) as { error?: string };
 
-      if (error) {
-        throw error;
+      if (!response.ok) {
+        throw new Error(json.error || "移除失敗，請稍後再試。");
       }
 
       await loadHousingIntents();
+      router.refresh();
       toast.success("已從意向池移除。");
     } catch (error) {
       console.error("[dashboard] handleCancelWaiting", error);
@@ -1329,9 +1345,12 @@ export default function DashboardPageClient() {
                       const isPropertyOffline =
                         row.target_property_id != null && !row.target_property_title;
                       const currentSize =
-                        typeof row.match_group_current_size === "number"
-                          ? row.match_group_current_size
-                          : null;
+                        typeof row.match_group_member_count === "number" &&
+                        row.match_group_member_count > 0
+                          ? row.match_group_member_count
+                          : typeof row.match_group_current_size === "number"
+                            ? row.match_group_current_size
+                            : null;
                       const targetSize =
                         typeof row.match_group_target_size === "number"
                           ? row.match_group_target_size
