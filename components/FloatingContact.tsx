@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 
-const WHATSAPP_LINK = "https://wa.me/85212345678";
+import { SHAREHOUSE_WHATSAPP_URL } from "@/lib/support-contact";
 
 function WeChatIcon(props: SVGProps<SVGSVGElement>) {
   return (
@@ -32,7 +32,7 @@ export default function FloatingContact() {
     <>
       <div className="fixed right-6 bottom-6 z-[70] flex flex-col items-center gap-3">
         <a
-          href={WHATSAPP_LINK}
+          href={SHAREHOUSE_WHATSAPP_URL}
           target="_blank"
           rel="noopener noreferrer"
           aria-label="透過 WhatsApp 聯絡客服"

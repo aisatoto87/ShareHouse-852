@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArrowLeft, MapPin, Maximize2, MessageCircle } from "lucide-react";
+import { buildShareHouseConciergeWhatsAppUrl } from "@/lib/support-contact";
 import HousingIntentButton from "@/components/HousingIntentButton";
 import PropertyLandlordRatingCard from "@/components/PropertyLandlordRatingCard";
 import Navbar from "@/components/Navbar";
@@ -70,12 +71,6 @@ function propertyToRadarValues(property: {
     guests: habitScoreForRadar(property.habit_guests),
     noise: habitScoreForRadar(property.habit_noise),
   };
-}
-
-function buildWhatsAppUrl(phone: string, title: string): string {
-  const digits = phone.replace(/\D/g, "").replace(/^852/, "");
-  const msg = encodeURIComponent(`你好，我在 ShareHouse 852 看到你的租盤【${title}】，想了解更多詳情。`);
-  return `https://wa.me/852${digits}?text=${msg}`;
 }
 
 function computeIntentDefaultBudget(property: {
@@ -247,7 +242,7 @@ export default async function PropertyDetailPage({ params }: PageProps) {
   const customRoomPrices = Object.values(property.room_prices || {}).filter(
     (item) => Number.isFinite(item) && item >= 0,
   );
-  const waUrl = buildWhatsAppUrl(property.contact_whatsapp, property.title);
+  const conciergeWaUrl = buildShareHouseConciergeWhatsAppUrl(property.title);
   const intentDefaultDistrict =
     property.sub_district.trim() !== "" ? property.sub_district.trim() : property.district;
   const intentDefaultBudget = computeIntentDefaultBudget(property);
@@ -369,7 +364,7 @@ export default async function PropertyDetailPage({ params }: PageProps) {
 
           <aside className="hidden lg:block">
             <div className="sticky top-24 rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm">
-              <p className="text-sm text-zinc-500">立即聯絡</p>
+              <p className="text-sm text-zinc-500">透過管家媒合</p>
               <p className="mt-1 text-2xl font-bold text-[#0f2540]">HK$ {formattedPrice}/月</p>
               {property.pricing_mode === "custom" && customRoomPrices.length > 0 && roomCount > 1 ? (
                 <div className="mt-2 flex flex-wrap gap-1.5">
@@ -393,16 +388,17 @@ export default async function PropertyDetailPage({ params }: PageProps) {
                 ownerIsVerified={ownerIsVerified}
               />
               <a
-                href={waUrl}
+                href={conciergeWaUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="mt-4 inline-flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-[#25D366] px-4 text-sm font-semibold text-white hover:bg-[#22c15e]"
+                className="mt-4 inline-flex h-11 w-full items-center justify-center gap-2 rounded-lg border border-[#25D366]/40 bg-[#25D366]/10 px-4 text-sm font-semibold text-[#128C3E] hover:bg-[#25D366]/15"
               >
                 <MessageCircle className="h-4 w-4" />
-                WhatsApp 聯絡業主
+                💬 聯絡 ShareHouse 管家
               </a>
               <HousingIntentButton
                 propertyId={property.id}
+                propertyListingStatus={property.status ?? "available"}
                 defaultDistrict={intentDefaultDistrict}
                 defaultBudget={intentDefaultBudget}
                 isProfileComplete={isProfileComplete}
@@ -427,13 +423,13 @@ export default async function PropertyDetailPage({ params }: PageProps) {
       <div className="fixed inset-x-0 bottom-0 z-40 border-t border-zinc-200 bg-white/95 p-3 backdrop-blur lg:hidden">
         <div className="mx-auto flex max-w-7xl items-center gap-2">
           <a
-            href={waUrl}
+            href={conciergeWaUrl}
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex h-11 flex-1 items-center justify-center gap-2 rounded-lg bg-[#25D366] px-4 text-sm font-semibold text-white"
+            className="inline-flex h-11 flex-1 items-center justify-center gap-2 rounded-lg border border-[#25D366]/40 bg-[#25D366]/10 px-4 text-sm font-semibold text-[#128C3E]"
           >
             <MessageCircle className="h-4 w-4" />
-            WhatsApp 聯絡業主
+            💬 聯絡管家
           </a>
           <ShareListingButton
             title={property.title}

@@ -112,9 +112,49 @@ export async function adminDissolveGroupAction(
     }
 
     revalidatePath("/admin/groups");
+    revalidatePath("/dashboard", "page");
     return { ok: true };
   } catch (e) {
     console.error("[adminDissolveGroupAction] unexpected", e);
+    const message = e instanceof Error ? e.message : "伺服器錯誤";
+    return { ok: false, error: message };
+  }
+}
+
+/** 從已成團群組踢除成員，群組降級為 recruiting（RPC admin_kick_group_member） */
+export async function adminKickGroupMemberAction(
+  groupId: string,
+  userId: string
+): Promise<AdminGroupActionResult> {
+  const trimmedGroupId = groupId.trim();
+  const trimmedUserId = userId.trim();
+
+  if (!trimmedGroupId || !trimmedUserId) {
+    return { ok: false, error: "請提供 group_id 與 user_id。" };
+  }
+
+  if (!UUID_RE.test(trimmedGroupId) || !UUID_RE.test(trimmedUserId)) {
+    return { ok: false, error: "group_id 或 user_id 格式無效。" };
+  }
+
+  const gate = await requireAdminRpcClient();
+  if (!gate.ok) return gate;
+
+  try {
+    const { error } = await gate.rpc.rpc("admin_kick_group_member", {
+      p_group_id: trimmedGroupId,
+      p_user_id: trimmedUserId,
+    });
+
+    if (error) {
+      console.error("[adminKickGroupMemberAction]", error.message);
+      return { ok: false, error: error.message || "踢除成員失敗。" };
+    }
+
+    revalidatePath("/admin/groups");
+    revalidatePath("/dashboard", "page");
+    return { ok: true };
+  } catch (e) {
     const message = e instanceof Error ? e.message : "伺服器錯誤";
     return { ok: false, error: message };
   }

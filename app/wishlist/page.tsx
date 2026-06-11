@@ -125,13 +125,14 @@ export default async function WishlistPage() {
             </Link>
           </div>
         ) : (
-          <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="grid grid-cols-1 items-stretch gap-5 sm:grid-cols-2 lg:grid-cols-3">
             {savedProperties.map((property) => (
-              <PropertyCard
-                key={property.id}
-                property={property}
-                recruitingOneShort={recruitingOneShortIds.has(property.id)}
-              />
+              <div key={property.id} className="h-full">
+                <PropertyCard
+                  property={property}
+                  recruitingOneShort={recruitingOneShortIds.has(property.id)}
+                />
+              </div>
             ))}
           </div>
         )}

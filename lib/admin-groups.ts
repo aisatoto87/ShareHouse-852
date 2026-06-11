@@ -4,6 +4,8 @@ import { resolveGroupTargetSize } from "@/lib/recruiting-fomo";
 export type AdminGroupMember = {
   userId: string;
   displayName: string;
+  phone: string | null;
+  wechatId: string | null;
 };
 
 export type AdminGroupRow = {
@@ -21,7 +23,11 @@ export type AdminGroupRow = {
 const STATUS_LABELS: Record<string, string> = {
   recruiting: "招募中",
   pending_opt_in: "待確認加入",
+  confirmed: "已成團",
+  matched: "已配對",
 };
+
+const ADMIN_GROUP_STATUSES = ["recruiting", "pending_opt_in", "confirmed", "matched"] as const;
 
 function pickPropertyTitle(properties: unknown, propertyId: string | null): string {
   if (properties && typeof properties === "object" && !Array.isArray(properties)) {
@@ -39,6 +45,24 @@ function pickPropertyTitle(properties: unknown, propertyId: string | null): stri
   return "未關聯樓盤";
 }
 
+function pickProfileField(
+  profiles: unknown,
+  field: "display_name" | "nickname" | "phone" | "wechat_id"
+): string {
+  const read = (obj: Record<string, unknown>) => {
+    const value = obj[field];
+    return typeof value === "string" ? value.trim() : "";
+  };
+
+  if (profiles && typeof profiles === "object" && !Array.isArray(profiles)) {
+    return read(profiles as Record<string, unknown>);
+  }
+  if (Array.isArray(profiles) && profiles[0] && typeof profiles[0] === "object") {
+    return read(profiles[0] as Record<string, unknown>);
+  }
+  return "";
+}
+
 function parseMembers(groupMembers: unknown): AdminGroupMember[] {
   if (!Array.isArray(groupMembers)) return [];
 
@@ -48,25 +72,23 @@ function parseMembers(groupMembers: unknown): AdminGroupMember[] {
       const userId = typeof row.user_id === "string" ? row.user_id : "";
       if (!userId) return null;
 
-      let displayName = "";
       const profiles = row.profiles;
-      if (profiles && typeof profiles === "object" && !Array.isArray(profiles)) {
-        const dn = (profiles as { display_name?: unknown }).display_name;
-        if (typeof dn === "string" && dn.trim()) displayName = dn.trim();
-      } else if (Array.isArray(profiles) && profiles[0] && typeof profiles[0] === "object") {
-        const dn = (profiles[0] as { display_name?: unknown }).display_name;
-        if (typeof dn === "string" && dn.trim()) displayName = dn.trim();
-      }
+      const displayName = pickProfileField(profiles, "display_name");
+      const nickname = pickProfileField(profiles, "nickname");
+      const phone = pickProfileField(profiles, "phone");
+      const wechatId = pickProfileField(profiles, "wechat_id");
 
       return {
         userId,
-        displayName: displayName || `用戶 ${userId.slice(0, 8)}`,
+        displayName: displayName || nickname || `用戶 ${userId.slice(0, 8)}`,
+        phone: phone || null,
+        wechatId: wechatId || null,
       };
     })
     .filter((m): m is AdminGroupMember => m != null);
 }
 
-/** Server-only：撈取 recruiting / pending_opt_in 活躍群組（含樓盤與成員） */
+/** Server-only：撈取招募中／待確認／已成團群組（含樓盤與成員聯絡方式） */
 export async function fetchActiveAdminGroups(): Promise<{
   groups: AdminGroupRow[];
   error: string | null;
@@ -85,11 +107,11 @@ export async function fetchActiveAdminGroups(): Promise<{
       properties ( id, title ),
       group_members (
         user_id,
-        profiles ( display_name )
+        profiles ( display_name, nickname, phone, wechat_id )
       )
     `
     )
-    .in("status", ["recruiting", "pending_opt_in"])
+    .in("status", [...ADMIN_GROUP_STATUSES])
     .order("created_at", { ascending: true });
 
   if (error) {

@@ -14,8 +14,13 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  isPropertyListingBlocked,
+  PROPERTY_LISTING_BLOCKED_LABEL,
+} from "@/lib/property-listing";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
+import type { PropertyListingStatus } from "@/types/property";
 
 const DEFAULT_PROFILE_SETUP_HREF = "/dashboard?tab=personal";
 
@@ -26,6 +31,8 @@ type HousingIntentButtonProps = {
   defaultBudget: number;
   /** 樓盤詳情頁傳入時啟用 Property-First 配對 */
   propertyId?: string;
+  /** 樓盤盤源狀態；held / rented 時禁止加入排隊 */
+  propertyListingStatus?: PropertyListingStatus;
   /** Server 端判定：display_name + phone + 四項生活習慣均已填寫 */
   isProfileComplete?: boolean;
   /** 資料未完成時導向的設定頁（預設 Dashboard 個人資料分頁） */
@@ -39,6 +46,7 @@ export default function HousingIntentButton({
   defaultDistrict,
   defaultBudget,
   propertyId,
+  propertyListingStatus = "available",
   isProfileComplete = true,
   profileSetupHref = DEFAULT_PROFILE_SETUP_HREF,
   profileIncompleteHint = "",
@@ -54,6 +62,7 @@ export default function HousingIntentButton({
   const [queueCheckLoading, setQueueCheckLoading] = useState(Boolean(propertyId?.trim()));
 
   const trimmedPropertyId = propertyId?.trim() ?? "";
+  const listingBlocked = isPropertyListingBlocked(propertyListingStatus);
 
   useEffect(() => {
     if (!trimmedPropertyId) {
@@ -177,7 +186,7 @@ export default function HousingIntentButton({
       return;
     }
 
-    if (!isProfileComplete || alreadyInQueue) return;
+    if (listingBlocked || !isProfileComplete || alreadyInQueue) return;
 
     setIsIntentModalOpen(true);
   }
@@ -289,26 +298,33 @@ export default function HousingIntentButton({
     "尚欠：顯示名稱、聯絡電話或生活習慣評分。請至「我的帳號」完善後再試。";
 
   const buttonDisabled =
-    !isProfileComplete || alreadyInQueue || (Boolean(trimmedPropertyId) && queueCheckLoading);
+    listingBlocked ||
+    !isProfileComplete ||
+    alreadyInQueue ||
+    (Boolean(trimmedPropertyId) && queueCheckLoading);
 
-  const buttonLabel = alreadyInQueue
-    ? "已在排隊池中"
-    : queueCheckLoading && trimmedPropertyId
-      ? "檢查排隊狀態…"
-      : isProfileComplete
-        ? "✨ 加入心水排隊區"
-        : "⚠️ 請先完善個人資料與生活評分";
+  const buttonLabel = listingBlocked
+    ? PROPERTY_LISTING_BLOCKED_LABEL
+    : alreadyInQueue
+      ? "已在排隊池中"
+      : queueCheckLoading && trimmedPropertyId
+        ? "檢查排隊狀態…"
+        : isProfileComplete
+          ? "✨ 加入心水排隊區"
+          : "⚠️ 請先完善個人資料與生活評分";
 
   return (
     <>
       <span
         className="block w-full"
         title={
-          alreadyInQueue
-            ? "您已為此樓盤提交過租屋意向，請至「我的租屋意向」查看進度"
-            : !isProfileComplete
-              ? incompleteTooltip
-              : undefined
+          listingBlocked
+            ? "此樓盤已預留或洽談中，暫停接受新申請"
+            : alreadyInQueue
+              ? "您已為此樓盤提交過租屋意向，請至「我的租屋意向」查看進度"
+              : !isProfileComplete
+                ? incompleteTooltip
+                : undefined
         }
       >
         <Button
@@ -316,16 +332,18 @@ export default function HousingIntentButton({
           disabled={buttonDisabled}
           aria-disabled={buttonDisabled}
           aria-label={
-            alreadyInQueue
-              ? "已在排隊池中"
-              : isProfileComplete
-                ? "加入心水排隊區"
-                : `請先完善個人資料與生活評分。${incompleteTooltip}`
+            listingBlocked
+              ? PROPERTY_LISTING_BLOCKED_LABEL
+              : alreadyInQueue
+                ? "已在排隊池中"
+                : isProfileComplete
+                  ? "加入心水排隊區"
+                  : `請先完善個人資料與生活評分。${incompleteTooltip}`
           }
           onClick={() => void handlePrimaryClick()}
           className={cn(
             className,
-            alreadyInQueue &&
+            (alreadyInQueue || listingBlocked) &&
               "cursor-not-allowed border-zinc-300 bg-zinc-200 text-zinc-600 opacity-100 hover:bg-zinc-200 hover:text-zinc-600 disabled:opacity-100",
             !isProfileComplete &&
               !alreadyInQueue &&

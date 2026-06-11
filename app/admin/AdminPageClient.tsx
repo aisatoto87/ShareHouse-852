@@ -691,10 +691,10 @@ export default function AdminPageClient() {
           ) : filteredProperties.length === 0 ? (
             <p className="text-sm text-zinc-500">沒有符合篩選條件的租盤</p>
           ) : (
-            <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
+            <div className="grid grid-cols-1 items-stretch gap-6 md:grid-cols-2 lg:grid-cols-3">
               {filteredProperties.map((property) => (
+                <div key={property.id} className="h-full">
                 <PropertyCard
-                  key={property.id}
                   property={property}
                   adminMenu={
                     <AdminCardActions
@@ -711,6 +711,7 @@ export default function AdminPageClient() {
                     />
                   }
                 />
+                </div>
               ))}
             </div>
           )}

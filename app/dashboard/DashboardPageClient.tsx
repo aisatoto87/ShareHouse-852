@@ -356,6 +356,7 @@ export default function DashboardPageClient() {
   const [lastNameEn, setLastNameEn] = useState("");
   const [nickname, setNickname] = useState("");
   const [phone, setPhone] = useState("");
+  const [wechatId, setWechatId] = useState("");
   const [avatarUrl, setAvatarUrl] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [isVerified, setIsVerified] = useState(false);
@@ -405,7 +406,7 @@ export default function DashboardPageClient() {
           supabase
             .from("profiles")
             .select(
-              "habit_cleanliness, habit_ac_temp, habit_guests, habit_noise, role, last_name_zh, last_name_en, nickname, phone, avatar_url, display_name, is_verified"
+              "habit_cleanliness, habit_ac_temp, habit_guests, habit_noise, role, last_name_zh, last_name_en, nickname, phone, wechat_id, avatar_url, display_name, is_verified"
             )
             .eq("id", user.id)
             .maybeSingle(),
@@ -461,6 +462,8 @@ export default function DashboardPageClient() {
           const lnEn = typeof profileData.last_name_en === "string" ? profileData.last_name_en : "";
           const nn = typeof profileData.nickname === "string" ? profileData.nickname : "";
           const ph = typeof profileData.phone === "string" ? profileData.phone : "";
+          const wx =
+            typeof profileData.wechat_id === "string" ? profileData.wechat_id : "";
           const av = typeof profileData.avatar_url === "string" ? profileData.avatar_url : "";
           const dn = typeof profileData.display_name === "string" ? profileData.display_name : "";
           const verified = profileData.is_verified === true;
@@ -469,6 +472,7 @@ export default function DashboardPageClient() {
           setLastNameEn(lnEn);
           setNickname(nn);
           setPhone(ph);
+          setWechatId(wx);
           setAvatarUrl(av);
           setIsVerified(verified);
 
@@ -482,6 +486,7 @@ export default function DashboardPageClient() {
           setLastNameEn("");
           setNickname("");
           setPhone("");
+          setWechatId("");
           setAvatarUrl("");
           setIsVerified(false);
           setSalutationMode("chinese");
@@ -887,6 +892,7 @@ export default function DashboardPageClient() {
         last_name_en: lastNameEn.trim() || null,
         nickname: nickname.trim() || null,
         phone: phone.trim() || null,
+        wechat_id: wechatId.trim() || null,
         avatar_url: avatarUrl.trim() || null,
         display_name: assembled.trim() || null,
       })
@@ -1083,6 +1089,20 @@ export default function DashboardPageClient() {
                               placeholder="手提或 WhatsApp"
                               className="mt-1.5"
                             />
+                          </div>
+                          <div>
+                            <Label htmlFor="wechat-id">微信 ID（選填）</Label>
+                            <Input
+                              id="wechat-id"
+                              value={wechatId}
+                              onChange={(e) => setWechatId(e.target.value)}
+                              placeholder="例如：wxid_abc123"
+                              className="mt-1.5"
+                              autoComplete="off"
+                            />
+                            <p className="mt-1 text-xs text-zinc-500">
+                              配對成功後，室友可查看並複製您的微信 ID 以便加好友。
+                            </p>
                           </div>
                         </div>
                       </div>

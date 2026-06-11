@@ -23,5 +23,6 @@ export type ProfileRow = {
   last_name_en?: string | null;
   nickname?: string | null;
   phone?: string | null;
+  wechat_id?: string | null;
   avatar_url?: string | null;
 };

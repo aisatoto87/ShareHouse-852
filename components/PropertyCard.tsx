@@ -3,12 +3,15 @@
 import Image from "next/image";
 import Link from "next/link";
 import type { MouseEvent, ReactNode } from "react";
-import { CheckCircle, MapPin, Maximize2 } from "lucide-react";
+import { MapPin, Maximize2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardFooter } from "@/components/ui/card";
 import WishlistHeartButton from "@/components/WishlistHeartButton";
+import { PROPERTY_LISTING_BLOCKED_LABEL } from "@/lib/property-listing";
 import { cn } from "@/lib/utils";
 import type { Property, PropertyListingStatus } from "@/types/property";
+
+const MAX_ROOMS_DISPLAY = 4;
 
 const TAG_STYLES: Record<string, string> = {
   即走盤: "bg-red-100 text-red-800",
@@ -29,7 +32,7 @@ const STATUS_BADGE: Record<
   { label: string; className: string }
 > = {
   held: {
-    label: "⏳ 初步配對中 / 已有人出價",
+    label: "🚧 已預留 / 洽談中",
     className: "bg-amber-500/95 text-white ring-1 ring-amber-200/60",
   },
   rented: {
@@ -37,14 +40,6 @@ const STATUS_BADGE: Record<
     className: "bg-red-700/95 text-white ring-1 ring-red-300/50",
   },
 };
-
-function buildWhatsAppUrl(title: string, phone: string): string {
-  const digits = phone.replace(/\D/g, "");
-  const msg = encodeURIComponent(
-    `你好！我對【${title}】有興趣，我想委託你們幫我尋找合租室友！`
-  );
-  return `https://wa.me/${digits}?text=${msg}`;
-}
 
 interface PropertyCardProps {
   property: Property;
@@ -62,8 +57,7 @@ export default function PropertyCard({
   recruitingOneShort = false,
   adminMenu,
 }: PropertyCardProps) {
-  const { id, title, district, sub_district, price, size_sqft, imageUrl, tags, contact_whatsapp } =
-    property;
+  const { id, title, district, sub_district, price, size_sqft, imageUrl, tags } = property;
   const formattedPrice = new Intl.NumberFormat("zh-HK").format(price);
   const roomCount = Math.max(1, property.room_count ?? 1);
   const averagePrice = Math.round(price / roomCount);
@@ -87,7 +81,9 @@ export default function PropertyCard({
     }
     return [];
   })();
-  const waUrl = buildWhatsAppUrl(title, contact_whatsapp);
+  const visibleRoomEntries = customRoomPriceEntries.slice(0, MAX_ROOMS_DISPLAY);
+  const hiddenRoomCount = Math.max(0, customRoomPriceEntries.length - visibleRoomEntries.length);
+
   const detailHref = `/property/${id}`;
   const blockCardNavigation = (e: MouseEvent<HTMLDivElement>) => {
     e.preventDefault();
@@ -97,13 +93,14 @@ export default function PropertyCard({
   const listingStatus: PropertyListingStatus = property.status ?? "available";
   const isHeld = listingStatus === "held";
   const isRented = listingStatus === "rented";
-  const statusBadge = isHeld || isRented ? STATUS_BADGE[listingStatus] : null;
-  const showFomoBadge = recruitingOneShort && !isHeld && !isRented;
+  const isListingBlocked = isHeld || isRented;
+  const statusBadge = isListingBlocked ? STATUS_BADGE[listingStatus] : null;
+  const showFomoBadge = recruitingOneShort && !isListingBlocked;
 
   return (
     <Card
       className={cn(
-        "group rounded-2xl border border-zinc-200 bg-white shadow-sm transition-shadow duration-300 hover:shadow-lg",
+        "group flex h-full flex-col rounded-2xl border border-zinc-200 bg-white shadow-sm transition-shadow duration-300 hover:shadow-lg",
         adminMenu ? "overflow-visible" : "overflow-hidden",
         isHeld && "grayscale opacity-75",
         isRented && "brightness-50"
@@ -111,7 +108,7 @@ export default function PropertyCard({
     >
       <div
         className={cn(
-          "relative h-48 w-full rounded-t-2xl",
+          "relative h-48 w-full shrink-0 rounded-t-2xl",
           adminMenu ? "overflow-visible" : "overflow-hidden"
         )}
       >
@@ -219,8 +216,8 @@ export default function PropertyCard({
         </div>
       </div>
 
-      <CardContent className="space-y-2 p-4">
-        <Link href={detailHref} className="block">
+      <CardContent className="flex flex-1 flex-col p-4">
+        <Link href={detailHref} className="flex flex-1 flex-col">
           <h3 className="line-clamp-1 text-lg font-bold text-zinc-900">{title}</h3>
           <div className="mt-1 flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
             <span className="flex items-center gap-1">
@@ -236,47 +233,44 @@ export default function PropertyCard({
             HK$ {formattedPrice}
             <span className="ml-1 text-sm font-normal text-zinc-400">/月</span>
           </p>
-          <div className="mt-2">
+          <div className="mt-2 min-h-[2.75rem] flex-1">
             {property.pricing_mode === "custom" && customRoomPriceEntries.length > 0 ? (
               <div className="flex flex-wrap gap-1.5">
-                {customRoomPriceEntries.map((item) => (
+                {visibleRoomEntries.map((item) => (
                   <Badge key={`${id}-room-${item.roomNo}`} className="bg-blue-50 text-blue-700">
                     房間 {item.roomNo}: HK$ {new Intl.NumberFormat("zh-HK").format(item.value)}
                   </Badge>
                 ))}
+                {hiddenRoomCount > 0 ? (
+                  <Badge className="bg-zinc-100 text-zinc-600">+{hiddenRoomCount} 更多房間</Badge>
+                ) : null}
               </div>
             ) : (
-              <p className="text-xs font-medium text-zinc-500">平均每房 HK$ {formattedAveragePrice} /月</p>
+              <p className="text-xs font-medium text-zinc-500">
+                平均每房 HK$ {formattedAveragePrice} /月
+              </p>
             )}
           </div>
         </Link>
       </CardContent>
 
-      <CardFooter className="relative z-10 px-4 pb-4 pt-2">
-        {isRented ? (
-          <button
-            type="button"
-            disabled
-            aria-label="此單位已租出，無法申請媒合"
-            className="inline-flex h-10 w-full cursor-not-allowed items-center justify-center gap-2 rounded-xl bg-zinc-400 px-4 text-sm font-medium text-white opacity-80"
+      <CardFooter className="relative z-10 mt-auto px-4 pb-4 pt-2">
+        {isListingBlocked ? (
+          <Link
+            href={detailHref}
+            aria-label={`${PROPERTY_LISTING_BLOCKED_LABEL} — 查看 ${title} 詳情`}
+            className="inline-flex h-10 w-full cursor-pointer items-center justify-center gap-2 rounded-xl bg-zinc-400 px-4 text-sm font-medium text-white opacity-90 transition-opacity hover:opacity-100"
           >
-            <CheckCircle className="h-4 w-4 shrink-0" />
-            已租出 — 暫停申請
-          </button>
+            {PROPERTY_LISTING_BLOCKED_LABEL}
+          </Link>
         ) : (
-          <a
-            href={waUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            aria-label={`申請合租媒合 — ${title}`}
-            className={cn(
-              "inline-flex h-10 w-full items-center justify-center gap-2 rounded-xl bg-[#0f2540] px-4 text-sm font-medium text-white shadow-sm transition-all hover:bg-[#1a3a5c] active:scale-[0.98]",
-              isHeld && "pointer-events-none opacity-60"
-            )}
+          <Link
+            href={detailHref}
+            aria-label={`查看 ${title} 詳情`}
+            className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-xl bg-[#0f2540] px-4 text-sm font-medium text-white shadow-sm transition-all hover:bg-[#1a3a5c] active:scale-[0.98]"
           >
-            <CheckCircle className="h-4 w-4 shrink-0" />
-            {isHeld ? "配對進行中" : "申請合租媒合"}
-          </a>
+            👀 查看詳情
+          </Link>
         )}
       </CardFooter>
     </Card>

@@ -1,6 +1,5 @@
 import { revalidatePath } from "next/cache";
 import { NextResponse } from "next/server";
-import { invokeProcessGroupMatchV2IfFull } from "@/lib/process-group-match-v2";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { createSupabaseServerClient, getServerUser } from "@/lib/supabase/server";
 
@@ -21,10 +20,64 @@ function parseGroupSize(value: unknown): number {
   return Math.round(n);
 }
 
+/** 從群組或成員意向推斷要封盤的樓盤 ID */
+async function resolveHoldPropertyId(
+  admin: ReturnType<typeof createSupabaseAdminClient>,
+  groupPropertyId: string | null,
+  memberUserIds: string[]
+): Promise<string | null> {
+  if (groupPropertyId) return groupPropertyId;
+  if (memberUserIds.length === 0) return null;
+
+  const { data, error } = await admin
+    .from("housing_intents")
+    .select("target_property_id")
+    .in("user_id", memberUserIds)
+    .not("target_property_id", "is", null)
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    console.warn("[api/match/action] resolveHoldPropertyId", error.message);
+    return null;
+  }
+
+  const resolved = (data as { target_property_id?: unknown } | null)?.target_property_id;
+  return typeof resolved === "string" && resolved.trim() ? resolved.trim() : null;
+}
+
+async function autoHoldPropertyOnConfirm(
+  admin: ReturnType<typeof createSupabaseAdminClient>,
+  propertyId: string
+): Promise<boolean> {
+  const { error: propertyErr } = await admin
+    .from("properties")
+    .update({ status: "held" })
+    .eq("id", propertyId);
+
+  if (propertyErr) {
+    console.error("自動封盤失敗 Property Auto-Hold Error:", propertyErr);
+    return false;
+  }
+
+  console.log("[api/match/action] property auto-held", { propertyId });
+  return true;
+}
+
+function revalidateAfterGroupConfirm(propertyId: string | null): void {
+  revalidatePath("/dashboard", "page");
+  revalidatePath("/", "layout");
+  revalidatePath("/");
+  if (propertyId) {
+    revalidatePath(`/property/${propertyId}`);
+    revalidatePath(`/property/${propertyId}`, "page");
+  }
+}
+
 async function updateMemberIntentsForGroup(
   admin: ReturnType<typeof createSupabaseAdminClient>,
   userIds: string[],
-  status: "matched" | "recruiting" | "waiting",
+  status: "matched" | "recruiting" | "waiting" | "confirmed",
   propertyId: string | null
 ): Promise<void> {
   if (userIds.length === 0) return;
@@ -257,78 +310,88 @@ export async function POST(request: Request) {
 
     const shouldConfirmGroup =
       allCurrentMembersAgreed &&
-      agreedCount === targetSize &&
-      memberCount === targetSize;
+      agreedCount >= targetSize &&
+      memberCount >= targetSize;
 
     // 全員同意且人數已達 target_size → confirmed
     if (shouldConfirmGroup) {
-      const { data: confirmedRow, error: confirmedGroupErr } = await admin
+      const { error: confirmedGroupErr } = await admin
         .from("match_groups")
         .update({
           status: "confirmed",
           current_size: memberCount,
           expires_at: null,
         })
-        .eq("group_id", groupId)
-        .eq("status", "pending_opt_in")
-        .select("status")
-        .maybeSingle();
+        .eq("group_id", groupId);
 
       if (confirmedGroupErr) {
-        console.error("[api/match/action] confirmed group", confirmedGroupErr);
+        console.error("[api/match/action] Group Update Error:", confirmedGroupErr);
         return NextResponse.json({ error: confirmedGroupErr.message }, { status: 500 });
       }
 
-      const confirmedStatus = String(
-        (confirmedRow as { status?: unknown } | null)?.status ?? ""
-      );
+      if (memberUserIds.length > 0) {
+        let intentQuery = admin
+          .from("housing_intents")
+          .update({ status: "confirmed" })
+          .in("user_id", memberUserIds);
 
-      if (confirmedStatus !== "confirmed") {
-        const { data: latestGroup } = await admin
-          .from("match_groups")
-          .select("status")
-          .eq("group_id", groupId)
-          .maybeSingle();
-        const latestStatus = String((latestGroup as { status?: unknown } | null)?.status ?? "");
-
-        if (latestStatus === "confirmed") {
-          revalidatePath("/dashboard", "page");
-          return NextResponse.json({
-            ok: true,
-            action: "accept",
-            group_confirmed: true,
-            group_status: "confirmed",
-            agreed_count: agreedCount,
-            current_size: memberCount,
-            target_size: targetSize,
-          });
+        if (propertyId) {
+          intentQuery = intentQuery.eq("target_property_id", propertyId);
+        } else {
+          intentQuery = intentQuery.is("target_property_id", null);
         }
 
-        return NextResponse.json(
-          {
-            error: "群組結算失敗，狀態未能轉為 confirmed。",
-            group_status: latestStatus,
-          },
-          { status: 500 }
-        );
+        const { data: updatedIntents, error: intentErr } = await intentQuery.select("intent_id");
+        if (intentErr) {
+          console.error("[api/match/action] Intent Update Error:", intentErr);
+          return NextResponse.json({ error: intentErr.message }, { status: 500 });
+        }
+
+        const updatedIntentCount = updatedIntents?.length ?? 0;
+        if (updatedIntentCount === 0) {
+          const { data: fallbackIntents, error: fallbackErr } = await admin
+            .from("housing_intents")
+            .update({ status: "confirmed" })
+            .in("user_id", memberUserIds)
+            .in("status", ["matching", "pending_opt_in", "recruiting", "waiting", "matched"])
+            .select("intent_id");
+
+          if (fallbackErr) {
+            console.error("[api/match/action] Intent Fallback Update Error:", fallbackErr);
+            return NextResponse.json({ error: fallbackErr.message }, { status: 500 });
+          }
+
+          console.warn("[api/match/action] property-scoped intent update matched 0 rows", {
+            groupId,
+            propertyId,
+            fallbackCount: fallbackIntents?.length ?? 0,
+          });
+        }
       }
 
-      try {
-        await updateMemberIntentsForGroup(admin, memberUserIds, "matched", propertyId);
-      } catch (e) {
-        console.error("[api/match/action] matched intents", e);
-        return NextResponse.json(
-          { error: e instanceof Error ? e.message : "更新意向狀態失敗。" },
-          { status: 500 }
-        );
+      const holdPropertyId = await resolveHoldPropertyId(admin, propertyId, memberUserIds);
+      const propertyHeld = holdPropertyId
+        ? await autoHoldPropertyOnConfirm(admin, holdPropertyId)
+        : false;
+
+      if (!holdPropertyId) {
+        console.warn("[api/match/action] auto-hold skipped: no propertyId on group or intents", {
+          groupId,
+        });
       }
 
-      const rpcResult = await invokeProcessGroupMatchV2IfFull(admin, groupId);
-      if (rpcResult.error) {
-        console.warn("[api/match/action] process_group_match_v2", rpcResult.error);
-      }
+      console.log("[api/match/action] group confirmed", {
+        groupId,
+        memberCount,
+        agreedCount,
+        targetSize,
+        propertyId,
+        holdPropertyId,
+        propertyHeld,
+        memberUserIds,
+      });
 
-      revalidatePath("/dashboard", "page");
+      revalidateAfterGroupConfirm(holdPropertyId);
 
       return NextResponse.json({
         ok: true,
@@ -338,7 +401,8 @@ export async function POST(request: Request) {
         agreed_count: agreedCount,
         current_size: memberCount,
         target_size: targetSize,
-        group_match_processed: rpcResult.invoked,
+        property_held: propertyHeld,
+        hold_property_id: holdPropertyId,
       });
     }
 
