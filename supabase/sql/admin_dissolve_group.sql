@@ -9,10 +9,16 @@ SET search_path = public
 AS $$
 DECLARE
   member_user_ids uuid[];
+  v_property_id uuid;
 BEGIN
   IF p_group_id IS NULL THEN
     RAISE EXCEPTION 'p_group_id is required';
   END IF;
+
+  SELECT mg.property_id
+  INTO v_property_id
+  FROM match_groups mg
+  WHERE mg.group_id = p_group_id;
 
   SELECT COALESCE(array_agg(gm.user_id), ARRAY[]::uuid[])
   INTO member_user_ids
@@ -30,7 +36,13 @@ BEGIN
     UPDATE housing_intents
     SET status = 'waiting'
     WHERE user_id = ANY (member_user_ids)
-      AND status IN ('matching', 'recruiting', 'pending_opt_in');
+      AND status IN ('matching', 'recruiting', 'pending_opt_in', 'confirmed', 'matched');
+  END IF;
+
+  IF v_property_id IS NOT NULL THEN
+    UPDATE properties
+    SET status = 'available'
+    WHERE id = v_property_id;
   END IF;
 END;
 $$;

@@ -1,4 +1,6 @@
+import { useMemo } from "react";
 import { SearchX } from "lucide-react";
+import { sortSmartMatchedPropertyRows } from "@/lib/property-listing";
 import type { SmartMatchedPropertyRow } from "@/types/property";
 import PropertyCard from "./PropertyCard";
 
@@ -18,9 +20,10 @@ export default function ListingGrid({
   sortByMatch,
   showSimilarityBadge = true,
 }: ListingGridProps) {
-  const displayedRows = sortByMatch
-    ? [...rows].sort((a, b) => b.similarity - a.similarity)
-    : rows;
+  const displayedRows = useMemo(
+    () => sortSmartMatchedPropertyRows(rows, sortByMatch),
+    [rows, sortByMatch]
+  );
 
   return (
     <section>
@@ -38,14 +41,15 @@ export default function ListingGrid({
           <p className="mt-1 text-sm text-zinc-400">請調整上方篩選條件再試試</p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="grid grid-cols-1 items-stretch gap-5 sm:grid-cols-2 lg:grid-cols-3">
           {displayedRows.map(({ property, similarity, recruitingOneShort }) => (
-            <PropertyCard
-              key={property.id}
-              property={property}
-              similarityScore={showSimilarityBadge ? similarity : null}
-              recruitingOneShort={Boolean(recruitingOneShort)}
-            />
+            <div key={property.id} className="h-full">
+              <PropertyCard
+                property={property}
+                similarityScore={showSimilarityBadge ? similarity : null}
+                recruitingOneShort={Boolean(recruitingOneShort)}
+              />
+            </div>
           ))}
         </div>
       )}

@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Loader2, Lock, MessageCircle } from "lucide-react";
+import { ClipboardCopy, Loader2, Lock, MessageCircle } from "lucide-react";
+import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardFooter } from "@/components/ui/card";
 import { isActiveMatchGroupStatus } from "@/lib/intent-group-ui";
@@ -18,6 +19,7 @@ type TeammateProfile = {
   displayName: string;
   avatarUrl: string | null;
   phone: string | null;
+  wechatId: string | null;
   /** SyncNest 習慣雷達契合度；null 時顯示「新室友」 */
   syncNestScore: number | null;
 };
@@ -55,6 +57,21 @@ function resolveTeammateDisplayName(profile: {
 function normalizePhone(value: unknown): string | null {
   const raw = typeof value === "string" ? value.trim() : "";
   return raw.length > 0 ? raw : null;
+}
+
+function normalizeWechatId(value: unknown): string | null {
+  const raw = typeof value === "string" ? value.trim() : "";
+  return raw.length > 0 ? raw : null;
+}
+
+async function copyWechatId(wechatId: string) {
+  try {
+    await navigator.clipboard.writeText(wechatId);
+    toast.success("已複製 WeChat ID");
+  } catch (e) {
+    console.error("[MatchedTeammates] copy wechat", e);
+    toast.error("複製失敗，請手動選取");
+  }
 }
 
 /** 鎖定狀態下遮蔽尾碼，保留 FOMO 提示（例：+852 9123 ****） */
@@ -234,6 +251,24 @@ function TeammateCard({
             )}
           </p>
         ) : null}
+
+        {canRevealContact && mate.wechatId ? (
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-zinc-500">
+            <span>
+              WeChat:{" "}
+              <span className="font-medium text-zinc-700">{mate.wechatId}</span>
+            </span>
+            <button
+              type="button"
+              onClick={() => void copyWechatId(mate.wechatId!)}
+              className="inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-700"
+              aria-label={`複製 ${mate.displayName} 的 WeChat ID`}
+            >
+              <ClipboardCopy className="h-3 w-3 shrink-0" aria-hidden />
+              <span>複製</span>
+            </button>
+          </div>
+        ) : null}
       </CardContent>
 
       <CardFooter className="border-t border-zinc-100 bg-zinc-50/50 p-3 pt-0">
@@ -249,6 +284,10 @@ function TeammateCard({
               <span aria-hidden>💬</span>
               WhatsApp 聯絡室友
             </a>
+          ) : mate.wechatId ? (
+            <p className="w-full py-2 text-center text-xs text-zinc-500">
+              請使用上方 WeChat ID 聯絡室友
+            </p>
           ) : (
             <p className="w-full py-2 text-center text-xs text-zinc-500">
               室友尚未提供聯絡方式
@@ -429,7 +468,7 @@ export default function MatchedTeammates({
         const { data: profileRows, error: profErr } = await supabase
           .from("profiles")
           .select(
-            "id, display_name, nickname, avatar_url, phone, habit_cleanliness, habit_ac_temp, habit_guests, habit_noise"
+            "id, display_name, nickname, avatar_url, phone, wechat_id, habit_cleanliness, habit_ac_temp, habit_guests, habit_noise"
           )
           .in("id", allUserIdsForHabits);
 
@@ -470,6 +509,7 @@ export default function MatchedTeammates({
             typeof profile?.avatar_url === "string" ? profile.avatar_url.trim() : "";
           const avatarUrl = rawAvatar && isHttpUrl(rawAvatar) ? rawAvatar : null;
           const phone = normalizePhone(profile?.phone);
+          const wechatId = normalizeWechatId(profile?.wechat_id);
 
           const teammateHabits = habitsById.get(uid) ?? null;
           let syncNestScore: number | null = null;
@@ -483,6 +523,7 @@ export default function MatchedTeammates({
             displayName,
             avatarUrl,
             phone,
+            wechatId,
             syncNestScore,
           };
         });

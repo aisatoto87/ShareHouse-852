@@ -41,9 +41,9 @@ export default function WishlistGrid({ allProperties }: WishlistGridProps) {
           </Link>
         </div>
       ) : (
-        <ul className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+        <ul className="grid items-stretch gap-6 sm:grid-cols-2 lg:grid-cols-3">
           {saved.map((property) => (
-            <li key={property.id}>
+            <li key={property.id} className="h-full">
               <PropertyCard property={property} />
             </li>
           ))}

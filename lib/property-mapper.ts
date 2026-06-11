@@ -103,7 +103,8 @@ function parsePricingMode(v: unknown): Property["pricing_mode"] {
 
 function parsePropertyStatus(v: unknown): PropertyListingStatus {
   const s = String(v ?? "available").toLowerCase();
-  if (s === "held" || s === "rented") return s;
+  if (s === "on_hold" || s === "held") return "held";
+  if (s === "rented") return "rented";
   return "available";
 }
 
