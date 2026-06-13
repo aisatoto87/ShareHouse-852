@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import HabitDefenseSliders from "@/components/HabitDefenseSliders";
 import MatchedTeammates from "@/components/MatchedTeammates";
 import MatchingOptInPanel from "@/components/MatchingOptInPanel";
+import ViewingProgressPanel from "@/components/ViewingProgressPanel";
 import Navbar from "@/components/Navbar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -159,7 +160,11 @@ async function reconcileStalePausedIntents(
   if (hasLockingGroup) return rows;
 
   const stalePausedIds = rows
-    .filter((row) => row.status.trim().toLowerCase() === "paused")
+    .filter(
+      (row) =>
+        row.status.trim().toLowerCase() === "paused" &&
+        (row.target_property_id == null || row.target_property_id.trim() === "")
+    )
     .map((row) => row.intent_id);
   if (stalePausedIds.length === 0) return rows;
 
@@ -282,8 +287,8 @@ function intentStatusBadge(
   if (status === "paused") {
     return {
       className:
-        "max-w-full whitespace-normal rounded-lg border border-zinc-300 bg-zinc-100 px-3 py-1.5 text-left font-medium text-zinc-600 shadow-sm",
-      label: "⏸️ 暫停排隊",
+        "max-w-full whitespace-normal rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-left font-semibold text-amber-900 shadow-sm ring-1 ring-amber-200/80",
+      label: "⚠️ 配對已暫停",
     };
   }
 
@@ -1396,7 +1401,8 @@ export default function DashboardPageClient() {
                       const isPropertyFirst = row.target_property_id != null;
                       const propertyLinkLabel =
                         row.target_property_title?.trim() || "查看樓盤詳情";
-                      const reorderDisabled = isGloballyFrozen || reordering;
+                      const isIntentPaused = effectiveIntentStatus === "paused";
+                      const reorderDisabled = isGloballyFrozen || reordering || isIntentPaused;
                       const neighborUp = index > 0 ? sortedIntentRows[index - 1] : null;
                       const neighborDown =
                         index < sortedIntentRows.length - 1
@@ -1421,7 +1427,9 @@ export default function DashboardPageClient() {
                           <Card
                             className={cn(
                               "overflow-hidden border-zinc-200 shadow-sm transition-shadow hover:shadow-md",
-                              cardUi.isCardMuted && "opacity-60 grayscale"
+                              cardUi.isCardMuted && "opacity-60 grayscale",
+                              isIntentPaused &&
+                                "border-amber-200/90 bg-gradient-to-br from-amber-50/40 via-white to-zinc-50/80"
                             )}
                           >
                             <CardContent className="p-5">
@@ -1541,6 +1549,19 @@ export default function DashboardPageClient() {
                                       </div>
                                     </dl>
                                   )}
+                                  {isIntentPaused ? (
+                                    <div
+                                      className="rounded-xl border border-amber-200/90 bg-amber-50/90 px-4 py-3.5 text-sm leading-relaxed text-amber-950 shadow-sm"
+                                      role="status"
+                                    >
+                                      <p className="font-semibold text-amber-900">
+                                        管家已取消此配對
+                                      </p>
+                                      <p className="mt-1.5 text-amber-900/90">
+                                        可能是該樓盤已租出，或先前的配對未能達成共識。請取消此意向並重新選擇其他心水樓盤！
+                                      </p>
+                                    </div>
+                                  ) : null}
                                   {userId &&
                                   !isPropertyOffline &&
                                   cardUi.showMatchedTeammates &&
@@ -1553,13 +1574,23 @@ export default function DashboardPageClient() {
                                       targetPropertyId={row.target_property_id}
                                     />
                                   ) : null}
+                                  {(effectiveGroupStatus === "confirmed" ||
+                                    effectiveGroupStatus === "matched") &&
+                                  row.match_group_id ? (
+                                    <ViewingProgressPanel groupId={row.match_group_id} />
+                                  ) : null}
                                 </div>
                                 {effectiveIntentStatus !== "pending_opt_in" ? (
                                   <Button
                                     type="button"
-                                    variant="outline"
+                                    variant={isIntentPaused ? "default" : "outline"}
                                     size="sm"
-                                    className="shrink-0 border-zinc-300 text-zinc-700 hover:bg-zinc-50"
+                                    className={cn(
+                                      "shrink-0",
+                                      isIntentPaused
+                                        ? "bg-[#0f2540] text-white shadow-sm hover:bg-[#1a3a5c]"
+                                        : "border-zinc-300 text-zinc-700 hover:bg-zinc-50"
+                                    )}
                                     disabled={cancellingId === row.intent_id}
                                     onClick={() => void handleCancelWaiting(row.intent_id)}
                                   >
@@ -1568,6 +1599,8 @@ export default function DashboardPageClient() {
                                         <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                                         處理中…
                                       </>
+                                    ) : isIntentPaused ? (
+                                      "🗑️ 取消意向"
                                     ) : (
                                       "取消意向"
                                     )}

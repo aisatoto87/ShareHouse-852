@@ -33,10 +33,19 @@ BEGIN
   WHERE group_id = p_group_id;
 
   IF array_length(member_user_ids, 1) IS NOT NULL THEN
-    UPDATE housing_intents
-    SET status = 'waiting'
-    WHERE user_id = ANY (member_user_ids)
-      AND status IN ('matching', 'recruiting', 'pending_opt_in', 'confirmed', 'matched');
+    IF v_property_id IS NOT NULL THEN
+      UPDATE housing_intents
+      SET status = 'paused'
+      WHERE user_id = ANY (member_user_ids)
+        AND target_property_id = v_property_id
+        AND status IN ('matching', 'recruiting', 'pending_opt_in', 'confirmed', 'matched');
+    ELSE
+      UPDATE housing_intents
+      SET status = 'paused'
+      WHERE user_id = ANY (member_user_ids)
+        AND target_property_id IS NULL
+        AND status IN ('matching', 'recruiting', 'pending_opt_in', 'confirmed', 'matched');
+    END IF;
   END IF;
 
   IF v_property_id IS NOT NULL THEN
