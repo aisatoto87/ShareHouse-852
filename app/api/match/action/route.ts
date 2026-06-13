@@ -1,5 +1,6 @@
 import { revalidatePath } from "next/cache";
 import { NextResponse } from "next/server";
+import { ensureOfflineDealForGroup } from "@/lib/offline-deals";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { createSupabaseServerClient, getServerUser } from "@/lib/supabase/server";
 
@@ -378,6 +379,11 @@ export async function POST(request: Request) {
         console.warn("[api/match/action] auto-hold skipped: no propertyId on group or intents", {
           groupId,
         });
+      }
+
+      const { error: offlineDealErr } = await ensureOfflineDealForGroup(admin, groupId);
+      if (offlineDealErr) {
+        console.warn("[api/match/action] offline_deals ensure", offlineDealErr);
       }
 
       console.log("[api/match/action] group confirmed", {

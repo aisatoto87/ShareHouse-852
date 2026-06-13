@@ -10,6 +10,7 @@ import {
   adminDissolveGroupAction,
   adminKickGroupMemberAction,
 } from "@/app/admin/groups/actions";
+import DealManagementModal from "@/components/admin/DealManagementModal";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -89,7 +90,9 @@ async function copyMemberPhones(members: AdminGroupMember[]) {
 export default function AdminGroupsClient({ groups, fetchError }: AdminGroupsClientProps) {
   const router = useRouter();
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [dealModalOpen, setDealModalOpen] = useState(false);
   const [activeGroup, setActiveGroup] = useState<AdminGroupRow | null>(null);
+  const [dealGroup, setDealGroup] = useState<AdminGroupRow | null>(null);
   const [userIdInput, setUserIdInput] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [dissolvingGroupId, setDissolvingGroupId] = useState<string | null>(null);
@@ -109,6 +112,11 @@ export default function AdminGroupsClient({ groups, fetchError }: AdminGroupsCli
     setActiveGroup(group);
     setUserIdInput("");
     setDialogOpen(true);
+  }
+
+  function openDealModal(group: AdminGroupRow) {
+    setDealGroup(group);
+    setDealModalOpen(true);
   }
 
   async function handleSubmit() {
@@ -424,6 +432,15 @@ export default function AdminGroupsClient({ groups, fetchError }: AdminGroupsCli
                           <Button
                             type="button"
                             size="sm"
+                            className="gap-1.5 bg-[#0f2540] text-white hover:bg-[#1a3a5c]"
+                            disabled={dissolvingGroupId != null || kickingMemberKey != null}
+                            onClick={() => openDealModal(group)}
+                          >
+                            📋 跟進
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
                             variant="outline"
                             className="gap-1.5 border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-100"
                             disabled={copyingGroupId === group.groupId || kickingMemberKey != null}
@@ -515,6 +532,12 @@ export default function AdminGroupsClient({ groups, fetchError }: AdminGroupsCli
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <DealManagementModal
+        open={dealModalOpen}
+        onOpenChange={setDealModalOpen}
+        group={dealGroup}
+      />
     </>
   );
 }

@@ -79,23 +79,12 @@ export function resolveIntentCardUi(
   const globallyFrozen = Boolean(options?.isGloballyFrozen);
 
   if (isPaused) {
-    // 資料庫殘留 paused，但已無鎖定群組 → 視為 waiting（由載入時清洗或此處兜底）
-    if (!globallyFrozen) {
-      return {
-        effectiveIntentStatus: "waiting",
-        effectiveGroupStatus: null,
-        showMatchedTeammates: false,
-        isPaused: false,
-        isCardMuted: false,
-        ghostStateFallback: false,
-      };
-    }
     return {
       effectiveIntentStatus: "paused",
       effectiveGroupStatus: null,
       showMatchedTeammates: false,
       isPaused: true,
-      isCardMuted: true,
+      isCardMuted: globallyFrozen,
       ghostStateFallback: false,
     };
   }
