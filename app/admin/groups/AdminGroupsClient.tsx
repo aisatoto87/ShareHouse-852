@@ -8,7 +8,7 @@ import { toast } from "sonner";
 import {
   adminAddToGroupAction,
   adminDissolveGroupAction,
-  adminKickGroupMemberAction,
+  adminKickConfirmedMemberAction,
 } from "@/app/admin/groups/actions";
 import DealManagementModal from "@/components/admin/DealManagementModal";
 import { Badge } from "@/components/ui/badge";
@@ -186,7 +186,11 @@ export default function AdminGroupsClient({ groups, fetchError }: AdminGroupsCli
     const memberKey = `${group.groupId}:${member.userId}`;
     setKickingMemberKey(memberKey);
     try {
-      const result = await adminKickGroupMemberAction(group.groupId, member.userId);
+      const result = await adminKickConfirmedMemberAction(
+        group.groupId,
+        group.propertyId ?? "",
+        member.userId
+      );
       if (!result.ok) {
         toast.error(result.error);
         return;

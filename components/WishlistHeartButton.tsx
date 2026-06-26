@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Heart } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { createSupabaseBrowserClient } from "@/lib/supabase/client";
+import { useAuth } from "@/components/AuthProvider";
 
 type HeartVariant = "onImage" | "onNavy" | "onLight";
 
@@ -35,7 +35,7 @@ export default function WishlistHeartButton({
   disabled: disabledProp = false,
   "aria-label": ariaLabel,
 }: WishlistHeartButtonProps) {
-  const supabase = useMemo(() => createSupabaseBrowserClient(), []);
+  const { user, loading: authLoading, supabase } = useAuth();
   const [saved, setSaved] = useState(false);
   const [loading, setLoading] = useState(true);
   const mutatingRef = useRef(false);
@@ -44,13 +44,10 @@ export default function WishlistHeartButton({
     let active = true;
 
     async function loadSavedState() {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-
-      if (!active) return;
+      if (authLoading) return;
 
       if (!user) {
+        if (!active) return;
         setSaved(false);
         setLoading(false);
         return;
@@ -78,24 +75,13 @@ export default function WishlistHeartButton({
 
     void loadSavedState();
 
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange(() => {
-      void loadSavedState();
-    });
-
     return () => {
       active = false;
-      subscription.unsubscribe();
     };
-  }, [propertyId, supabase]);
+  }, [propertyId, supabase, user, authLoading]);
 
   async function handleToggle() {
     if (disabledProp || loading || mutatingRef.current) return;
-
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
 
     if (!user) {
       toast.info("請先登入以加入心水清單");

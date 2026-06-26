@@ -231,6 +231,192 @@ export async function adminKickGroupMemberAction(
   }
 }
 
+/**
+ * Admin 從已成團群組踢除成員（Service Role 直寫，不依賴 RPC）。
+ * 群組降級 recruiting、解鎖樓盤、重置剩餘成員同意狀態、刪除被踢者意向。
+ */
+export async function adminKickConfirmedMemberAction(
+  groupId: string,
+  propertyId: string,
+  kickedUserId: string
+): Promise<AdminGroupActionResult> {
+  const trimmedGroupId = groupId.trim();
+  const trimmedKickedUserId = kickedUserId.trim();
+  const trimmedPropertyId =
+    typeof propertyId === "string" && propertyId.trim() ? propertyId.trim() : "";
+
+  if (!trimmedGroupId || !trimmedKickedUserId) {
+    return { ok: false, error: "請提供 group_id 與 kicked_user_id。" };
+  }
+
+  if (
+    !UUID_RE.test(trimmedGroupId) ||
+    !UUID_RE.test(trimmedKickedUserId) ||
+    (trimmedPropertyId && !UUID_RE.test(trimmedPropertyId))
+  ) {
+    return { ok: false, error: "group_id、property_id 或 kicked_user_id 格式無效。" };
+  }
+
+  const gate = await requireAdminRpcClient();
+  if (!gate.ok) return gate;
+
+  try {
+    const { data: groupRow, error: groupErr } = await gate.rpc
+      .from("match_groups")
+      .select("group_id, status, property_id, target_size")
+      .eq("group_id", trimmedGroupId)
+      .maybeSingle();
+
+    if (groupErr) {
+      console.error("[adminKickConfirmedMemberAction] group", groupErr.message);
+      return { ok: false, error: groupErr.message };
+    }
+
+    if (!groupRow) {
+      return { ok: false, error: "找不到配對群組。" };
+    }
+
+    const groupStatus =
+      typeof groupRow.status === "string" ? groupRow.status.trim().toLowerCase() : "";
+    if (groupStatus !== "confirmed" && groupStatus !== "matched") {
+      return { ok: false, error: "僅可從已成團群組踢除成員。" };
+    }
+
+    const resolvedPropertyId =
+      trimmedPropertyId ||
+      (typeof groupRow.property_id === "string" && groupRow.property_id.trim()
+        ? groupRow.property_id.trim()
+        : null);
+
+    const { data: memberRows, error: membersErr } = await gate.rpc
+      .from("group_members")
+      .select("user_id")
+      .eq("group_id", trimmedGroupId);
+
+    if (membersErr) {
+      console.error("[adminKickConfirmedMemberAction] members", membersErr.message);
+      return { ok: false, error: membersErr.message };
+    }
+
+    const memberIds = (memberRows ?? [])
+      .map((row) => {
+        const uid = (row as { user_id?: unknown }).user_id;
+        return typeof uid === "string" ? uid.trim() : "";
+      })
+      .filter(Boolean);
+
+    if (!memberIds.includes(trimmedKickedUserId)) {
+      return { ok: false, error: "該用戶不是此群組成員。" };
+    }
+
+    if (memberIds.length <= 1) {
+      return { ok: false, error: "群組僅剩一人，請改用解散群組。" };
+    }
+
+    const remainingMemberIds = memberIds.filter((id) => id !== trimmedKickedUserId);
+    const remainingMemberCount = remainingMemberIds.length;
+
+    const { error: deleteMemberErr } = await gate.rpc
+      .from("group_members")
+      .delete()
+      .eq("group_id", trimmedGroupId)
+      .eq("user_id", trimmedKickedUserId);
+
+    if (deleteMemberErr) {
+      console.error("[adminKickConfirmedMemberAction] delete member", deleteMemberErr.message);
+      return { ok: false, error: deleteMemberErr.message };
+    }
+
+    const { error: groupUpdateErr } = await gate.rpc
+      .from("match_groups")
+      .update({
+        status: "recruiting",
+        current_size: remainingMemberCount,
+        expires_at: null,
+      })
+      .eq("group_id", trimmedGroupId);
+
+    if (groupUpdateErr) {
+      console.error("[adminKickConfirmedMemberAction] group update", groupUpdateErr.message);
+      return { ok: false, error: groupUpdateErr.message };
+    }
+
+    const { error: resetAgreedErr } = await gate.rpc
+      .from("group_members")
+      .update({ has_agreed: null })
+      .eq("group_id", trimmedGroupId);
+
+    if (resetAgreedErr) {
+      console.error("[adminKickConfirmedMemberAction] reset agreed", resetAgreedErr.message);
+      return { ok: false, error: resetAgreedErr.message };
+    }
+
+    if (resolvedPropertyId) {
+      const { error: propertyErr } = await gate.rpc
+        .from("properties")
+        .update({ status: "available" })
+        .eq("id", resolvedPropertyId);
+
+      if (propertyErr) {
+        console.error("[adminKickConfirmedMemberAction] release property", propertyErr.message);
+        return { ok: false, error: propertyErr.message };
+      }
+    }
+
+    let deleteIntentQuery = gate.rpc
+      .from("housing_intents")
+      .delete()
+      .eq("user_id", trimmedKickedUserId);
+
+    if (resolvedPropertyId) {
+      deleteIntentQuery = deleteIntentQuery.eq("target_property_id", resolvedPropertyId);
+    } else {
+      deleteIntentQuery = deleteIntentQuery.is("target_property_id", null);
+    }
+
+    const { error: deleteIntentErr } = await deleteIntentQuery;
+    if (deleteIntentErr) {
+      console.error("[adminKickConfirmedMemberAction] delete intent", deleteIntentErr.message);
+      return { ok: false, error: deleteIntentErr.message };
+    }
+
+    if (remainingMemberIds.length > 0) {
+      let remainingIntentQuery = gate.rpc
+        .from("housing_intents")
+        // 群組降級後，留守成員回到意向池等待滾雪球補位；
+        // 'matching' 為 housing_intents_status_check 合法枚舉，切勿寫入群組狀態 'recruiting'。
+        .update({ status: "matching" })
+        .in("user_id", remainingMemberIds)
+        .in("status", ["waiting", "matching", "matched", "confirmed"]);
+
+      if (resolvedPropertyId) {
+        remainingIntentQuery = remainingIntentQuery.eq("target_property_id", resolvedPropertyId);
+      } else {
+        remainingIntentQuery = remainingIntentQuery.is("target_property_id", null);
+      }
+
+      const { error: remainingIntentErr } = await remainingIntentQuery;
+      if (remainingIntentErr) {
+        console.error(
+          "[adminKickConfirmedMemberAction] remaining intents",
+          remainingIntentErr.message
+        );
+        return { ok: false, error: remainingIntentErr.message };
+      }
+    }
+
+    revalidatePath("/", "page");
+    revalidatePath("/dashboard", "page");
+    revalidatePath("/admin/groups", "page");
+
+    return { ok: true };
+  } catch (e) {
+    console.error("[adminKickConfirmedMemberAction] unexpected", e);
+    const message = e instanceof Error ? e.message : "伺服器錯誤";
+    return { ok: false, error: message };
+  }
+}
+
 export type AdminOfflineDealResult =
   | { ok: true; deal: OfflineDeal }
   | { ok: false; error: string };
@@ -530,9 +716,11 @@ export async function adminKickAndRebuildAction(
   if (remainingMemberIds.length > 0) {
     let remainingIntentQuery = gate.rpc
       .from("housing_intents")
-      .update({ status: "recruiting" })
+      // 群組降級後，留守成員回到意向池等待滾雪球補位；
+      // 'matching' 為 housing_intents_status_check 合法枚舉，切勿寫入群組狀態 'recruiting'。
+      .update({ status: "matching" })
       .in("user_id", remainingMemberIds)
-      .in("status", ["matching", "pending_opt_in", "confirmed", "matched"]);
+      .in("status", ["waiting", "matching", "matched", "confirmed"]);
 
     if (resolvedPropertyId) {
       remainingIntentQuery = remainingIntentQuery.eq("target_property_id", resolvedPropertyId);
@@ -569,9 +757,9 @@ export async function adminKickAndRebuildAction(
     return { ok: false, error: dealErr.message };
   }
 
-  revalidatePath("/admin/groups");
+  revalidatePath("/", "page");
   revalidatePath("/dashboard", "page");
-  revalidatePath("/");
+  revalidatePath("/admin/groups", "page");
 
   return { ok: true, remainingMemberCount, targetSize };
 }

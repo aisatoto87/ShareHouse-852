@@ -1,12 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { MouseEvent as ReactMouseEvent } from "react";
 import { Check, Loader2, MoreVertical } from "lucide-react";
 import { toast } from "sonner";
 import { isAdminUser } from "@/lib/admin-auth";
-import { createSupabaseBrowserClient, getBrowserUser } from "@/lib/supabase/client";
+import { useAuth } from "@/components/AuthProvider";
 import type { PropertyListingStatus } from "@/types/property";
 import { cn } from "@/lib/utils";
 
@@ -36,25 +36,13 @@ export default function AdminCardActions({
   className,
 }: AdminCardActionsProps) {
   const router = useRouter();
-  const supabase = useMemo(() => createSupabaseBrowserClient(), []);
+  const { user, loading: authLoading, supabase } = useAuth();
   const rootRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
   const [statusLoading, setStatusLoading] = useState(false);
-  const [canManage, setCanManage] = useState(false);
-  const [authChecked, setAuthChecked] = useState(false);
 
-  useEffect(() => {
-    let active = true;
-    void (async () => {
-      const { user } = await getBrowserUser(supabase);
-      if (!active) return;
-      setCanManage(isAdminUser(user));
-      setAuthChecked(true);
-    })();
-    return () => {
-      active = false;
-    };
-  }, [supabase]);
+  const canManage = isAdminUser(user);
+  const authChecked = !authLoading;
 
   useEffect(() => {
     if (!open) return;

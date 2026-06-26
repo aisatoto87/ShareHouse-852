@@ -18,6 +18,10 @@ import {
   applyRecruitingOneShortToRows,
   fetchPropertyIdsRecruitingOneShort,
 } from "@/lib/recruiting-fomo";
+import {
+  applyPropertyStatusesToRows,
+  fetchPropertyStatuses,
+} from "@/lib/property-listing";
 import type { Filters, SmartMatchedPropertyRow } from "@/types/property";
 
 const DEFAULT_HABIT_USER: UserHabits = {
@@ -278,11 +282,15 @@ export default function ListingsClient() {
           full.push({ property, similarity });
         }
 
-        const oneShortIds = await fetchPropertyIdsRecruitingOneShort(
-          supabase,
-          full.map((r) => r.property.id)
+        const fullIds = full.map((r) => r.property.id);
+        const [oneShortIds, statusMap] = await Promise.all([
+          fetchPropertyIdsRecruitingOneShort(supabase, fullIds),
+          fetchPropertyStatuses(supabase, fullIds),
+        ]);
+        const fullWithFomo = applyPropertyStatusesToRows(
+          applyRecruitingOneShortToRows(full, oneShortIds),
+          statusMap
         );
-        const fullWithFomo = applyRecruitingOneShortToRows(full, oneShortIds);
 
         if (isActive()) {
           matchedFullCacheRef.current = fullWithFomo;

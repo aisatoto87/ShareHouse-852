@@ -41,6 +41,7 @@ import {
 } from "@/lib/intent-group-ui";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
+import { cancelHousingIntentAction } from "@/app/actions/intentActions";
 
 type HabitKey = "habit_cleanliness" | "habit_ac_temp" | "habit_guests" | "habit_noise";
 
@@ -228,7 +229,11 @@ function intentStatusBadge(
   status: string,
   options?: {
     isGloballyFrozen?: boolean;
+    groupId?: string | null;
     groupStatus?: string | null;
+    rawIntentStatus?: string | null;
+    currentMemberCount?: number | null;
+    targetSize?: number | null;
     recruitingShortage?: number | null;
     isPropertyOffline?: boolean;
     viewerHasAgreed?: boolean | null;
@@ -243,6 +248,29 @@ function intentStatusBadge(
   }
 
   const groupStatus = options?.groupStatus ?? null;
+  const normalizedStatus = status.trim().toLowerCase();
+  const rawIntentStatus = (options?.rawIntentStatus ?? "").trim().toLowerCase();
+  // 底層意向枚舉降級後可能被 resolveIntentCardUi 改寫為 waiting；以原始 row.status 為準判定 matching
+  const isMatchingIntent =
+    normalizedStatus === "matching" || rawIntentStatus === "matching";
+  const memberCount = options?.currentMemberCount;
+  const targetSize = options?.targetSize;
+  const inRecruitingGroupWithCounts =
+    Boolean(options?.groupId) &&
+    groupStatus === "recruiting" &&
+    memberCount != null &&
+    targetSize != null &&
+    targetSize > 0;
+
+  // 意向 status 為 matching，但群組已 recruiting：UI 與底層枚舉解耦，避免誤導為「繼續匹配」
+  if (isMatchingIntent && inRecruitingGroupWithCounts) {
+    return {
+      className:
+        "max-w-full whitespace-normal rounded-lg border border-blue-400/80 bg-blue-500 px-3 py-1.5 text-left font-medium text-white shadow-sm",
+      label: `👥 已入團 (${memberCount}/${targetSize}) · 招募補位中`,
+    };
+  }
+
   if (groupStatus === "recruiting") {
     const shortage = options?.recruitingShortage;
     return {
@@ -302,8 +330,8 @@ function intentStatusBadge(
     case "matching":
       return {
         className:
-          "max-w-full whitespace-normal rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-left font-medium text-amber-900 shadow-sm",
-        label: "🔥 撮合中 (已初步鎖定室友)",
+          "max-w-full whitespace-normal rounded-lg border border-blue-200/70 bg-gradient-to-r from-slate-100 to-blue-50/90 px-3 py-1.5 text-left font-medium text-slate-800 shadow-sm",
+        label: "🕒 意向配對中",
       };
     case "recruiting":
       return {
@@ -585,88 +613,140 @@ export default function DashboardPageClient() {
         mapHousingIntentRows((data ?? []) as unknown[])
       );
 
-      const { data: membershipRows, error: membershipErr } = await supabase
-        .from("group_members")
-        .select("group_id, has_agreed")
-        .eq("user_id", userId);
-      if (membershipErr) {
-        console.error("[dashboard] group_members", membershipErr);
-        setUserHasLockingGroup(false);
-        setIntentRows(await reconcileStalePausedIntents(supabase, userId, mappedRows));
-        return;
-      }
-
       const hasAgreedByGroup = new Map<string, boolean>();
-      for (const row of membershipRows ?? []) {
-        const gid = String((row as { group_id?: unknown }).group_id ?? "").trim();
-        if (!gid) continue;
-        hasAgreedByGroup.set(gid, (row as { has_agreed?: boolean }).has_agreed === true);
+
+      // 優先用 SECURITY DEFINER RPC 取回 live 群組狀態，繞過 match_groups / group_members 的 RLS，
+      // 避免群組降級 (confirmed → recruiting) 後成員讀不到自己的群組而導致卡片 ghost 降級。
+      let groups: MatchGroupSummary[] = [];
+      let usedRpc = false;
+      const { data: rpcGroups, error: rpcGroupsErr } = await supabase.rpc(
+        "get_my_match_groups"
+      );
+
+      if (!rpcGroupsErr && Array.isArray(rpcGroups)) {
+        usedRpc = true;
+        groups = rpcGroups
+          .map((raw) => {
+            const row = raw as Record<string, unknown>;
+            const groupId =
+              typeof row.group_id === "string" ? row.group_id.trim() : "";
+            if (!groupId) return null;
+            const propertyId =
+              typeof row.property_id === "string" && row.property_id.trim() !== ""
+                ? row.property_id.trim()
+                : null;
+            const status = typeof row.status === "string" ? row.status.trim() : "";
+            hasAgreedByGroup.set(
+              groupId,
+              (row as { has_agreed?: boolean }).has_agreed === true
+            );
+            return {
+              group_id: groupId,
+              status,
+              property_id: propertyId,
+              current_size: parseGroupSize(row.current_size),
+              target_size: parseGroupSize(row.target_size),
+              member_count: parseGroupSize(row.member_count),
+            };
+          })
+          .filter((group): group is MatchGroupSummary => group != null);
+      } else if (rpcGroupsErr) {
+        // RPC 尚未部署（或不可用）時，退回原本以 RLS 為界的三段查詢，確保功能不中斷。
+        console.warn(
+          "[dashboard] get_my_match_groups RPC unavailable, falling back",
+          rpcGroupsErr.message
+        );
       }
 
-      const groupIds = [
-        ...new Set(
-          (membershipRows ?? [])
-            .map((row) => String((row as { group_id?: unknown }).group_id ?? ""))
-            .filter(Boolean)
-        ),
-      ];
-      if (groupIds.length === 0) {
+      if (!usedRpc) {
+        const { data: membershipRows, error: membershipErr } = await supabase
+          .from("group_members")
+          .select("group_id, has_agreed")
+          .eq("user_id", userId);
+        if (membershipErr) {
+          console.error("[dashboard] group_members", membershipErr);
+          setUserHasLockingGroup(false);
+          setIntentRows(await reconcileStalePausedIntents(supabase, userId, mappedRows));
+          return;
+        }
+
+        for (const row of membershipRows ?? []) {
+          const gid = String((row as { group_id?: unknown }).group_id ?? "").trim();
+          if (!gid) continue;
+          hasAgreedByGroup.set(gid, (row as { has_agreed?: boolean }).has_agreed === true);
+        }
+
+        const groupIds = [
+          ...new Set(
+            (membershipRows ?? [])
+              .map((row) => String((row as { group_id?: unknown }).group_id ?? ""))
+              .filter(Boolean)
+          ),
+        ];
+        if (groupIds.length === 0) {
+          setUserHasLockingGroup(false);
+          setIntentRows(await reconcileStalePausedIntents(supabase, userId, mappedRows));
+          return;
+        }
+
+        const { data: groupsData, error: groupsErr } = await supabase
+          .from("match_groups")
+          .select("group_id, status, property_id, current_size, target_size")
+          .in("group_id", groupIds);
+        if (groupsErr) {
+          console.error("[dashboard] match_groups", groupsErr);
+          setUserHasLockingGroup(false);
+          setIntentRows(await reconcileStalePausedIntents(supabase, userId, mappedRows));
+          return;
+        }
+
+        const { data: allMemberRows, error: allMembersErr } = await supabase
+          .from("group_members")
+          .select("group_id")
+          .in("group_id", groupIds);
+        if (allMembersErr) {
+          console.error("[dashboard] group_members counts", allMembersErr);
+          setUserHasLockingGroup(false);
+          setIntentRows(await reconcileStalePausedIntents(supabase, userId, mappedRows));
+          return;
+        }
+
+        const memberCountByGroup = new Map<string, number>();
+        for (const row of allMemberRows ?? []) {
+          const gid = String((row as { group_id?: unknown }).group_id ?? "").trim();
+          if (!gid) continue;
+          memberCountByGroup.set(gid, (memberCountByGroup.get(gid) ?? 0) + 1);
+        }
+
+        groups = (groupsData ?? [])
+          .map((raw) => {
+            const row = raw as Record<string, unknown>;
+            const groupId =
+              typeof row.group_id === "string" ? row.group_id.trim() : "";
+            if (!groupId) return null;
+            const propertyId =
+              typeof row.property_id === "string" && row.property_id.trim() !== ""
+                ? row.property_id.trim()
+                : null;
+            const status =
+              typeof row.status === "string" ? row.status.trim() : "";
+            return {
+              group_id: groupId,
+              status,
+              property_id: propertyId,
+              current_size: parseGroupSize(row.current_size),
+              target_size: parseGroupSize(row.target_size),
+              member_count: memberCountByGroup.get(groupId) ?? 0,
+            };
+          })
+          .filter((group): group is MatchGroupSummary => group != null);
+      }
+
+      if (groups.length === 0) {
         setUserHasLockingGroup(false);
         setIntentRows(await reconcileStalePausedIntents(supabase, userId, mappedRows));
         return;
       }
-
-      const { data: groupsData, error: groupsErr } = await supabase
-        .from("match_groups")
-        .select("group_id, status, property_id, current_size, target_size")
-        .in("group_id", groupIds);
-      if (groupsErr) {
-        console.error("[dashboard] match_groups", groupsErr);
-        setUserHasLockingGroup(false);
-        setIntentRows(await reconcileStalePausedIntents(supabase, userId, mappedRows));
-        return;
-      }
-
-      const { data: allMemberRows, error: allMembersErr } = await supabase
-        .from("group_members")
-        .select("group_id")
-        .in("group_id", groupIds);
-      if (allMembersErr) {
-        console.error("[dashboard] group_members counts", allMembersErr);
-        setUserHasLockingGroup(false);
-        setIntentRows(await reconcileStalePausedIntents(supabase, userId, mappedRows));
-        return;
-      }
-
-      const memberCountByGroup = new Map<string, number>();
-      for (const row of allMemberRows ?? []) {
-        const gid = String((row as { group_id?: unknown }).group_id ?? "").trim();
-        if (!gid) continue;
-        memberCountByGroup.set(gid, (memberCountByGroup.get(gid) ?? 0) + 1);
-      }
-
-      const groups: MatchGroupSummary[] = (groupsData ?? [])
-        .map((raw) => {
-          const row = raw as Record<string, unknown>;
-          const groupId =
-            typeof row.group_id === "string" ? row.group_id.trim() : "";
-          if (!groupId) return null;
-          const propertyId =
-            typeof row.property_id === "string" && row.property_id.trim() !== ""
-              ? row.property_id.trim()
-              : null;
-          const status =
-            typeof row.status === "string" ? row.status.trim() : "";
-          return {
-            group_id: groupId,
-            status,
-            property_id: propertyId,
-            current_size: parseGroupSize(row.current_size),
-            target_size: parseGroupSize(row.target_size),
-            member_count: memberCountByGroup.get(groupId) ?? 0,
-          };
-        })
-        .filter((group): group is MatchGroupSummary => group != null);
 
       const statusPriority = new Map<string, number>([
         ["confirmed", 0],
@@ -791,20 +871,15 @@ export default function DashboardPageClient() {
     if (!userId || cancellingId) return;
     setCancellingId(intentId);
     try {
-      const response = await fetch("/api/housing-intents/cancel", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ intent_id: intentId }),
-      });
-      const json = (await response.json().catch(() => ({}))) as { error?: string };
+      const result = await cancelHousingIntentAction(intentId);
 
-      if (!response.ok) {
-        throw new Error(json.error || "移除失敗，請稍後再試。");
+      if (!result.success) {
+        throw new Error(result.error || "移除失敗，請稍後再試。");
       }
 
       await loadHousingIntents();
       router.refresh();
-      toast.success("已從意向池移除。");
+      toast.success("已成功取消意向");
     } catch (error) {
       console.error("[dashboard] handleCancelWaiting", error);
       const message =
@@ -1389,7 +1464,11 @@ export default function DashboardPageClient() {
                           : null;
                       const badge = intentStatusBadge(effectiveIntentStatus, {
                         isGloballyFrozen,
-                        groupStatus: effectiveGroupStatus,
+                        groupId: row.match_group_id,
+                        groupStatus: effectiveGroupStatus ?? row.match_group_status,
+                        rawIntentStatus: row.status,
+                        currentMemberCount: currentSize ?? row.match_group_current_size,
+                        targetSize: targetSize ?? row.match_group_target_size,
                         recruitingShortage,
                         isPropertyOffline,
                         viewerHasAgreed:

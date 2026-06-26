@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Noto_Sans_HK } from "next/font/google";
+import AuthProvider from "@/components/AuthProvider";
 import AuthSessionRecovery from "@/components/AuthSessionRecovery";
 import FloatingContact from "@/components/FloatingContact";
 import RoleOnboardingGate from "@/components/RoleOnboardingGate";
@@ -31,12 +32,14 @@ export default function RootLayout({
   return (
     <html lang="zh-HK" className={notoSansHK.variable}>
       <body className={`${notoSansHK.className} antialiased`} suppressHydrationWarning>
-        <AuthSessionRecovery />
-        <RoleOnboardingGate />
-        {children}
-        <FloatingContact />
-        <Toaster richColors position="top-center" closeButton />
-        <OnboardingPrompt />
+        <AuthProvider>
+          <AuthSessionRecovery />
+          <RoleOnboardingGate />
+          {children}
+          <FloatingContact />
+          <Toaster richColors position="top-center" closeButton />
+          <OnboardingPrompt />
+        </AuthProvider>
       </body>
     </html>
   );
