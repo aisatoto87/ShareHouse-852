@@ -240,13 +240,18 @@ export default function HousingIntentButton({
         body: JSON.stringify(requestBody),
       });
       const json = (await response.json().catch(() => ({}))) as {
+        ok?: boolean;
         intent_id?: string | null;
         preference_rank?: number;
         error?: string;
+        match_warning?: string | null;
         match?: { matched?: boolean; message?: string };
       };
 
-      if (!response.ok) {
+      const savedIntentId =
+        typeof json.intent_id === "string" ? json.intent_id.trim() : "";
+
+      if (!response.ok && !savedIntentId) {
         console.error("[housing_intents] API", response.status, json);
         toast.error(json.error || "提交失敗，請稍後再試。");
         if (response.status === 401) {
@@ -256,25 +261,30 @@ export default function HousingIntentButton({
         return;
       }
 
-      const newIntentId =
-        typeof json.intent_id === "string" ? json.intent_id.trim() : "";
-
       setIsIntentModalOpen(false);
       if (trimmedPropertyId) setAlreadyInQueue(true);
+
       const rankLabel =
         typeof json.preference_rank === "number" && json.preference_rank > 0
           ? `（第 ${json.preference_rank} 志願）`
           : "";
+
       if (json.match?.matched === true) {
         toast.success(
           json.match.message ||
             "🔥 震撼好消息！系統為你找到高度契合的神仙室友，已自動組建群組！"
         );
       } else {
-        toast.success(`成功加入意向池${rankLabel}！正在啟動 AI 尋找同區室友 🧠...`);
+        toast.success(`✅ 成功加入排隊區${rankLabel}！`);
       }
+
+      if (json.match_warning) {
+        console.warn("[HousingIntentButton] match warning after intent save", json.match_warning);
+      }
+
       router.refresh();
 
+      const newIntentId = savedIntentId;
       if (newIntentId && json.match?.matched !== true) {
         void runMatchInBackground({
           intent_id: newIntentId,

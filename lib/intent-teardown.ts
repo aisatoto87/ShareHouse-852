@@ -21,36 +21,16 @@ async function fetchIntentForUser(
   userId: string,
   intentId: string
 ): Promise<IntentRow | null> {
-  const byIntentId = await client
+  const { data, error } = await client
     .from("housing_intents")
     .select("intent_id, target_property_id, target_district")
     .eq("user_id", userId)
     .eq("intent_id", intentId)
     .maybeSingle();
 
-  if (!byIntentId.error && byIntentId.data) {
-    const row = byIntentId.data as Record<string, unknown>;
-    return {
-      intent_id: String(row.intent_id ?? intentId),
-      target_property_id:
-        typeof row.target_property_id === "string" && row.target_property_id.trim() !== ""
-          ? row.target_property_id.trim()
-          : null,
-      target_district:
-        typeof row.target_district === "string" ? row.target_district.trim() : "",
-    };
-  }
+  if (error || !data) return null;
 
-  const byPk = await client
-    .from("housing_intents")
-    .select("intent_id, target_property_id, target_district")
-    .eq("user_id", userId)
-    .eq("id", intentId)
-    .maybeSingle();
-
-  if (byPk.error || !byPk.data) return null;
-
-  const row = byPk.data as Record<string, unknown>;
+  const row = data as Record<string, unknown>;
   return {
     intent_id: String(row.intent_id ?? intentId),
     target_property_id:
@@ -136,9 +116,9 @@ async function reconcileGroupAfterMemberLeave(
   if (nextStatus === "recruiting" && remainingUserIds.length > 0) {
     let intentQuery = admin
       .from("housing_intents")
-      .update({ status: "recruiting" })
+      .update({ status: "matching" })
       .in("user_id", remainingUserIds)
-      .in("status", ["matching", "pending_opt_in"]);
+      .in("status", ["matching", "pending_opt_in", "matched"]);
 
     if (effectivePropertyId) {
       intentQuery = intentQuery.eq("target_property_id", effectivePropertyId);
@@ -223,6 +203,12 @@ export async function teardownHousingIntent(
         await reconcileGroupAfterMemberLeave(admin, gid, intent.target_property_id);
       }
     }
+  }
+
+  // 成員已被其他路徑清空時，仍同步幽靈群組（current_size > 0 但 group_members 為 0）
+  const { error: ghostErr } = await admin.rpc("reconcile_ghost_match_groups");
+  if (ghostErr) {
+    console.warn("[intent-teardown] reconcile_ghost_match_groups unavailable", ghostErr.message);
   }
 
   const deleteQuery = admin

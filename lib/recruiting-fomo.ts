@@ -41,6 +41,30 @@ export async function fetchPropertyIdsRecruitingOneShort(
   return oneShort;
 }
 
+/**
+ * 全局取得「差 1 人即成團」樓盤 ID（不限當前分頁）。
+ * 用於首頁全部租盤模式：分頁前先將 FOMO 樓盤置頂。
+ */
+export async function fetchAllPropertyIdsRecruitingOneShort(
+  supabase: SupabaseClient
+): Promise<Set<string>> {
+  const { data, error } = await supabase.rpc("get_all_fomo_properties");
+
+  if (error) {
+    console.error("[recruiting-fomo] get_all_fomo_properties RPC", error.message);
+    return new Set();
+  }
+
+  const oneShort = new Set<string>();
+  for (const row of (data ?? []) as FomoPropertyRpcRow[]) {
+    const propertyId =
+      typeof row.property_id === "string" ? row.property_id.trim() : "";
+    if (propertyId) oneShort.add(propertyId);
+  }
+
+  return oneShort;
+}
+
 /** 將 FOMO 標記合併進列表 row（不改動 property 本體） */
 export function applyRecruitingOneShortToRows<T extends { property: { id: string } }>(
   rows: T[],

@@ -49,7 +49,7 @@ BEGIN
       UPDATE housing_intents hi
       SET status = 'paused'
       WHERE hi.user_id = ANY (v_ghost_user_ids)
-        AND hi.status IN ('matching', 'pending_opt_in', 'recruiting', 'matched')
+        AND hi.status IN ('matching', 'pending_opt_in', 'matched')
         AND (
           v_group.property_id IS NULL
           OR hi.target_property_id = v_group.property_id
@@ -77,7 +77,7 @@ BEGIN
         expires_at = NULL
       WHERE mg.group_id = v_group.group_id;
 
-      -- 已同意成員：意向改回 recruiting，解除 pending_opt_in 死鎖
+      -- 已同意成員：意向改回 matching（recruiting 僅屬 match_groups）
       SELECT COALESCE(array_agg(gm.user_id), ARRAY[]::uuid[])
       INTO v_agreed_user_ids
       FROM group_members gm
@@ -85,9 +85,9 @@ BEGIN
 
       IF array_length(v_agreed_user_ids, 1) IS NOT NULL THEN
         UPDATE housing_intents hi
-        SET status = 'recruiting'
+        SET status = 'matching'
         WHERE hi.user_id = ANY (v_agreed_user_ids)
-          AND hi.status IN ('matching', 'pending_opt_in')
+          AND hi.status IN ('matching', 'pending_opt_in', 'matched')
           AND (
             v_group.property_id IS NULL
             OR hi.target_property_id = v_group.property_id

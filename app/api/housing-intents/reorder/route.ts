@@ -34,9 +34,7 @@ function normalizeIntentRow(raw: Record<string, unknown>): IntentRow | null {
   const intent_id =
     typeof raw.intent_id === "string" && raw.intent_id.trim() !== ""
       ? raw.intent_id.trim()
-      : typeof raw.id === "string" && raw.id.trim() !== ""
-        ? raw.id.trim()
-        : "";
+      : "";
   if (!intent_id) return null;
 
   const status =
@@ -55,26 +53,15 @@ async function updatePreferenceRank(
   intentId: string,
   rank: number
 ): Promise<string | null> {
-  const byIntentCol = await supabase
+  const { data, error } = await supabase
     .from("housing_intents")
     .update({ preference_rank: rank })
     .eq("user_id", userId)
     .eq("intent_id", intentId)
     .select("intent_id");
 
-  if (!byIntentCol.error && byIntentCol.data && byIntentCol.data.length > 0) {
-    return null;
-  }
-
-  const byIdCol = await supabase
-    .from("housing_intents")
-    .update({ preference_rank: rank })
-    .eq("user_id", userId)
-    .eq("id", intentId)
-    .select("id");
-
-  if (byIdCol.error) return byIdCol.error.message;
-  if (!byIdCol.data?.length) return "找不到要更新的意向。";
+  if (error) return error.message;
+  if (!data?.length) return "找不到要更新的意向。";
   return null;
 }
 
@@ -107,7 +94,7 @@ export async function POST(request: Request) {
 
     const { data: userIntentRows, error: listError } = await supabase
       .from("housing_intents")
-      .select("intent_id, id, status, preference_rank")
+      .select("intent_id, status, preference_rank")
       .eq("user_id", user.id);
 
     if (listError) {

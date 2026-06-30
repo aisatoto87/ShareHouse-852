@@ -1,4 +1,9 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { mapRowToProperty } from "@/lib/property-mapper";
+import {
+  applyRecruitingOneShortToRows,
+  fetchAllPropertyIdsRecruitingOneShort,
+} from "@/lib/recruiting-fomo";
 import type { PropertyListingStatus, SmartMatchedPropertyRow } from "@/types/property";
 
 /** 樓盤已封盤，禁止新用戶加入排隊／申請 */
@@ -93,4 +98,57 @@ export function sortSmartMatchedPropertyRows(
 
     return 0;
   });
+}
+
+function mapPropertyRowsToListingRows(
+  rows: Record<string, unknown>[]
+): SmartMatchedPropertyRow[] {
+  return rows.map((row) => ({
+    property: mapRowToProperty(row),
+    similarity: 0,
+  }));
+}
+
+/**
+ * 「全部租盤」完整目錄：全局 FOMO 樓盤置頂 → 其餘依 created_at 排序 → 智能 tier 排序。
+ * 在分頁 slice 前呼叫，確保差 1 人樓盤不因 created_at 分頁而漏出首屏。
+ */
+export async function buildAllModeListingCatalog(
+  supabase: SupabaseClient
+): Promise<SmartMatchedPropertyRow[]> {
+  const fomoIds = await fetchAllPropertyIdsRecruitingOneShort(supabase);
+  const fomoIdList = [...fomoIds];
+
+  const [fomoResult, allResult] = await Promise.all([
+    fomoIdList.length > 0
+      ? supabase.from("properties").select("*").in("id", fomoIdList)
+      : Promise.resolve({ data: [] as Record<string, unknown>[], error: null }),
+    supabase.from("properties").select("*").order("created_at", { ascending: false }),
+  ]);
+
+  if (allResult.error) {
+    throw allResult.error;
+  }
+  if (fomoResult.error) {
+    throw fomoResult.error;
+  }
+
+  const fomoRows = mapPropertyRowsToListingRows(
+    (fomoResult.data ?? []) as Record<string, unknown>[]
+  );
+  const fomoIdSet = new Set(fomoIdList);
+  const otherRows = mapPropertyRowsToListingRows(
+    ((allResult.data ?? []) as Record<string, unknown>[]).filter((row) => {
+      const id = typeof row.id === "string" ? row.id : "";
+      return id && !fomoIdSet.has(id);
+    })
+  );
+
+  const merged = [...fomoRows, ...otherRows];
+  const allIds = merged.map((r) => r.property.id);
+  const statusMap = await fetchPropertyStatuses(supabase, allIds);
+  const withStatus = applyPropertyStatusesToRows(merged, statusMap);
+  const withFomo = applyRecruitingOneShortToRows(withStatus, fomoIds);
+
+  return sortSmartMatchedPropertyRows(withFomo, false);
 }

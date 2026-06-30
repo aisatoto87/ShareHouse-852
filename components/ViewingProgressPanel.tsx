@@ -1,9 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { CalendarDays, Check, Home, KeyRound, Loader2, PenLine } from "lucide-react";
+import { CalendarDays, Check, Clock, Home, KeyRound, Loader2, PenLine } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
-import type { AdminOfflineDealStatus, OfflineDeal } from "@/types/offline-deal";
+import {
+  getOfflineDealStepIndex,
+  OFFLINE_DEAL_PROGRESS_STEPS,
+  type OfflineDeal,
+  type OfflineDealProgressStep,
+} from "@/types/offline-deal";
 import { cn } from "@/lib/utils";
 
 type ViewingProgressPanelProps = {
@@ -12,7 +17,7 @@ type ViewingProgressPanelProps = {
 };
 
 type StepDef = {
-  status: Exclude<AdminOfflineDealStatus, "viewing_failed">;
+  status: OfflineDealProgressStep;
   icon: typeof CalendarDays;
   emoji: string;
   title: string;
@@ -21,14 +26,14 @@ type StepDef = {
 
 const STEPS: StepDef[] = [
   {
-    status: "pending_schedule",
+    status: "step_1_contacting",
     icon: CalendarDays,
     emoji: "📅",
-    title: "管家接單中",
+    title: "管家聯繫業主",
     getDescription: () => "專屬管家正在聯繫業主，稍後將通知您睇樓時間。",
   },
   {
-    status: "viewing_scheduled",
+    status: "step_2_viewing",
     icon: KeyRound,
     emoji: "🔑",
     title: "約定睇樓",
@@ -40,7 +45,7 @@ const STEPS: StepDef[] = [
     },
   },
   {
-    status: "contract_signing",
+    status: "step_3_signing",
     icon: PenLine,
     emoji: "✍️",
     title: "簽約準備",
@@ -48,20 +53,13 @@ const STEPS: StepDef[] = [
       "室友均表示滿意！管家正與業主擬定合約，請準備身份證明文件。",
   },
   {
-    status: "deal_closed",
+    status: "step_4_completed",
     icon: Home,
     emoji: "🏠",
     title: "成功入住",
     getDescription: () => "🎉 恭喜成家！合約已生效，祝您居住愉快！",
   },
 ];
-
-const STATUS_INDEX: Record<Exclude<AdminOfflineDealStatus, "viewing_failed">, number> = {
-  pending_schedule: 0,
-  viewing_scheduled: 1,
-  contract_signing: 2,
-  deal_closed: 3,
-};
 
 function formatViewingTime(value: string | null): string | null {
   if (!value) return null;
@@ -147,19 +145,22 @@ export default function ViewingProgressPanel({ groupId, className }: ViewingProg
     );
   }
 
-  const currentStatus = deal?.status ?? "pending_schedule";
-  if (currentStatus === "viewing_failed") {
+  const currentStatus = deal?.status ?? "step_1_contacting";
+  if (currentStatus === "cancelled") {
     return (
       <Card className={cn("border-amber-200 bg-amber-50 shadow-sm", className)}>
         <CardContent className="py-4 text-sm text-amber-900">
-          線下帶看流程已暫停，管家將另行安排後續步驟。
+          線下帶看流程已取消，管家將另行安排後續步驟。
         </CardContent>
       </Card>
     );
   }
 
-  const currentIndex = STATUS_INDEX[currentStatus] ?? 0;
-  const activeStep = STEPS[currentIndex];
+  const currentIndex = getOfflineDealStepIndex(currentStatus);
+  const activeStep = STEPS[currentIndex] ?? STEPS[0];
+  const formattedViewingTime = formatViewingTime(deal?.viewing_time ?? null);
+  const showViewingTimeBanner =
+    currentStatus === "step_2_viewing" && formattedViewingTime != null;
 
   return (
     <Card
@@ -178,13 +179,25 @@ export default function ViewingProgressPanel({ groupId, className }: ViewingProg
           </h3>
         </div>
 
+        {showViewingTimeBanner ? (
+          <div className="flex items-start gap-3 rounded-xl border border-blue-200 bg-blue-50/80 px-4 py-3.5 shadow-sm">
+            <Clock className="mt-0.5 size-5 shrink-0 text-[#0f2540]" aria-hidden />
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-[#0f2540]/70">
+                約定睇樓時間
+              </p>
+              <p className="mt-0.5 text-base font-bold text-[#0f2540]">{formattedViewingTime}</p>
+            </div>
+          </div>
+        ) : null}
+
         <div className="relative space-y-0">
           {STEPS.map((step, index) => {
             const isCompleted = index < currentIndex;
             const isCurrent = index === currentIndex;
             const isUpcoming = index > currentIndex;
             const StepIcon = step.icon;
-            const isLast = index === STEPS.length - 1;
+            const isLast = index === OFFLINE_DEAL_PROGRESS_STEPS.length - 1;
 
             return (
               <div key={step.status} className="relative flex gap-4 pb-6 last:pb-0">
@@ -251,11 +264,9 @@ export default function ViewingProgressPanel({ groupId, className }: ViewingProg
           })}
         </div>
 
-        {activeStep ? (
-          <p className="sr-only" aria-live="polite">
-            目前進度：{activeStep.title}。{activeStep.getDescription(deal?.viewing_time ?? null)}
-          </p>
-        ) : null}
+        <p className="sr-only" aria-live="polite">
+          目前進度：{activeStep.title}。{activeStep.getDescription(deal?.viewing_time ?? null)}
+        </p>
       </CardContent>
     </Card>
   );

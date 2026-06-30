@@ -206,16 +206,15 @@ function toIntentGroupEntity(row: HousingIntentRow): IntentGroupEntity | null {
   if (!groupId) return null;
   const status =
     typeof row.match_group_status === "string" ? row.match_group_status.trim() : "";
-  const currentSize =
-    typeof row.match_group_member_count === "number" && row.match_group_member_count > 0
-      ? row.match_group_member_count
-      : typeof row.match_group_current_size === "number"
-        ? row.match_group_current_size
-        : 0;
+  const liveMemberCount =
+    typeof row.match_group_member_count === "number" ? row.match_group_member_count : 0;
+  const storedCurrentSize =
+    typeof row.match_group_current_size === "number" ? row.match_group_current_size : 0;
+  const effectiveMemberCount = Math.max(liveMemberCount, storedCurrentSize);
   const targetSize =
     typeof row.match_group_target_size === "number" ? row.match_group_target_size : 0;
-  const memberCount =
-    typeof row.match_group_member_count === "number" ? row.match_group_member_count : 0;
+  const memberCount = effectiveMemberCount;
+  const currentSize = effectiveMemberCount > 0 ? effectiveMemberCount : storedCurrentSize;
   return {
     groupId,
     status,
@@ -253,6 +252,8 @@ function intentStatusBadge(
   // 底層意向枚舉降級後可能被 resolveIntentCardUi 改寫為 waiting；以原始 row.status 為準判定 matching
   const isMatchingIntent =
     normalizedStatus === "matching" || rawIntentStatus === "matching";
+  const isWaitingIntent =
+    normalizedStatus === "waiting" || rawIntentStatus === "waiting";
   const memberCount = options?.currentMemberCount;
   const targetSize = options?.targetSize;
   const inRecruitingGroupWithCounts =
@@ -262,8 +263,8 @@ function intentStatusBadge(
     targetSize != null &&
     targetSize > 0;
 
-  // 意向 status 為 matching，但群組已 recruiting：UI 與底層枚舉解耦，避免誤導為「繼續匹配」
-  if (isMatchingIntent && inRecruitingGroupWithCounts) {
+  // 意向 status 為 matching / waiting，但群組已 recruiting：顯示已入團進度
+  if ((isMatchingIntent || isWaitingIntent) && inRecruitingGroupWithCounts) {
     return {
       className:
         "max-w-full whitespace-normal rounded-lg border border-blue-400/80 bg-blue-500 px-3 py-1.5 text-left font-medium text-white shadow-sm",
@@ -328,16 +329,31 @@ function intentStatusBadge(
         label: "🕒 意向配對中 (系統正為您尋找同區室友)",
       };
     case "matching":
+      if (inRecruitingGroupWithCounts) {
+        return {
+          className:
+            "max-w-full whitespace-normal rounded-lg border border-blue-400/80 bg-blue-500 px-3 py-1.5 text-left font-medium text-white shadow-sm",
+          label: `👥 已入團 (${memberCount}/${targetSize}) · 招募補位中`,
+        };
+      }
       return {
         className:
           "max-w-full whitespace-normal rounded-lg border border-blue-200/70 bg-gradient-to-r from-slate-100 to-blue-50/90 px-3 py-1.5 text-left font-medium text-slate-800 shadow-sm",
         label: "🕒 意向配對中",
       };
     case "recruiting":
+      // 非法意向枚舉殘留；招募進度一律看 match_groups.status
+      if (inRecruitingGroupWithCounts) {
+        return {
+          className:
+            "max-w-full whitespace-normal rounded-lg border border-blue-400/80 bg-blue-500 px-3 py-1.5 text-left font-medium text-white shadow-sm",
+          label: `👥 已入團 (${memberCount}/${targetSize}) · 招募補位中`,
+        };
+      }
       return {
         className:
-          "max-w-full whitespace-normal rounded-lg border border-emerald-200 bg-gradient-to-r from-emerald-50 to-teal-50/90 px-3 py-1.5 text-left font-medium text-emerald-900 shadow-sm",
-        label: "🎉 招募中 (團隊持續尋找下一位室友)",
+          "max-w-full whitespace-normal rounded-lg border border-blue-200/70 bg-gradient-to-r from-slate-100 to-blue-50/90 px-3 py-1.5 text-left font-medium text-slate-800 shadow-sm",
+        label: "🕒 意向配對中",
       };
     case "matched":
       return {
@@ -778,8 +794,9 @@ export default function DashboardPageClient() {
           })
         ) ?? null;
         const liveMemberCount = matchedGroup?.member_count ?? 0;
-        const liveCurrentSize =
-          liveMemberCount > 0 ? liveMemberCount : (matchedGroup?.current_size ?? null);
+        const liveStoredSize = matchedGroup?.current_size ?? 0;
+        const liveHeadcount = Math.max(liveMemberCount, liveStoredSize);
+        const liveCurrentSize = liveHeadcount > 0 ? liveHeadcount : null;
 
         return {
           ...row,

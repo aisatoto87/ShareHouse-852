@@ -78,15 +78,15 @@ function revalidateAfterGroupConfirm(propertyId: string | null): void {
 async function updateMemberIntentsForGroup(
   admin: ReturnType<typeof createSupabaseAdminClient>,
   userIds: string[],
-  status: "matched" | "recruiting" | "waiting" | "confirmed",
+  status: "matching" | "pending_opt_in" | "matched" | "waiting" | "confirmed",
   propertyId: string | null
 ): Promise<void> {
   if (userIds.length === 0) return;
 
   const fromStatuses =
     status === "waiting"
-      ? ["matching", "pending_opt_in", "recruiting", "matched", "confirmed"]
-      : ["matching", "pending_opt_in", "recruiting", "waiting"];
+      ? ["matching", "pending_opt_in", "matched", "confirmed"]
+      : ["matching", "pending_opt_in", "waiting"];
 
   let query = admin
     .from("housing_intents")
@@ -354,7 +354,7 @@ export async function POST(request: Request) {
             .from("housing_intents")
             .update({ status: "confirmed" })
             .in("user_id", memberUserIds)
-            .in("status", ["matching", "pending_opt_in", "recruiting", "waiting", "matched"])
+            .in("status", ["matching", "pending_opt_in", "waiting", "matched"])
             .select("intent_id");
 
           if (fallbackErr) {
@@ -442,7 +442,7 @@ export async function POST(request: Request) {
       }
 
       try {
-        await updateMemberIntentsForGroup(admin, memberUserIds, "recruiting", propertyId);
+        await updateMemberIntentsForGroup(admin, memberUserIds, "matching", propertyId);
       } catch (e) {
         console.error("[api/match/action] recruiting intents", e);
         return NextResponse.json(

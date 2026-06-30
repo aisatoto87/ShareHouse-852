@@ -20,7 +20,9 @@ import {
 } from "@/lib/recruiting-fomo";
 import {
   applyPropertyStatusesToRows,
+  buildAllModeListingCatalog,
   fetchPropertyStatuses,
+  sortSmartMatchedPropertyRows,
 } from "@/lib/property-listing";
 import type { Filters, SmartMatchedPropertyRow } from "@/types/property";
 
@@ -72,7 +74,6 @@ export default function ListingsClient() {
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
   /** 單調遞增；effect cleanup 與新一輪 effect 開頭皆會推進，用於作廢舊請求、避免舊回應誤關新請求的 loading */
   const listingsFetchRequestIdRef = useRef(0);
-  const loadMoreRequestIdRef = useRef(0);
   /** 街客首屏預設「全部租盤」；登入後再切到智能配對 */
   const [viewMode, setViewMode] = useState<"matched" | "all">("all");
   const [filters, setFilters] = useState<Filters>(defaultFilters);
@@ -181,34 +182,16 @@ export default function ListingsClient() {
 
       try {
         if (viewMode === "all") {
-          matchedFullCacheRef.current = null;
-          const { data: propertyRows, error } = await supabase
-            .from("properties")
-            .select("*")
-            .order("created_at", { ascending: false })
-            .range(0, LIMIT - 1);
+          const fullCatalog = await buildAllModeListingCatalog(supabase);
 
           if (!isActive()) {
             return;
           }
 
-          if (error) {
-            throw error;
-          }
-
-          const rows = propertyRows ?? [];
-          const base: SmartMatchedPropertyRow[] = rows.map((row) => ({
-            property: mapRowToProperty(row as Record<string, unknown>),
-            similarity: 0,
-          }));
-          const oneShortIds = await fetchPropertyIdsRecruitingOneShort(
-            supabase,
-            base.map((r) => r.property.id)
-          );
-          const next = applyRecruitingOneShortToRows(base, oneShortIds);
+          matchedFullCacheRef.current = fullCatalog;
           if (isActive()) {
-            setMatchedRows(next);
-            setHasMore(rows.length === LIMIT);
+            setMatchedRows(fullCatalog.slice(0, LIMIT));
+            setHasMore(fullCatalog.length > LIMIT);
           }
           return;
         }
@@ -287,9 +270,12 @@ export default function ListingsClient() {
           fetchPropertyIdsRecruitingOneShort(supabase, fullIds),
           fetchPropertyStatuses(supabase, fullIds),
         ]);
-        const fullWithFomo = applyPropertyStatusesToRows(
-          applyRecruitingOneShortToRows(full, oneShortIds),
-          statusMap
+        const fullWithFomo = sortSmartMatchedPropertyRows(
+          applyPropertyStatusesToRows(
+            applyRecruitingOneShortToRows(full, oneShortIds),
+            statusMap
+          ),
+          false
         );
 
         if (isActive()) {
@@ -326,7 +312,6 @@ export default function ListingsClient() {
 
     return () => {
       listingsFetchRequestIdRef.current += 1;
-      loadMoreRequestIdRef.current += 1;
       window.clearTimeout(fallbackTimer);
     };
   }, [viewMode, supabase, authReady, sessionUser]);
@@ -334,9 +319,8 @@ export default function ListingsClient() {
   async function handleLoadMore() {
     if (!hasMore || isLoadingMore || isLoadingListings) return;
 
-    if (viewMode === "matched") {
-      const full = matchedFullCacheRef.current;
-      if (!full?.length) return;
+    const full = matchedFullCacheRef.current;
+    if (full?.length) {
       setIsLoadingMore(true);
       try {
         let nextLen = 0;
@@ -350,48 +334,6 @@ export default function ListingsClient() {
         setIsLoadingMore(false);
       }
       return;
-    }
-
-    const myLoadMoreId = ++loadMoreRequestIdRef.current;
-    setIsLoadingMore(true);
-    try {
-      const from = page * LIMIT;
-      const to = from + LIMIT - 1;
-      const { data: propertyRows, error } = await supabase
-        .from("properties")
-        .select("*")
-        .order("created_at", { ascending: false })
-        .range(from, to);
-
-      if (myLoadMoreId !== loadMoreRequestIdRef.current) {
-        return;
-      }
-
-      if (error) {
-        throw error;
-      }
-
-      const batch = propertyRows ?? [];
-      const mapped: SmartMatchedPropertyRow[] = batch.map((row) => ({
-        property: mapRowToProperty(row as Record<string, unknown>),
-        similarity: 0,
-      }));
-      const oneShortIds = await fetchPropertyIdsRecruitingOneShort(
-        supabase,
-        mapped.map((r) => r.property.id)
-      );
-      const mappedWithFomo = applyRecruitingOneShortToRows(mapped, oneShortIds);
-
-      setMatchedRows((prev) => [...prev, ...mappedWithFomo]);
-      setPage((p) => p + 1);
-      setHasMore(batch.length === LIMIT);
-    } catch (error) {
-      console.error("[ListingsClient] loadMore", error);
-      toast.error("載入更多失敗，請稍後再試。");
-    } finally {
-      if (myLoadMoreId === loadMoreRequestIdRef.current) {
-        setIsLoadingMore(false);
-      }
     }
   }
 

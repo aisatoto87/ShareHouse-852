@@ -35,19 +35,23 @@ export async function POST(request: Request) {
     });
 
     if ("error" in result && result.error) {
-      return NextResponse.json(
-        {
-          error: result.error,
-          code: "code" in result ? result.code : undefined,
-          matched: false,
-        },
-        { status: result.status ?? 500 }
-      );
+      console.warn("[api/match] match engine warning", result);
+      return NextResponse.json({
+        matched: false,
+        message: result.error,
+        match_warning: result.error,
+        code: "code" in result ? result.code : undefined,
+      });
     }
 
     return NextResponse.json(result);
   } catch (e) {
-    console.error("[api/match] unhandled", e);
-    return NextResponse.json({ error: "配對引擎發生錯誤。" }, { status: 500 });
+    console.error("[api/match] match engine 崩潰", e);
+    const message = e instanceof Error ? e.message : "配對引擎發生錯誤。";
+    return NextResponse.json({
+      matched: false,
+      match_warning: message,
+      message,
+    });
   }
 }

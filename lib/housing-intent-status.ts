@@ -3,7 +3,7 @@ export const INACTIVE_HOUSING_INTENT_STATUSES = ["expired", "cancelled"] as cons
 
 /**
  * 滿員／鎖定階段才觸發 Global Freeze（其他 waiting 意向暫停配對）。
- * recruiting、matching 為候補／撮合中，不應凍結其他志願。
+ * matching 為意向池撮合中；recruiting 僅屬 match_groups.status，不可寫入 housing_intents。
  */
 export const GLOBAL_FROZEN_INTENT_STATUSES = [
   "pending_opt_in",
@@ -63,4 +63,27 @@ export function isActiveHousingIntentStatus(status: unknown): boolean {
   return !INACTIVE_HOUSING_INTENT_STATUSES.includes(
     s as (typeof INACTIVE_HOUSING_INTENT_STATUSES)[number]
   );
+}
+
+/** housing_intents.status 合法值；recruiting 僅屬 match_groups，禁止寫入意向表 */
+export const HOUSING_INTENT_GROUP_SYNC_STATUSES = ["matching", "pending_opt_in"] as const;
+
+export type HousingIntentGroupSyncStatus =
+  (typeof HOUSING_INTENT_GROUP_SYNC_STATUSES)[number];
+
+/**
+ * 依群組人數映射意向狀態（與 housing_intents_status_check 一致）：
+ * - 未滿員 → matching（候補撮合中）
+ * - 滿員 → pending_opt_in（24 小時生死鎖）
+ */
+export function resolveHousingIntentStatusForGroup(
+  currentSize: number,
+  targetSize: number
+): HousingIntentGroupSyncStatus {
+  const effectiveTarget = Math.max(
+    Number.isFinite(targetSize) ? Math.round(targetSize) : 0,
+    2
+  );
+  const size = Number.isFinite(currentSize) ? Math.round(currentSize) : 0;
+  return size >= effectiveTarget ? "pending_opt_in" : "matching";
 }

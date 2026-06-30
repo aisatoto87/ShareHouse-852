@@ -68,7 +68,7 @@ export async function adminAddToGroupAction(
 
     const rpcResult = await invokeProcessGroupMatchV2IfFull(gate.rpc, trimmedGroupId);
     if (rpcResult.error) {
-      return { ok: false, error: rpcResult.error };
+      console.warn("[adminAddToGroupAction] process_group_match_v2 skipped", rpcResult.error);
     }
 
     revalidatePath("/admin/groups");
@@ -314,17 +314,69 @@ export async function adminKickConfirmedMemberAction(
     }
 
     const remainingMemberIds = memberIds.filter((id) => id !== trimmedKickedUserId);
-    const remainingMemberCount = remainingMemberIds.length;
 
-    const { error: deleteMemberErr } = await gate.rpc
+    if (!trimmedKickedUserId) {
+      throw new Error("[adminKickConfirmedMemberAction] kickedUserId 不可為空，已中止刪除以防誤刪整組成員。");
+    }
+
+    const { data: deletedMemberRows, error: deleteMemberErr } = await gate.rpc
       .from("group_members")
       .delete()
       .eq("group_id", trimmedGroupId)
-      .eq("user_id", trimmedKickedUserId);
+      .eq("user_id", trimmedKickedUserId)
+      .select("user_id");
 
     if (deleteMemberErr) {
       console.error("[adminKickConfirmedMemberAction] delete member", deleteMemberErr.message);
       return { ok: false, error: deleteMemberErr.message };
+    }
+
+    const deletedCount = deletedMemberRows?.length ?? 0;
+    if (deletedCount !== 1) {
+      console.error("[adminKickConfirmedMemberAction] delete member unexpected count", {
+        groupId: trimmedGroupId,
+        kickedUserId: trimmedKickedUserId,
+        deletedCount,
+        expectedRemaining: remainingMemberIds.length,
+      });
+      return {
+        ok: false,
+        error:
+          deletedCount === 0
+            ? "踢除成員失敗：找不到該成員記錄。"
+            : "踢除成員失敗：刪除筆數異常，已中止以避免誤刪其他成員。",
+      };
+    }
+
+    const { data: remainingMemberRows, error: remainingMembersErr } = await gate.rpc
+      .from("group_members")
+      .select("user_id")
+      .eq("group_id", trimmedGroupId);
+
+    if (remainingMembersErr) {
+      console.error(
+        "[adminKickConfirmedMemberAction] verify remaining members",
+        remainingMembersErr.message
+      );
+      return { ok: false, error: remainingMembersErr.message };
+    }
+
+    const verifiedRemainingMemberIds = (remainingMemberRows ?? [])
+      .map((row) => {
+        const uid = (row as { user_id?: unknown }).user_id;
+        return typeof uid === "string" ? uid.trim() : "";
+      })
+      .filter(Boolean);
+    const remainingMemberCount = verifiedRemainingMemberIds.length;
+
+    if (remainingMemberCount !== remainingMemberIds.length) {
+      console.error("[adminKickConfirmedMemberAction] remaining member count mismatch", {
+        groupId: trimmedGroupId,
+        kickedUserId: trimmedKickedUserId,
+        expected: remainingMemberIds.length,
+        actual: remainingMemberCount,
+      });
+      return { ok: false, error: "踢除成員後群組人數異常，已中止後續更新。" };
     }
 
     const { error: groupUpdateErr } = await gate.rpc
@@ -425,7 +477,7 @@ export type AdminUpdateOfflineDealPayload = {
   groupId: string;
   status?: AdminOfflineDealStatus;
   viewingTime?: string | null;
-  viewingNotes?: string | null;
+  adminNotes?: string | null;
 };
 
 function isAdminOfflineDealStatus(value: unknown): value is AdminOfflineDealStatus {
@@ -474,7 +526,7 @@ export async function adminGetOfflineDealAction(
   return { ok: true, deal };
 }
 
-/** Admin：更新線下追蹤（含 deal_closed 自動標記樓盤 rented） */
+/** Admin：更新線下追蹤（含 step_4_completed 自動標記樓盤 rented） */
 export async function adminUpdateOfflineDealAction(
   payload: AdminUpdateOfflineDealPayload
 ): Promise<AdminOfflineDealResult> {
@@ -483,10 +535,10 @@ export async function adminUpdateOfflineDealAction(
     return { ok: false, error: "group_id 格式無效。" };
   }
 
-  if (payload.status === "viewing_failed") {
+  if (payload.status === "cancelled") {
     return {
       ok: false,
-      error: "請使用睇樓失敗流程處理 viewing_failed 狀態。",
+      error: "請使用取消／踢人流程處理 cancelled 狀態。",
     };
   }
 
@@ -514,9 +566,9 @@ export async function adminUpdateOfflineDealAction(
     patch.viewing_time = payload.viewingTime;
   }
 
-  if (payload.viewingNotes !== undefined) {
-    const notes = payload.viewingNotes;
-    patch.viewing_notes = typeof notes === "string" && notes.trim() ? notes.trim() : null;
+  if (payload.adminNotes !== undefined) {
+    const notes = payload.adminNotes;
+    patch.admin_notes = typeof notes === "string" && notes.trim() ? notes.trim() : null;
   }
 
   const { data: updated, error: updateErr } = await gate.rpc
@@ -524,7 +576,7 @@ export async function adminUpdateOfflineDealAction(
     .update(patch)
     .eq("group_id", trimmedGroupId)
     .select(
-      "deal_id, group_id, status, viewing_time, viewing_notes, created_at, updated_at"
+      "deal_id, group_id, status, viewing_time, admin_notes, created_at, updated_at"
     )
     .single();
 
@@ -535,7 +587,7 @@ export async function adminUpdateOfflineDealAction(
 
   const nextStatus =
     typeof updated?.status === "string" ? updated.status.trim().toLowerCase() : "";
-  if (nextStatus === "deal_closed") {
+  if (nextStatus === "step_4_completed") {
     const propertyId = await resolveGroupPropertyId(gate.rpc, trimmedGroupId);
     if (propertyId) {
       const { error: propertyErr } = await gate.rpc
@@ -562,7 +614,7 @@ export type AdminKickAndRebuildPayload = {
   groupId: string;
   propertyId: string | null;
   kickedUserId: string;
-  viewingNotes?: string | null;
+  adminNotes?: string | null;
 };
 
 export type AdminKickAndRebuildResult =
@@ -738,12 +790,12 @@ export async function adminKickAndRebuildAction(
   await ensureOfflineDealForGroup(gate.rpc, trimmedGroupId);
 
   const dealPatch: Record<string, unknown> = {
-    status: "viewing_failed",
+    status: "cancelled",
     updated_at: new Date().toISOString(),
   };
-  if (payload.viewingNotes !== undefined) {
-    const notes = payload.viewingNotes;
-    dealPatch.viewing_notes =
+  if (payload.adminNotes !== undefined) {
+    const notes = payload.adminNotes;
+    dealPatch.admin_notes =
       typeof notes === "string" && notes.trim() ? notes.trim() : null;
   }
 

@@ -151,6 +151,7 @@ export async function POST(request: Request) {
         : preferenceRank;
 
     let matchResult: Awaited<ReturnType<typeof executeIntentMatch>> | null = null;
+    let matchWarning: string | null = null;
 
     if (intentId) {
       try {
@@ -160,8 +161,25 @@ export async function POST(request: Request) {
           target_district: targetDistrict,
           user_id: user.id,
         });
-      } catch (matchErr) {
-        console.error("[api/housing-intents] immediate match failed", matchErr);
+
+        if (matchResult && "error" in matchResult && matchResult.error) {
+          console.warn("[api/housing-intents] match engine warning (intent saved)", matchResult);
+          matchWarning = matchResult.error;
+          matchResult = {
+            matched: false,
+            message: matchResult.error,
+            match_mode: propertyId ? "property_first" : "district_blind",
+          };
+        }
+      } catch (e) {
+        const message = e instanceof Error ? e.message : "配對引擎暫時不可用";
+        console.error("[api/housing-intents] match engine exception (intent saved)", e);
+        matchWarning = message;
+        matchResult = {
+          matched: false,
+          message,
+          match_mode: propertyId ? "property_first" : "district_blind",
+        };
       }
     }
 
@@ -174,9 +192,11 @@ export async function POST(request: Request) {
       target_property_id: targetPropertyId,
       target_headcount: targetHeadcount,
       match: matchResult,
+      match_warning: matchWarning,
     });
   } catch (e) {
-    console.error("[api/housing-intents] POST", e);
-    return NextResponse.json({ error: "提交失敗，請稍後再試。" }, { status: 500 });
+    console.error("[api/housing-intents] POST 失敗", e);
+    const message = e instanceof Error ? e.message : "提交失敗，請稍後再試。";
+    return NextResponse.json({ error: message, matched: false }, { status: 500 });
   }
 }

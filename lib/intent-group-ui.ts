@@ -8,11 +8,10 @@ export const ACTIVE_MATCH_GROUP_STATUSES = [
 
 export type ActiveMatchGroupStatus = (typeof ACTIVE_MATCH_GROUP_STATUSES)[number];
 
-/** 這些 intent.status 必須有對應的 live match_group，否則視為幽靈狀態並降級 */
+/** 這些 intent.status 必須有對應的 live match_group，否則視為幽靈狀態並降級（recruiting 僅屬 match_groups） */
 export const GROUP_BACKED_INTENT_STATUSES = [
   "matching",
   "pending_opt_in",
-  "recruiting",
   "matched",
   "confirmed",
 ] as const;
@@ -49,13 +48,17 @@ export function parseGroupSize(value: unknown): number {
   return Math.round(n);
 }
 
-/** 群組實體存在、狀態活躍，且 group_members 至少有一人 */
+/** 群組實體存在、狀態活躍，且 group_members 至少有一人（或 current_size 已同步） */
 export function isValidMatchGroupEntity(
   group: IntentGroupEntity | null | undefined
 ): group is IntentGroupEntity {
   if (!group?.groupId) return false;
   if (!isActiveMatchGroupStatus(group.status)) return false;
-  if (!Number.isFinite(group.memberCount) || group.memberCount < 1) return false;
+  const effectiveMemberCount = Math.max(
+    Number.isFinite(group.memberCount) ? group.memberCount : 0,
+    Number.isFinite(group.currentSize) ? group.currentSize : 0
+  );
+  if (effectiveMemberCount < 1) return false;
   return true;
 }
 

@@ -21,7 +21,7 @@ type KickMemberModalProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   group: AdminGroupRow | null;
-  viewingNotes?: string;
+  adminNotes?: string;
   onSuccess?: () => void;
 };
 
@@ -29,7 +29,7 @@ export default function KickMemberModal({
   open,
   onOpenChange,
   group,
-  viewingNotes,
+  adminNotes,
   onSuccess,
 }: KickMemberModalProps) {
   const router = useRouter();
@@ -62,7 +62,7 @@ export default function KickMemberModal({
         groupId: group.groupId,
         propertyId: group.propertyId,
         kickedUserId: selectedUserId,
-        viewingNotes,
+        adminNotes,
       });
 
       if (!result.ok) {

@@ -9,10 +9,12 @@ import {
   type UserHabits,
 } from "@/lib/matchingAlgorithm";
 import { fetchGloballyFrozenUserIds } from "@/lib/global-freeze";
+import { resolveHousingIntentStatusForGroup } from "@/lib/housing-intent-status";
 import { invokeProcessGroupMatchV2IfFull } from "@/lib/process-group-match-v2";
-import type { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import type { createSupabaseAdminClient as CreateSupabaseAdminClientType } from "@/lib/supabase/admin";
 
-type AdminClient = ReturnType<typeof createSupabaseAdminClient>;
+type AdminClient = ReturnType<typeof CreateSupabaseAdminClientType>;
 
 const OPT_IN_WINDOW_MS = 24 * 60 * 60 * 1000;
 
@@ -78,40 +80,112 @@ function isUniqueViolation(error: { code?: string; message?: string } | null): b
   return error.code === "23505" || /duplicate key|unique constraint/i.test(error.message ?? "");
 }
 
-async function updateHousingIntentStatus(
-  admin: AdminClient,
-  intentId: string,
-  status: string
+const GROUP_MEMBER_INTENT_FROM_STATUSES = [
+  "waiting",
+  "matching",
+  "matched",
+  "pending_opt_in",
+  "confirmed",
+] as const;
+
+/** 將群組成員對應樓盤（或盲配）的意向同步為指定 status（一律用 service role + SECURITY DEFINER RPC） */
+async function updateMemberIntentsForProperty(
+  _admin: AdminClient,
+  userIds: string[],
+  propertyId: string | null,
+  status: string,
+  fromStatuses: readonly string[] = GROUP_MEMBER_INTENT_FROM_STATUSES
 ): Promise<void> {
-  const byIntentId = await admin
-    .from("housing_intents")
-    .update({ status })
-    .eq("intent_id", intentId)
-    .select("intent_id");
-  if (!byIntentId.error && byIntentId.data && byIntentId.data.length > 0) {
-    return;
+  const uniqueIds = [...new Set(userIds.filter(Boolean))];
+  if (uniqueIds.length === 0) return;
+
+  const serviceAdmin = createSupabaseAdminClient();
+
+  const rpcParams = {
+    p_user_ids: uniqueIds,
+    p_property_id: propertyId,
+    p_status: status,
+    p_from_statuses: [...fromStatuses],
+  };
+
+  console.log("[match-engine] update_member_intents_for_property RPC 請求", rpcParams);
+
+  const { data: updatedCount, error: rpcError } = await serviceAdmin.rpc(
+    "update_member_intents_for_property",
+    rpcParams
+  );
+
+  if (rpcError) {
+    console.error("[match-engine] update_member_intents_for_property RPC 失敗", rpcError);
+    throw rpcError;
   }
-  const byPk = await admin.from("housing_intents").update({ status }).eq("id", intentId).select("id");
-  if (byPk.error || !byPk.data?.length) {
-    throw new Error(byPk.error?.message ?? "更新意向狀態失敗。");
+
+  const count =
+    typeof updatedCount === "number" ? updatedCount : Number(updatedCount ?? 0);
+
+  if (!Number.isFinite(count) || count < 1) {
+    const message = `update_member_intents_for_property 未更新任何列（count=${String(updatedCount)}，users=${uniqueIds.join(",")}，status=${status}）`;
+    console.error("[match-engine]", message);
+    throw new Error(message);
   }
+
+  console.log("[match-engine] update_member_intents_for_property RPC 成功", {
+    updatedCount: count,
+    status,
+    userIds: uniqueIds,
+  });
 }
 
-async function updateHousingIntentsForUsers(
+async function syncGroupHeadcount(
   admin: AdminClient,
-  userIds: string[],
-  status: string,
-  fromStatuses?: string[]
-): Promise<void> {
-  if (userIds.length === 0) return;
-  let query = admin.from("housing_intents").update({ status }).in("user_id", userIds);
-  if (fromStatuses && fromStatuses.length > 0) {
-    query = query.in("status", fromStatuses);
+  groupId: string,
+  targetSize: number,
+  options?: { fullyStaffed?: boolean; recruitingWhileOpen?: boolean }
+): Promise<number> {
+  const verifiedSize = await countGroupMembers(admin, groupId);
+
+  if (verifiedSize === 0) {
+    const { error } = await admin
+      .from("match_groups")
+      .update({
+        current_size: 0,
+        status: "cancelled",
+        expires_at: null,
+      })
+      .eq("group_id", groupId);
+    if (error) {
+      throw new Error(error.message);
+    }
+    return 0;
   }
-  const { error } = await query;
+
+  const isFullyStaffed =
+    options?.fullyStaffed ?? verifiedSize >= Math.max(parseGroupSize(targetSize), 2);
+  const recruitingWhileOpen = options?.recruitingWhileOpen ?? targetSize > 2;
+
+  const groupUpdate: {
+    current_size: number;
+    status: string;
+    expires_at: string | null;
+  } = {
+    current_size: verifiedSize,
+    status: isFullyStaffed
+      ? "pending_opt_in"
+      : recruitingWhileOpen
+        ? "recruiting"
+        : "pending_opt_in",
+    expires_at:
+      isFullyStaffed || !recruitingWhileOpen
+        ? new Date(Date.now() + OPT_IN_WINDOW_MS).toISOString()
+        : null,
+  };
+
+  const { error } = await admin.from("match_groups").update(groupUpdate).eq("group_id", groupId);
   if (error) {
     throw new Error(error.message);
   }
+
+  return verifiedSize;
 }
 
 async function loadHabitsMap(
@@ -159,6 +233,181 @@ async function countGroupMembers(admin: AdminClient, groupId: string): Promise<n
   return count ?? 0;
 }
 
+/** 逐筆 INSERT group_members（必須有明確的 Supabase insert 實體代碼） */
+async function insertSingleGroupMember(
+  admin: AdminClient,
+  groupId: string,
+  userId: string,
+  hasAgreed = false
+): Promise<void> {
+  const targetGroupId = groupId.trim();
+  const currentUserId = userId.trim();
+
+  if (!targetGroupId || !currentUserId) {
+    throw new Error("group_members 寫入失敗：缺少 group_id 或 user_id。");
+  }
+
+  const { error: insertError } = await admin.from("group_members").insert({
+    group_id: targetGroupId,
+    user_id: currentUserId,
+    has_agreed: hasAgreed,
+  });
+
+  if (insertError) {
+    console.error("寫入 group_members 失敗", insertError);
+    throw insertError;
+  }
+
+  const confirmed = await userIsGroupMember(admin, targetGroupId, currentUserId);
+  if (!confirmed) {
+    throw new Error(
+      `group_members 寫入後驗證失敗：找不到 user_id=${currentUserId} group_id=${targetGroupId}`
+    );
+  }
+}
+
+async function userIsGroupMember(
+  admin: AdminClient,
+  groupId: string,
+  userId: string
+): Promise<boolean> {
+  const { data, error } = await admin
+    .from("group_members")
+    .select("user_id")
+    .eq("group_id", groupId)
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return Boolean(data);
+}
+
+type CreateMatchGroupRpcRow = {
+  out_group_id?: string;
+  out_current_size?: number;
+};
+
+function parseCreateMatchGroupRpcResult(data: unknown): { groupId: string; verifiedSize: number } {
+  const row = (Array.isArray(data) ? data[0] : data) as CreateMatchGroupRpcRow | null;
+  const groupId = typeof row?.out_group_id === "string" ? row.out_group_id.trim() : "";
+  const verifiedSize = parseGroupSize(row?.out_current_size);
+
+  if (!groupId || verifiedSize < 1) {
+    throw new Error(
+      `RPC create_match_group_with_members 回傳無效：${JSON.stringify(data ?? null)}`
+    );
+  }
+
+  return { groupId, verifiedSize };
+}
+
+/**
+ * 透過 Supabase RPC 原子建立 match_groups + group_members。
+ * 參數 key 必須與 SQL 函數完全一致：p_member_user_ids, p_target_size, p_property_id。
+ */
+async function createMatchGroupWithMembers(params: {
+  admin: AdminClient;
+  memberUserIds: string[];
+  targetSize: number;
+  propertyId: string | null;
+}): Promise<{ groupId: string; verifiedSize: number }> {
+  const { admin, memberUserIds, targetSize, propertyId } = params;
+  const uniqueMemberIds = [...new Set(memberUserIds.map((id) => id.trim()).filter(Boolean))];
+
+  if (uniqueMemberIds.length < 1) {
+    throw new Error("無法建立群組：缺少有效成員。");
+  }
+
+  const rpcParams: {
+    p_member_user_ids: string[];
+    p_target_size: number;
+    p_property_id: string | null;
+  } = {
+    p_member_user_ids: uniqueMemberIds,
+    p_target_size: targetSize,
+    p_property_id: propertyId,
+  };
+
+  console.log("[match-engine] create_match_group_with_members RPC 請求", {
+    p_member_user_ids: uniqueMemberIds,
+    p_target_size: targetSize,
+    p_property_id: propertyId,
+  });
+
+  const { data, error: rpcError } = await admin.rpc(
+    "create_match_group_with_members",
+    rpcParams
+  );
+
+  if (rpcError) {
+    console.error("[match-engine] create_match_group_with_members RPC 失敗", rpcError);
+    throw rpcError;
+  }
+
+  const { groupId, verifiedSize } = parseCreateMatchGroupRpcResult(data);
+
+  const liveCount = await countGroupMembers(admin, groupId);
+  if (liveCount < uniqueMemberIds.length || verifiedSize < uniqueMemberIds.length) {
+    const message = `create_match_group_with_members 回傳成功但成員不足：group_id=${groupId} RPC=${verifiedSize} live=${liveCount} expected=${uniqueMemberIds.length}`;
+    console.error("[match-engine]", message);
+    throw new Error(message);
+  }
+
+  console.log("[match-engine] create_match_group_with_members RPC 成功", {
+    groupId,
+    verifiedSize,
+    liveCount,
+  });
+
+  return { groupId, verifiedSize: liveCount };
+}
+
+/** 將單一成員加入既有群組；INSERT 成功後才更新 match_groups */
+async function addMemberToExistingGroup(params: {
+  admin: AdminClient;
+  groupId: string;
+  userId: string;
+  targetSize: number;
+  recruitingWhileOpen: boolean;
+  fullyStaffed: boolean;
+}): Promise<number> {
+  const { admin, groupId, userId, targetSize, recruitingWhileOpen, fullyStaffed } = params;
+
+  if (!groupId.trim() || !userId.trim()) {
+    throw new Error("加入群組失敗：缺少 group_id 或 user_id。");
+  }
+
+  const alreadyMember = await userIsGroupMember(admin, groupId, userId);
+  if (alreadyMember) {
+    const existingSize = await countGroupMembers(admin, groupId);
+    if (existingSize < 1) {
+      throw new Error("群組資料異常：成員列不存在但判定已在群組內。");
+    }
+    return existingSize;
+  }
+
+  await insertSingleGroupMember(admin, groupId, userId, false);
+
+  const verifiedSize = await syncGroupHeadcount(admin, groupId, targetSize, {
+    fullyStaffed,
+    recruitingWhileOpen,
+  });
+
+  if (verifiedSize < 1) {
+    throw new Error("加入群組失敗：寫入 group_members 後人數仍為 0。");
+  }
+
+  const memberConfirmed = await userIsGroupMember(admin, groupId, userId);
+  if (!memberConfirmed) {
+    throw new Error("加入群組失敗：group_members 未找到剛寫入的成員。");
+  }
+
+  return verifiedSize;
+}
+
 type JoinRecruitingGroupResult =
   | { joined: false }
   | {
@@ -188,7 +437,7 @@ export async function tryJoinRecruitingGroup(params: {
   let recruitingQuery = admin
     .from("match_groups")
     .select("group_id, status, current_size, target_size, property_id")
-    .eq("status", "recruiting");
+    .in("status", ["recruiting", "pending_opt_in"]);
 
   if (ownPropertyId) {
     recruitingQuery = recruitingQuery.eq("property_id", ownPropertyId);
@@ -213,6 +462,18 @@ export async function tryJoinRecruitingGroup(params: {
 
     const memberCount = await countGroupMembers(admin, groupId);
     const target = Math.max(parseGroupSize(g.target_size), 2);
+    const storedCurrentSize = parseGroupSize(g.current_size);
+
+    if (memberCount === 0) {
+      if (storedCurrentSize > 0) {
+        console.warn("[match-engine] skip match_group with stored size but no members", {
+          groupId,
+          storedCurrentSize,
+        });
+      }
+      continue;
+    }
+
     if (memberCount > 0 && memberCount < target) {
       openGroups.push({ ...g, _live_member_count: memberCount });
     }
@@ -254,12 +515,22 @@ export async function tryJoinRecruitingGroup(params: {
     ];
 
     if (memberUserIds.includes(user_id)) {
-      console.log("[match-engine] reconcile ghost membership", { groupId, user_id });
-      await updateHousingIntentStatus(admin, ownResolvedIntentId, "matching");
+      const liveSize = await countGroupMembers(admin, groupId);
+      if (liveSize < 1 || !(await userIsGroupMember(admin, groupId, user_id))) {
+        console.warn("[match-engine] skip ghost membership without live row", { groupId, user_id });
+        continue;
+      }
+      console.log("[match-engine] reconcile existing membership", { groupId, user_id });
+      await updateMemberIntentsForProperty(
+        admin,
+        memberUserIds,
+        ownPropertyId,
+        resolveHousingIntentStatusForGroup(liveSize, targetSize)
+      );
       return {
         joined: true,
         group_id: groupId,
-        current_size: currentSize,
+        current_size: liveSize,
         target_size: targetSize,
         group_confirmed: false,
         property_id: ownPropertyId,
@@ -286,7 +557,7 @@ export async function tryJoinRecruitingGroup(params: {
       .from("housing_intents")
       .select("user_id, max_budget, status")
       .in("user_id", memberUserIds)
-      .in("status", ["matching", "recruiting", "matched"]);
+      .in("status", ["matching", "matched", "pending_opt_in"]);
 
     if (intentErr) {
       console.error("[match-engine] member intents for recruiting group", intentErr);
@@ -307,98 +578,55 @@ export async function tryJoinRecruitingGroup(params: {
       continue;
     }
 
-    const insertPayload = {
-      group_id: groupId,
-      user_id,
-      has_agreed: isFullyStaffed,
-    };
-
-    let insertMemberErr = (
-      await admin.from("group_members").insert(insertPayload)
-    ).error;
-
-    if (insertMemberErr && isUniqueViolation(insertMemberErr)) {
-      console.warn("[match-engine] unique violation on insert, reconciling", groupId);
-      const { error: deleteGhostErr } = await admin
-        .from("group_members")
-        .delete()
-        .eq("group_id", groupId)
-        .eq("user_id", user_id);
-
-      if (!deleteGhostErr) {
-        insertMemberErr = (await admin.from("group_members").insert(insertPayload)).error;
+    let verifiedSize: number;
+    try {
+      verifiedSize = await addMemberToExistingGroup({
+        admin,
+        groupId,
+        userId: user_id,
+        targetSize,
+        recruitingWhileOpen: targetSize > 2,
+        fullyStaffed: isFullyStaffed,
+      });
+    } catch (joinErr) {
+      if (joinErr instanceof Error && isUniqueViolation({ message: joinErr.message })) {
+        const reconciledSize = await countGroupMembers(admin, groupId);
+        if (reconciledSize < 1 || !(await userIsGroupMember(admin, groupId, user_id))) {
+          console.error("[match-engine] join reconcile failed", groupId, joinErr.message);
+          continue;
+        }
+        verifiedSize = reconciledSize;
+      } else {
+        console.error("[match-engine] insert recruiting group member", joinErr);
+        continue;
       }
-    }
-
-    if (insertMemberErr) {
-      if (isUniqueViolation(insertMemberErr)) {
-        await updateHousingIntentStatus(admin, ownResolvedIntentId, "matching");
-        return {
-          joined: true,
-          group_id: groupId,
-          current_size: currentSize,
-          target_size: targetSize,
-          group_confirmed: false,
-          property_id: ownPropertyId,
-          match_mode: matchMode,
-        };
-      }
-      console.error("[match-engine] insert recruiting group member", insertMemberErr);
-      continue;
-    }
-
-    const verifiedSize = await countGroupMembers(admin, groupId);
-    const groupUpdate: {
-      current_size: number;
-      status: string;
-      expires_at?: string | null;
-    } = {
-      current_size: verifiedSize,
-      status: isFullyStaffed ? "confirmed" : "pending_opt_in",
-    };
-
-    if (!isFullyStaffed) {
-      groupUpdate.expires_at = new Date(Date.now() + OPT_IN_WINDOW_MS).toISOString();
-    } else {
-      groupUpdate.expires_at = null;
-    }
-
-    const { error: groupUpdateErr } = await admin
-      .from("match_groups")
-      .update(groupUpdate)
-      .eq("group_id", groupId);
-
-    if (groupUpdateErr) {
-      console.error("[match-engine] update recruiting group", groupUpdateErr);
-      throw new Error(groupUpdateErr.message);
     }
 
     let groupMatchProcessed = false;
+    const allUserIds = [...new Set([...memberUserIds, user_id])];
+    const intentStatus = resolveHousingIntentStatusForGroup(verifiedSize, targetSize);
+
     if (isFullyStaffed) {
       const rpcResult = await invokeProcessGroupMatchV2IfFull(admin, groupId);
       if (rpcResult.error) {
-        throw new Error(rpcResult.error);
+        console.warn(
+          "[match-engine] process_group_match_v2 skipped (non-fatal)",
+          groupId,
+          rpcResult.error
+        );
+      } else {
+        groupMatchProcessed = rpcResult.invoked;
       }
-      groupMatchProcessed = rpcResult.invoked;
     }
 
-    if (isFullyStaffed) {
-      const allUserIds = [...new Set([...memberUserIds, user_id])];
-      await updateHousingIntentsForUsers(admin, allUserIds, "matched", [
-        "matching",
-        "recruiting",
-        "waiting",
-      ]);
-    } else {
-      await updateHousingIntentStatus(admin, ownResolvedIntentId, "matching");
-    }
+    await updateMemberIntentsForProperty(admin, allUserIds, ownPropertyId, intentStatus);
 
     return {
       joined: true,
       group_id: groupId,
       current_size: verifiedSize,
       target_size: targetSize,
-      group_confirmed: isFullyStaffed,
+      group_confirmed: false,
       property_id: ownPropertyId,
       match_mode: matchMode,
       group_match_processed: groupMatchProcessed || undefined,
@@ -423,29 +651,18 @@ export async function executeIntentMatch(
   }
 
   let ownIntent: Record<string, unknown> | null = null;
-  const byIntentCol = await admin
+  const { data: ownIntentRow, error: ownIntentError } = await admin
     .from("housing_intents")
     .select("*")
     .eq("user_id", user_id)
     .eq("intent_id", intent_id)
     .maybeSingle();
 
-  if (byIntentCol.error) {
-    return { matched: false, error: byIntentCol.error.message, status: 500 };
+  if (ownIntentError) {
+    return { matched: false, error: ownIntentError.message, status: 500 };
   }
-  if (byIntentCol.data) {
-    ownIntent = byIntentCol.data as Record<string, unknown>;
-  } else {
-    const byIdCol = await admin
-      .from("housing_intents")
-      .select("*")
-      .eq("user_id", user_id)
-      .eq("id", intent_id)
-      .maybeSingle();
-    if (byIdCol.error) {
-      return { matched: false, error: byIdCol.error.message, status: 500 };
-    }
-    if (byIdCol.data) ownIntent = byIdCol.data as Record<string, unknown>;
+  if (ownIntentRow) {
+    ownIntent = ownIntentRow as Record<string, unknown>;
   }
 
   if (!ownIntent) {
@@ -558,13 +775,24 @@ export async function executeIntentMatch(
   const candidates = Array.isArray(candidateRows) ? candidateRows : [];
 
   if (candidates.length === 0) {
+    const created = await createMatchGroupWithMembers({
+      admin,
+      memberUserIds: [user_id],
+      targetSize,
+      propertyId: ownPropertyId,
+    });
+    const intentStatus = resolveHousingIntentStatusForGroup(created.verifiedSize, targetSize);
+    await updateMemberIntentsForProperty(admin, [user_id], ownPropertyId, intentStatus);
+
     return {
-      matched: false,
-      reason: ownPropertyId ? "no_waiting_peers_on_property" : "no_waiting_peers_in_district",
-      message: ownPropertyId
-        ? "同盤暫無其他等待中的意向，且目前沒有可加入的招募群組。"
-        : "同區暫無其他等待中的意向，且目前沒有可加入的招募群組。",
+      matched: true,
+      join_mode: "new_group",
+      group_id: created.groupId,
+      current_size: created.verifiedSize,
+      target_size: targetSize,
       match_mode: matchMode,
+      property_id: ownPropertyId,
+      message: "已建立招募群組，正在等候室友加入。",
     };
   }
 
@@ -598,56 +826,40 @@ export async function executeIntentMatch(
     const habitScore = calculateHabitRadarSimilarity(currentHabits, candidateHabits);
     if (!meetsHabitRadarThreshold(currentHabits, candidateHabits)) continue;
 
-    const groupInsert: {
-      status: string;
-      target_size: number;
-      current_size: number;
-      property_id?: string;
-      expires_at?: string;
-    } = {
-      status: "pending_opt_in",
-      target_size: targetSize,
-      current_size: 2,
-      expires_at: new Date(Date.now() + OPT_IN_WINDOW_MS).toISOString(),
-    };
-    if (ownPropertyId) {
-      groupInsert.property_id = ownPropertyId;
+    const created = await createMatchGroupWithMembers({
+      admin,
+      memberUserIds: [user_id, otherUserId],
+      targetSize,
+      propertyId: ownPropertyId,
+    });
+    const groupId = created.groupId;
+    const verifiedSize = created.verifiedSize;
+
+    const isGroupFull = verifiedSize >= targetSize;
+    let groupMatchProcessed = false;
+    const intentStatus = resolveHousingIntentStatusForGroup(verifiedSize, targetSize);
+
+    if (isGroupFull) {
+      const rpcResult = await invokeProcessGroupMatchV2IfFull(admin, groupId);
+      if (rpcResult.error) {
+        console.warn(
+          "[match-engine] process_group_match_v2 skipped (non-fatal)",
+          groupId,
+          rpcResult.error
+        );
+      } else {
+        groupMatchProcessed = rpcResult.invoked;
+      }
     }
 
-    const { data: groupRow, error: groupErr } = await admin
-      .from("match_groups")
-      .insert(groupInsert)
-      .select("group_id")
-      .single();
-
-    if (groupErr || !groupRow?.group_id) {
-      return {
-        matched: false,
-        error: groupErr?.message ?? "建立配對群組失敗。",
-        status: 500,
-      };
-    }
-
-    const groupId = String(groupRow.group_id);
-
-    const { error: membersErr } = await admin.from("group_members").insert([
-      { group_id: groupId, user_id, has_agreed: false },
-      { group_id: groupId, user_id: otherUserId, has_agreed: false },
-    ]);
-
-    if (membersErr) {
-      return { matched: false, error: membersErr.message, status: 500 };
-    }
-
-    const rpcResult = await invokeProcessGroupMatchV2IfFull(admin, groupId);
-    if (rpcResult.error) {
-      return { matched: false, error: rpcResult.error, status: 500 };
-    }
+    await updateMemberIntentsForProperty(
+      admin,
+      [user_id, otherUserId],
+      ownPropertyId,
+      intentStatus
+    );
 
     const intentIdsToMatch = [...new Set([ownResolvedIntentId, otherIntentId])];
-    for (const iid of intentIdsToMatch) {
-      await updateHousingIntentStatus(admin, iid, "matching");
-    }
 
     return {
       matched: true,
@@ -657,11 +869,11 @@ export async function executeIntentMatch(
       intent_ids: intentIdsToMatch,
       habit_similarity: habitScore,
       target_size: targetSize,
-      current_size: 2,
-      group_match_processed: rpcResult.invoked,
+      current_size: verifiedSize,
+      group_match_processed: groupMatchProcessed || undefined,
       match_mode: matchMode,
       property_id: ownPropertyId,
-      message: "已建立新配對群組。",
+      message: isGroupFull ? "人數已滿，配對成功！" : "已建立新配對群組，正在招募室友。",
     };
   }
 
