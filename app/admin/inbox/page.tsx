@@ -1,18 +1,18 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import AdminGroupsClient from "@/app/admin/groups/AdminGroupsClient";
+import AdminInboxClient from "@/app/admin/inbox/AdminInboxClient";
 import Navbar from "@/components/Navbar";
 import { checkAdminAccessFromProfile } from "@/lib/admin-auth";
-import { fetchActiveAdminGroups } from "@/lib/admin-groups";
 import { createSupabaseServerClient, getServerUser } from "@/lib/supabase/server";
+import type { ChatRoomRow } from "@/types/chat";
 
 export const dynamic = "force-dynamic";
 
 export const metadata = {
-  title: "配對群組管理 | ShareHouse 852 Admin",
+  title: "即時對話收件箱 | ShareHouse 852 Admin",
 };
 
-export default async function AdminGroupsPage() {
+export default async function AdminInboxPage() {
   const supabase = await createSupabaseServerClient();
   const { user } = await getServerUser(supabase);
   const { isAdmin, profileRole } = await checkAdminAccessFromProfile(supabase as any, user);
@@ -26,7 +26,15 @@ export default async function AdminGroupsPage() {
     redirect("/");
   }
 
-  const { groups, error } = await fetchActiveAdminGroups();
+  const { data, error } = await supabase
+    .from("chat_rooms")
+    .select(
+      "room_id, tenant_id, property_id, status, created_at, updated_at, profiles!tenant_id(display_name, avatar_url, nickname), properties(id, title)"
+    )
+    .eq("status", "active")
+    .order("updated_at", { ascending: false });
+
+  const rooms = ((data ?? []) as unknown as ChatRoomRow[]).filter((row) => row.room_id);
 
   return (
     <div className="min-h-screen bg-zinc-50">
@@ -36,10 +44,10 @@ export default async function AdminGroupsPage() {
           <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
             <div>
               <h1 className="text-2xl font-bold tracking-tight text-[#0f2540]">
-                配對群組 — 上帝視角
+                預約查詢 — 即時對話收件箱
               </h1>
               <p className="mt-2 text-sm text-zinc-500">
-                檢視招募中／待確認的群組，並可手動將用戶加入缺人的隊伍；已成團群組會列於下方供管家跟進。
+                與發起查詢的客人即時溝通，左側選擇對話室、右側回覆訊息。
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
@@ -48,12 +56,6 @@ export default async function AdminGroupsPage() {
                 className="inline-flex items-center rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50"
               >
                 ← 管家總指揮部
-              </Link>
-              <Link
-                href="/admin/inbox"
-                className="inline-flex items-center rounded-lg bg-[#0f2540] px-3 py-2 text-sm font-medium text-white hover:bg-[#1a3a5c]"
-              >
-                即時對話收件箱
               </Link>
               <Link
                 href="/admin/inquiries"
@@ -65,7 +67,7 @@ export default async function AdminGroupsPage() {
           </div>
         </section>
 
-        <AdminGroupsClient groups={groups} fetchError={error} />
+        <AdminInboxClient initialRooms={rooms} fetchError={error?.message ?? null} />
       </main>
     </div>
   );

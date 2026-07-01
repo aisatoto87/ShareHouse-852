@@ -120,10 +120,20 @@ export default async function AdminInquiriesPage() {
       <Navbar />
       <main className="mx-auto max-w-7xl space-y-6 px-4 py-8 sm:px-6 sm:py-10">
         <section className="rounded-2xl border border-[#0f2540]/15 bg-white p-6 shadow-sm sm:p-8">
-          <h1 className="text-2xl font-bold tracking-tight text-[#0f2540]">管家預約查詢後台</h1>
-          <p className="mt-2 text-sm text-zinc-500">
-            集中管理客人預約與查詢，並快速標記跟進狀態。
-          </p>
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <h1 className="text-2xl font-bold tracking-tight text-[#0f2540]">管家預約查詢後台</h1>
+              <p className="mt-2 text-sm text-zinc-500">
+                集中管理客人預約與查詢，並快速標記跟進狀態。
+              </p>
+            </div>
+            <Link
+              href="/admin/inbox"
+              className="inline-flex h-10 items-center justify-center rounded-lg bg-[#0f2540] px-4 text-sm font-semibold text-white transition-colors hover:bg-[#1a3a5c]"
+            >
+              即時對話收件箱
+            </Link>
+          </div>
         </section>
 
         <section className="overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-sm">

@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { ArrowLeft, MapPin, Maximize2, MessageCircle } from "lucide-react";
 import { buildShareHouseConciergeWhatsAppUrl } from "@/lib/support-contact";
 import HousingIntentButton from "@/components/HousingIntentButton";
+import PropertyInstantChatButton from "@/components/PropertyInstantChatButton";
 import PropertyLandlordRatingCard from "@/components/PropertyLandlordRatingCard";
 import Navbar from "@/components/Navbar";
 import PropertyBentoGallery from "@/components/PropertyBentoGallery";
@@ -396,6 +397,11 @@ export default async function PropertyDetailPage({ params }: PageProps) {
                 <MessageCircle className="h-4 w-4" />
                 💬 聯絡 ShareHouse 管家
               </a>
+              <PropertyInstantChatButton
+                propertyId={property.id}
+                propertyTitle={property.title}
+                className="mt-3 h-11 w-full"
+              />
               <HousingIntentButton
                 propertyId={property.id}
                 propertyListingStatus={property.status ?? "available"}
@@ -421,21 +427,28 @@ export default async function PropertyDetailPage({ params }: PageProps) {
       </main>
 
       <div className="fixed inset-x-0 bottom-0 z-40 border-t border-zinc-200 bg-white/95 p-3 backdrop-blur lg:hidden">
-        <div className="mx-auto flex max-w-7xl items-center gap-2">
-          <a
-            href={conciergeWaUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex h-11 flex-1 items-center justify-center gap-2 rounded-lg border border-[#25D366]/40 bg-[#25D366]/10 px-4 text-sm font-semibold text-[#128C3E]"
-          >
-            <MessageCircle className="h-4 w-4" />
-            💬 聯絡管家
-          </a>
-          <ShareListingButton
-            title={property.title}
-            className="inline-flex h-11 items-center justify-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-3 text-sm font-semibold text-zinc-700"
+        <div className="mx-auto flex max-w-7xl flex-col gap-2">
+          <div className="flex items-center gap-2">
+            <a
+              href={conciergeWaUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex h-11 flex-1 items-center justify-center gap-2 rounded-lg border border-[#25D366]/40 bg-[#25D366]/10 px-4 text-sm font-semibold text-[#128C3E]"
+            >
+              <MessageCircle className="h-4 w-4" />
+              💬 聯絡管家
+            </a>
+            <ShareListingButton
+              title={property.title}
+              className="inline-flex h-11 items-center justify-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-3 text-sm font-semibold text-zinc-700"
+            />
+            <WishlistHeartButton propertyId={property.id} variant="onLight" />
+          </div>
+          <PropertyInstantChatButton
+            propertyId={property.id}
+            propertyTitle={property.title}
+            className="h-11 w-full"
           />
-          <WishlistHeartButton propertyId={property.id} variant="onLight" />
         </div>
       </div>
     </div>

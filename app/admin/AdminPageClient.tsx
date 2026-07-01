@@ -561,14 +561,21 @@ export default function AdminPageClient() {
 
             <Link
               href="/admin/inquiries"
-              className="relative inline-flex items-center justify-center rounded-lg bg-[#0f2540] px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-[#1a3a5c]"
+              className="relative inline-flex items-center justify-center rounded-lg border border-[#0f2540]/30 bg-[#0f2540]/5 px-4 py-2 text-sm font-semibold text-[#0f2540] transition-colors hover:bg-[#0f2540]/10"
             >
-              📥 預約查詢收件箱
+              📋 查詢表格
               {pendingCount > 0 && (
                 <span className="absolute -right-2 -top-2 flex h-5 w-5 items-center justify-center rounded-full bg-red-500 text-[10px] font-bold text-white shadow-sm ring-2 ring-white">
                   {pendingCount}
                 </span>
               )}
+            </Link>
+
+            <Link
+              href="/admin/inbox"
+              className="inline-flex items-center justify-center rounded-lg bg-[#0f2540] px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-[#1a3a5c]"
+            >
+              💬 即時對話收件箱
             </Link>
           </div>
         </div>

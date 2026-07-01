@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Noto_Sans_HK } from "next/font/google";
 import AuthProvider from "@/components/AuthProvider";
 import AuthSessionRecovery from "@/components/AuthSessionRecovery";
+import { ChatWidgetProvider } from "@/components/ClientChatWidget";
 import FloatingContact from "@/components/FloatingContact";
 import RoleOnboardingGate from "@/components/RoleOnboardingGate";
 import { Toaster } from "@/components/ui/sonner";
@@ -35,8 +36,10 @@ export default function RootLayout({
         <AuthProvider>
           <AuthSessionRecovery />
           <RoleOnboardingGate />
-          {children}
-          <FloatingContact />
+          <ChatWidgetProvider>
+            {children}
+            <FloatingContact />
+          </ChatWidgetProvider>
           <Toaster richColors position="top-center" closeButton />
           <OnboardingPrompt />
         </AuthProvider>

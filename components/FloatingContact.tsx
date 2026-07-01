@@ -3,6 +3,7 @@
 import { useState, type SVGProps } from "react";
 import { MessageCircle } from "lucide-react";
 import BackToTopButton from "@/components/BackToTopButton";
+import { ClientChatTriggerButton } from "@/components/ClientChatWidget";
 import {
   Dialog,
   DialogContent,
@@ -31,6 +32,8 @@ export default function FloatingContact() {
   return (
     <>
       <div className="fixed right-6 bottom-6 z-[70] flex flex-col items-center gap-3">
+        <ClientChatTriggerButton />
+
         <a
           href={SHAREHOUSE_WHATSAPP_URL}
           target="_blank"
