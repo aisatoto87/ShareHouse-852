@@ -4,7 +4,7 @@ import AdminInboxClient from "@/app/admin/inbox/AdminInboxClient";
 import Navbar from "@/components/Navbar";
 import { checkAdminAccessFromProfile } from "@/lib/admin-auth";
 import { createSupabaseServerClient, getServerUser } from "@/lib/supabase/server";
-import type { ChatRoomRow } from "@/types/chat";
+import type { ChatRoomRow, ChatRoomType } from "@/types/chat";
 
 export const dynamic = "force-dynamic";
 
@@ -29,12 +29,19 @@ export default async function AdminInboxPage() {
   const { data, error } = await supabase
     .from("chat_rooms")
     .select(
-      "room_id, tenant_id, property_id, status, created_at, updated_at, profiles!tenant_id(display_name, avatar_url, nickname), properties(id, title)"
+      "room_id, tenant_id, property_id, room_type, match_group_id, status, created_at, updated_at, profiles!tenant_id(display_name, avatar_url, nickname), properties(id, title)"
     )
     .eq("status", "active")
     .order("updated_at", { ascending: false });
 
-  const rooms = ((data ?? []) as unknown as ChatRoomRow[]).filter((row) => row.room_id);
+  const rooms: ChatRoomRow[] = ((data ?? []) as unknown as ChatRoomRow[])
+    .filter((row) => row.room_id)
+    .map((row) => ({
+      ...row,
+      room_type: (row.room_type === "group" ? "group" : "direct") as ChatRoomType,
+      match_group_id:
+        typeof row.match_group_id === "string" ? row.match_group_id : null,
+    }));
 
   return (
     <div className="min-h-screen bg-zinc-50">

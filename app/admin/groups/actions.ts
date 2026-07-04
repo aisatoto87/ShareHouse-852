@@ -184,6 +184,8 @@ export async function adminDissolveGroupAction(
 
     revalidatePath("/admin/groups", "page");
     revalidatePath("/dashboard", "page");
+    revalidatePath("/messages");
+    revalidatePath("/admin/inbox");
     return { ok: true };
   } catch (e) {
     console.error("[adminDissolveGroupAction] unexpected", e);
@@ -224,6 +226,8 @@ export async function adminKickGroupMemberAction(
 
     revalidatePath("/admin/groups");
     revalidatePath("/dashboard", "page");
+    revalidatePath("/messages");
+    revalidatePath("/admin/inbox");
     return { ok: true };
   } catch (e) {
     const message = e instanceof Error ? e.message : "伺服器錯誤";
@@ -460,6 +464,8 @@ export async function adminKickConfirmedMemberAction(
     revalidatePath("/", "page");
     revalidatePath("/dashboard", "page");
     revalidatePath("/admin/groups", "page");
+    revalidatePath("/messages");
+    revalidatePath("/admin/inbox");
 
     return { ok: true };
   } catch (e) {
@@ -812,6 +818,8 @@ export async function adminKickAndRebuildAction(
   revalidatePath("/", "page");
   revalidatePath("/dashboard", "page");
   revalidatePath("/admin/groups", "page");
+  revalidatePath("/messages");
+  revalidatePath("/admin/inbox");
 
   return { ok: true, remainingMemberCount, targetSize };
 }

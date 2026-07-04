@@ -122,6 +122,12 @@ export default function Navbar() {
             </Link>
           ) : null}
 
+          {user && !showManagerPortal ? (
+            <Link href="/messages" className={navTextLinkClass}>
+              💬 我的訊息
+            </Link>
+          ) : null}
+
           {user ? (
             <>
               <Link href="/wishlist" className={navTextLinkClass}>

@@ -14,6 +14,8 @@ import { usePathname, useRouter } from "next/navigation";
 import { Loader2, MessageCircle, Send, X } from "lucide-react";
 import { toast } from "sonner";
 import { getOrCreateChatRoom } from "@/app/actions/chatActions";
+import ChatMessageBubble from "@/components/chat/ChatMessageBubble";
+import { useMarkChatAsRead } from "@/hooks/useMarkChatAsRead";
 import { useRealtimeChat } from "@/hooks/useRealtimeChat";
 import { createSupabaseBrowserClient, getBrowserUser } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
@@ -120,16 +122,6 @@ type ClientChatPanelProps = {
   onClose: () => void;
 };
 
-function formatMessageTime(value: string) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  return new Intl.DateTimeFormat("zh-HK", {
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(date);
-}
-
 function ClientChatPanel({
   isOpen,
   roomId,
@@ -142,6 +134,8 @@ function ClientChatPanel({
   );
   const [draft, setDraft] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  useMarkChatAsRead(roomId, userId, messages, { enabled: isOpen });
 
   useEffect(() => {
     if (!isOpen) setDraft("");
@@ -204,34 +198,13 @@ function ClientChatPanel({
               <p>歡迎查詢！請描述你的需求，管家會盡快回覆。</p>
             </div>
           ) : (
-            messages.map((message) => {
-              const isMine = message.sender_id === userId;
-              return (
-                <div
-                  key={message.message_id}
-                  className={cn("flex", isMine ? "justify-end" : "justify-start")}
-                >
-                  <div
-                    className={cn(
-                      "max-w-[85%] rounded-2xl px-3 py-2 text-sm shadow-sm",
-                      isMine
-                        ? "rounded-br-md bg-[#0f2540] text-white"
-                        : "rounded-bl-md bg-white text-zinc-800"
-                    )}
-                  >
-                    <p className="whitespace-pre-wrap break-words">{message.content}</p>
-                    <p
-                      className={cn(
-                        "mt-1 text-[10px]",
-                        isMine ? "text-white/70" : "text-zinc-400"
-                      )}
-                    >
-                      {formatMessageTime(message.created_at)}
-                    </p>
-                  </div>
-                </div>
-              );
-            })
+            messages.map((message) => (
+              <ChatMessageBubble
+                key={message.message_id}
+                message={message}
+                currentUserId={userId}
+              />
+            ))
           )}
           <div ref={messagesEndRef} />
         </div>

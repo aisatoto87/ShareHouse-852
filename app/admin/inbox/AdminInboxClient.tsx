@@ -3,13 +3,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { ArrowLeft, Loader2, MessageCircle, Send, XCircle } from "lucide-react";
+import { ArrowLeft, Loader2, MessageCircle, Send, Users, XCircle } from "lucide-react";
 import { toast } from "sonner";
 import { closeChatRoomAction } from "@/app/actions/chatActions";
+import ChatMessageBubble from "@/components/chat/ChatMessageBubble";
+import ClientOnlyFormattedTime from "@/components/chat/ClientOnlyFormattedTime";
+import GroupChatMemberBar from "@/components/chat/GroupChatMemberBar";
+import GroupTenantAvatarGroup from "@/components/chat/GroupTenantAvatarGroup";
+import { useMarkChatAsRead } from "@/hooks/useMarkChatAsRead";
+import { useGroupTenantMembersMap } from "@/hooks/useGroupTenantMembers";
 import { useRealtimeChat } from "@/hooks/useRealtimeChat";
+import { formatChatRoomTime } from "@/lib/chat-datetime";
 import { createSupabaseBrowserClient, getBrowserUser } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
-import type { ChatRoomProfile, ChatRoomProperty, ChatRoomRow } from "@/types/chat";
+import type { ChatRoomProfile, ChatRoomProperty, ChatRoomRow, ChatRoomType } from "@/types/chat";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -17,6 +24,26 @@ type AdminInboxClientProps = {
   initialRooms: ChatRoomRow[];
   fetchError: string | null;
 };
+
+const ROOM_SELECT =
+  "room_id, tenant_id, property_id, room_type, match_group_id, status, created_at, updated_at, profiles!tenant_id(display_name, avatar_url, nickname), properties(id, title)";
+
+function resolveRoomType(room: ChatRoomRow): ChatRoomType {
+  return room.room_type === "group" ? "group" : "direct";
+}
+
+function isGroupRoom(room: ChatRoomRow): boolean {
+  return resolveRoomType(room) === "group";
+}
+
+function normalizeRoomRow(row: ChatRoomRow): ChatRoomRow {
+  return {
+    ...row,
+    room_type: resolveRoomType(row),
+    match_group_id:
+      typeof row.match_group_id === "string" ? row.match_group_id : null,
+  };
+}
 
 function pickOne<T>(value: T | T[] | null | undefined): T | null {
   if (value == null) return null;
@@ -48,29 +75,38 @@ function propertyTitle(room: ChatRoomRow): string {
   return "未關聯租盤";
 }
 
-function formatMessageTime(value: string) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  return new Intl.DateTimeFormat("zh-HK", {
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(date);
+function roomListTitle(room: ChatRoomRow): string {
+  if (isGroupRoom(room)) return "配對群組";
+  return profileLabel(pickOne(room.profiles));
 }
 
-function formatRoomTime(value: string) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  return new Intl.DateTimeFormat("zh-HK", {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(date);
+function roomListSubtitle(room: ChatRoomRow): string {
+  if (isGroupRoom(room)) {
+    const property = propertyTitle(room);
+    const groupRef =
+      room.match_group_id != null
+        ? `#${room.match_group_id.slice(0, 8)}`
+        : "群組";
+    return property !== "未關聯租盤" ? `${property} · ${groupRef}` : groupRef;
+  }
+  return propertyTitle(room);
 }
 
-function RoomAvatar({ profile }: { profile: ChatRoomProfile | null }) {
+function RoomAvatar({
+  room,
+  profile,
+}: {
+  room: ChatRoomRow;
+  profile: ChatRoomProfile | null;
+}) {
+  if (isGroupRoom(room)) {
+    return (
+      <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-violet-100 text-violet-700 ring-2 ring-white">
+        <Users className="h-5 w-5" aria-hidden />
+      </div>
+    );
+  }
+
   const avatarUrl = profile?.avatar_url?.trim();
   if (avatarUrl) {
     return (
@@ -102,11 +138,17 @@ function ChatPanel({ room, adminUserId, onRoomClosed }: ChatPanelProps) {
   const profile = pickOne(room.profiles);
   const tenantName = profileLabel(profile);
   const title = propertyTitle(room);
-  const { messages, loading, sending, error, sendMessage } = useRealtimeChat(room.room_id);
+  const groupRoom = isGroupRoom(room);
+  const { messages, loading, sending, error, sendMessage } = useRealtimeChat(
+    room.room_id,
+    { roomType: groupRoom ? "group" : "direct" }
+  );
   const [draft, setDraft] = useState("");
   const [closing, setClosing] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+
+  useMarkChatAsRead(room.room_id, adminUserId, messages, { enabled: true });
 
   useEffect(() => {
     setDraft("");
@@ -148,11 +190,51 @@ function ChatPanel({ room, adminUserId, onRoomClosed }: ChatPanelProps) {
   return (
     <div className="flex h-full min-h-0 flex-1 flex-col bg-[#e5ddd5]/30">
       <header className="flex items-center gap-3 border-b border-zinc-200 bg-white px-4 py-3 shadow-sm sm:px-6">
-        <RoomAvatar profile={profile} />
+        <RoomAvatar room={room} profile={profile} />
         <div className="min-w-0 flex-1">
-          <h2 className="truncate text-base font-semibold text-zinc-900">{tenantName}</h2>
-          <p className="truncate text-xs text-zinc-500">
-            {room.property_id ? (
+          <h2 className="truncate text-base font-semibold text-zinc-900">
+            {groupRoom ? "配對群組" : tenantName}
+          </h2>
+          {groupRoom ? (
+            <GroupChatMemberBar
+                matchGroupId={room.match_group_id}
+                tone="light"
+                size="sm"
+                className="mt-2 overflow-visible"
+              />
+          ) : null}
+          <p className={cn("truncate text-xs text-zinc-500", groupRoom && "mt-1")}>
+            {groupRoom ? (
+              <>
+                {room.match_group_id ? (
+                  <Link
+                    href="/admin/groups"
+                    className="font-medium text-violet-700 hover:underline"
+                  >
+                    查看群組詳情 ↗
+                  </Link>
+                ) : null}
+                {room.match_group_id ? (
+                  <span className="mx-1.5 text-zinc-300">·</span>
+                ) : null}
+                {room.property_id ? (
+                  <Link
+                    href={`/property/${room.property_id}`}
+                    target="_blank"
+                    className="text-[#0f2540] hover:underline"
+                  >
+                    {title} ↗
+                  </Link>
+                ) : (
+                  <span>{title}</span>
+                )}
+                {room.match_group_id ? (
+                  <span className="mt-0.5 block font-mono text-[10px] text-zinc-400">
+                    {room.match_group_id}
+                  </span>
+                ) : null}
+              </>
+            ) : room.property_id ? (
               <Link
                 href={`/property/${room.property_id}`}
                 target="_blank"
@@ -206,37 +288,17 @@ function ChatPanel({ room, adminUserId, onRoomClosed }: ChatPanelProps) {
         ) : messages.length === 0 ? (
           <div className="flex h-full min-h-[200px] flex-col items-center justify-center text-center text-sm text-zinc-500">
             <MessageCircle className="mb-2 h-8 w-8 text-zinc-300" />
-            <p>尚無訊息，向客人打個招呼吧。</p>
+            <p>尚無訊息，{groupRoom ? "向群組成員" : "向客人"}打個招呼吧。</p>
           </div>
         ) : (
-          messages.map((message) => {
-            const isAdmin = message.sender_id === adminUserId;
-            return (
-              <div
-                key={message.message_id}
-                className={cn("flex", isAdmin ? "justify-end" : "justify-start")}
-              >
-                <div
-                  className={cn(
-                    "max-w-[min(85%,28rem)] rounded-2xl px-4 py-2.5 text-sm shadow-sm",
-                    isAdmin
-                      ? "rounded-br-md bg-[#0f2540] text-white"
-                      : "rounded-bl-md bg-white text-zinc-800"
-                  )}
-                >
-                  <p className="whitespace-pre-wrap break-words">{message.content}</p>
-                  <p
-                    className={cn(
-                      "mt-1 text-[10px]",
-                      isAdmin ? "text-white/70" : "text-zinc-400"
-                    )}
-                  >
-                    {formatMessageTime(message.created_at)}
-                  </p>
-                </div>
-              </div>
-            );
-          })
+          messages.map((message) => (
+            <ChatMessageBubble
+              key={message.message_id}
+              message={message}
+              currentUserId={adminUserId}
+              variant={groupRoom ? "group" : "direct"}
+            />
+          ))
         )}
         <div ref={messagesEndRef} />
       </div>
@@ -278,7 +340,9 @@ function ChatPanel({ room, adminUserId, onRoomClosed }: ChatPanelProps) {
 
 export default function AdminInboxClient({ initialRooms, fetchError }: AdminInboxClientProps) {
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
-  const [rooms, setRooms] = useState<ChatRoomRow[]>(initialRooms);
+  const [rooms, setRooms] = useState<ChatRoomRow[]>(() =>
+    initialRooms.map(normalizeRoomRow)
+  );
   const [selectedRoomId, setSelectedRoomId] = useState<string | null>(
     initialRooms[0]?.room_id ?? null
   );
@@ -293,15 +357,13 @@ export default function AdminInboxClient({ initialRooms, fetchError }: AdminInbo
   const refreshActiveRooms = useCallback(async () => {
     const { data } = await supabase
       .from("chat_rooms")
-      .select(
-        "room_id, tenant_id, property_id, status, created_at, updated_at, profiles!tenant_id(display_name, avatar_url, nickname), properties(id, title)"
-      )
+      .select(ROOM_SELECT)
       .eq("status", "active")
       .order("updated_at", { ascending: false });
 
     if (!data) return;
 
-    const next = data as ChatRoomRow[];
+    const next = (data as ChatRoomRow[]).map(normalizeRoomRow);
     setRooms(next);
     setSelectedRoomId((current) => {
       if (current && next.some((room) => room.room_id === current)) return current;
@@ -351,6 +413,16 @@ export default function AdminInboxClient({ initialRooms, fetchError }: AdminInbo
   const selectedRoom = rooms.find((room) => room.room_id === selectedRoomId) ?? null;
   const mobileChatOpen = Boolean(selectedRoomId);
 
+  const groupMatchIds = useMemo(
+    () =>
+      rooms
+        .filter(isGroupRoom)
+        .map((room) => room.match_group_id)
+        .filter((id): id is string => typeof id === "string" && id.length > 0),
+    [rooms]
+  );
+  const { membersByGroupId } = useGroupTenantMembersMap(groupMatchIds);
+
   if (fetchError) {
     return (
       <div className="rounded-2xl border border-red-200 bg-red-50 p-6 text-sm text-red-700">
@@ -385,6 +457,7 @@ export default function AdminInboxClient({ initialRooms, fetchError }: AdminInbo
                 {rooms.map((room) => {
                   const profile = pickOne(room.profiles);
                   const isActive = room.room_id === selectedRoomId;
+                  const groupRoom = isGroupRoom(room);
                   return (
                     <li key={room.room_id}>
                       <button
@@ -395,19 +468,29 @@ export default function AdminInboxClient({ initialRooms, fetchError }: AdminInbo
                           isActive ? "bg-[#0f2540]/8" : "hover:bg-white"
                         )}
                       >
-                        <RoomAvatar profile={profile} />
+                        <RoomAvatar room={room} profile={profile} />
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center justify-between gap-2">
                             <p className="truncate text-sm font-semibold text-zinc-900">
-                              {profileLabel(profile)}
+                              {roomListTitle(room)}
                             </p>
-                            <span className="shrink-0 text-[10px] text-zinc-400">
-                              {formatRoomTime(room.updated_at)}
-                            </span>
+                            <ClientOnlyFormattedTime
+                              value={room.updated_at}
+                              format={formatChatRoomTime}
+                              className="shrink-0 text-[10px] text-zinc-400"
+                            />
                           </div>
                           <p className="mt-0.5 truncate text-xs text-zinc-500">
-                            {propertyTitle(room)}
+                            {roomListSubtitle(room)}
                           </p>
+                          {groupRoom && room.match_group_id ? (
+                            <div className="mt-1.5 overflow-visible">
+                              <GroupTenantAvatarGroup
+                                members={membersByGroupId[room.match_group_id] ?? []}
+                                size="sm"
+                              />
+                            </div>
+                          ) : null}
                           {room.status === "closed" ? (
                             <span className="mt-1 inline-block text-[10px] font-medium text-zinc-400">
                               已結束

@@ -1,9 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { ClipboardCopy, Loader2, Lock, MessageCircle } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { ClipboardCopy, Loader2, Lock, MessageCircle, Users } from "lucide-react";
 import { toast } from "sonner";
+import { getGroupChatRoomId } from "@/app/actions/chatActions";
+import GroupChatPanel from "@/components/chat/GroupChatPanel";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardFooter } from "@/components/ui/card";
 import { isActiveMatchGroupStatus } from "@/lib/intent-group-ui";
 import {
@@ -314,6 +317,10 @@ export default function MatchedTeammates({
   const [teammates, setTeammates] = useState<TeammateProfile[]>([]);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [groupEntityFound, setGroupEntityFound] = useState<boolean | null>(null);
+  const [resolvedGroupId, setResolvedGroupId] = useState<string | null>(null);
+  const [groupChatOpen, setGroupChatOpen] = useState(false);
+  const [groupChatRoomId, setGroupChatRoomId] = useState<string | null>(null);
+  const [groupChatBootstrapping, setGroupChatBootstrapping] = useState(false);
 
   void intentStatus;
   const normalizedGroupStatus = isActiveMatchGroupStatus(groupStatus)
@@ -322,12 +329,35 @@ export default function MatchedTeammates({
   const shouldFetch = normalizedGroupStatus != null;
   const canRevealContact =
     normalizedGroupStatus === "confirmed" || normalizedGroupStatus === "matched";
+  const showGroupChatEntry = normalizedGroupStatus === "confirmed";
+
+  const openGroupChat = useCallback(async () => {
+    if (!resolvedGroupId || groupChatBootstrapping) return;
+
+    setGroupChatBootstrapping(true);
+    try {
+      const result = await getGroupChatRoomId(resolvedGroupId);
+      if (!result.success) {
+        toast.error(result.error);
+        return;
+      }
+      setGroupChatRoomId(result.roomId);
+      setGroupChatOpen(true);
+    } finally {
+      setGroupChatBootstrapping(false);
+    }
+  }, [groupChatBootstrapping, resolvedGroupId]);
+
+  const closeGroupChat = useCallback(() => {
+    setGroupChatOpen(false);
+  }, []);
 
   useEffect(() => {
     if (!shouldFetch || !viewerUserId) {
       setLoading(false);
       setTeammates([]);
       setGroupEntityFound(null);
+      setResolvedGroupId(null);
       return;
     }
 
@@ -338,6 +368,7 @@ export default function MatchedTeammates({
       setFetchError(null);
       setTeammates([]);
       setGroupEntityFound(null);
+      setResolvedGroupId(null);
 
       try {
         const trimmedExpectedGroupId =
@@ -413,8 +444,11 @@ export default function MatchedTeammates({
 
         if (!groupId) {
           setGroupEntityFound(false);
+          setResolvedGroupId(null);
           return;
         }
+
+        setResolvedGroupId(groupId);
 
         const { count: memberCount, error: memberCountErr } = await supabase
           .from("group_members")
@@ -566,9 +600,28 @@ export default function MatchedTeammates({
     >
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <h3 className="text-sm font-bold tracking-tight text-zinc-900">✨ 您的神仙室友</h3>
-        {!canRevealContact ? (
-          <p className="text-[11px] font-medium text-zinc-500">聯絡方式已鎖定 · 齊人後解鎖</p>
-        ) : null}
+        <div className="flex flex-wrap items-center gap-2">
+          {showGroupChatEntry ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={groupChatBootstrapping || !resolvedGroupId}
+              onClick={() => void openGroupChat()}
+              className="h-8 gap-1.5 border-[#0f2540]/20 text-[#0f2540] hover:bg-[#0f2540]/5"
+            >
+              {groupChatBootstrapping ? (
+                <Loader2 className="size-3.5 animate-spin" aria-hidden />
+              ) : (
+                <Users className="size-3.5" aria-hidden />
+              )}
+              群組聊天
+            </Button>
+          ) : null}
+          {!canRevealContact ? (
+            <p className="text-[11px] font-medium text-zinc-500">聯絡方式已鎖定 · 齊人後解鎖</p>
+          ) : null}
+        </div>
       </div>
 
       {loading ? (
@@ -589,6 +642,15 @@ export default function MatchedTeammates({
           ))}
         </ul>
       )}
+
+      <GroupChatPanel
+        isOpen={groupChatOpen}
+        roomId={groupChatRoomId}
+        userId={viewerUserId}
+        groupId={resolvedGroupId}
+        title="室友群組聊天"
+        onClose={closeGroupChat}
+      />
     </section>
   );
 }
