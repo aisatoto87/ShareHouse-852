@@ -37,6 +37,7 @@ import {
   getBrowserSession,
   getBrowserUser,
 } from "@/lib/supabase/client";
+import { ensureGuestProfile, isAnonymousUser } from "@/lib/guest-profile";
 import { cn } from "@/lib/utils";
 import { needsProfileRoleOnboarding } from "@/types/profile";
 
@@ -53,6 +54,7 @@ export default function RoleOnboardingGate() {
 
   const [checking, setChecking] = useState(true);
   const [showWizard, setShowWizard] = useState(false);
+  const [isBanned, setIsBanned] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
   const [step, setStep] = useState(1);
   const [onboardingRole, setOnboardingRole] = useState<"landlord" | "tenant" | null>(null);
@@ -200,6 +202,7 @@ export default function RoleOnboardingGate() {
         setUserId(null);
         midOnboardingWizardRef.current = false;
         setShowWizard(false);
+        setIsBanned(false);
         setChecking(false);
         return;
       }
@@ -208,6 +211,16 @@ export default function RoleOnboardingGate() {
       if (!mounted) return;
       setUserId(uid);
 
+      if (isAnonymousUser(session.user)) {
+        await ensureGuestProfile(supabase, uid);
+        if (!mounted) return;
+        midOnboardingWizardRef.current = false;
+        setShowWizard(false);
+        setIsBanned(false);
+        setChecking(false);
+        return;
+      }
+
       try {
         const { session: latest } = await getBrowserSession(supabase);
         if (!latest?.user?.id || latest.user.id !== uid) {
@@ -215,22 +228,31 @@ export default function RoleOnboardingGate() {
           setUserId(null);
           midOnboardingWizardRef.current = false;
           setShowWizard(false);
+          setIsBanned(false);
           setChecking(false);
           return;
         }
 
-        const first = await supabase.from("profiles").select("role").eq("id", uid).maybeSingle();
+        const first = await supabase
+          .from("profiles")
+          .select("role, account_status")
+          .eq("id", uid)
+          .maybeSingle();
         let profile = first.data;
 
         if (first.error != null || profile == null) {
           const { data: newProfile, error: insertError } = await supabase
             .from("profiles")
             .insert({ id: uid, role: null })
-            .select()
+            .select("role, account_status")
             .single();
 
           if (insertError != null || newProfile == null) {
-            const retry = await supabase.from("profiles").select("role").eq("id", uid).maybeSingle();
+            const retry = await supabase
+              .from("profiles")
+              .select("role, account_status")
+              .eq("id", uid)
+              .maybeSingle();
             if (retry.error != null || retry.data == null) {
               console.error(
                 "[RoleOnboardingGate] profile missing and heal failed",
@@ -261,9 +283,25 @@ export default function RoleOnboardingGate() {
         if (profile.role === "admin") {
           midOnboardingWizardRef.current = false;
           setShowWizard(false);
+          setIsBanned(false);
           setChecking(false);
           return;
         }
+
+        const accountStatus =
+          typeof profile.account_status === "string"
+            ? profile.account_status.trim().toLowerCase()
+            : "active";
+
+        if (accountStatus === "banned") {
+          midOnboardingWizardRef.current = false;
+          setShowWizard(false);
+          setIsBanned(true);
+          setChecking(false);
+          return;
+        }
+
+        setIsBanned(false);
 
         const mustShowRoleOnboarding = needsProfileRoleOnboarding(profile.role);
         if (mustShowRoleOnboarding) {
@@ -417,6 +455,36 @@ export default function RoleOnboardingGate() {
   }
 
   const showOnboarding = Boolean(userId) && !checking && showWizard;
+
+  if (isBanned && userId) {
+    return (
+      <div className="fixed inset-0 z-[100] flex flex-col items-center justify-center bg-zinc-950 px-6 text-center text-white">
+        <div className="max-w-md space-y-5">
+          <p className="text-5xl" aria-hidden>
+            🚫
+          </p>
+          <h1 className="text-2xl font-bold tracking-tight">帳號停權通知</h1>
+          <p className="text-sm leading-relaxed text-zinc-300">
+            您的 ShareHouse 852 帳號因違反平台 Trust &amp; Safety
+            規範已被停權，暫時無法使用配對、訊息或個人中心等功能。如有疑問，請透過官方客服聯絡我們。
+          </p>
+          <Button
+            type="button"
+            variant="outline"
+            className="border-zinc-600 bg-transparent text-white hover:bg-zinc-800"
+            onClick={() => {
+              void supabase.auth.signOut().then(() => {
+                router.replace("/");
+                router.refresh();
+              });
+            }}
+          >
+            登出帳號
+          </Button>
+        </div>
+      </div>
+    );
+  }
 
   if (!showOnboarding) {
     return null;

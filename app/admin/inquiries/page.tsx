@@ -54,31 +54,20 @@ function normalizeStatus(status: string | null) {
   };
 }
 
-function propertyLabel(inquiry: any) {
+function propertyTitle(inquiry: InquiryRow) {
   let title = "未關聯租盤";
-  
-  // 🛡️ 防彈邏輯：無論 Supabase 畀 Array 定 Object 我哋都食得落！
-  const titleText = Array.isArray(inquiry.properties) 
-    ? inquiry.properties[0]?.title 
+
+  const titleText = Array.isArray(inquiry.properties)
+    ? inquiry.properties[0]?.title
     : inquiry.properties?.title;
 
-  // 安全檢查：確保 titleText 真係存在，而且係一段字
   if (titleText && typeof titleText === "string" && titleText.trim()) {
     title = titleText.trim();
   } else if (inquiry.property_id) {
-    // 加個 String() 保障，萬一 id 唔係字串都唔會炒車
     title = `租盤 #${String(inquiry.property_id).slice(0, 8)}`;
   }
 
-  return (
-    <Link 
-      href={`/property/${inquiry.property_id}`} 
-      target="_blank" 
-      className="font-medium text-blue-600 transition-colors hover:text-blue-800 hover:underline"
-    >
-      {title} ↗
-    </Link>
-  );
+  return title;
 }
 export default async function AdminInquiriesPage() {
   // 👇 將呢段靈魂神經線貼喺度！
@@ -183,10 +172,10 @@ export default async function AdminInquiriesPage() {
                               rel="noopener noreferrer"
                               className="font-medium text-[#0f2540] underline-offset-2 hover:underline"
                             >
-                              {propertyLabel(inquiry)}
+                              {propertyTitle(inquiry)} ↗
                             </Link>
                           ) : (
-                            <span className="text-zinc-500">{propertyLabel(inquiry)}</span>
+                            <span className="text-zinc-500">{propertyTitle(inquiry)}</span>
                           )}
                         </td>
                         <td className="max-w-sm px-4 py-4 text-zinc-700">

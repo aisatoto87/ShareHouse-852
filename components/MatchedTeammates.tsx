@@ -1,13 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ClipboardCopy, Loader2, Lock, MessageCircle, Users } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { Loader2, Lock, MessageCircle, Star, Users } from "lucide-react";
 import { toast } from "sonner";
-import { getGroupChatRoomId } from "@/app/actions/chatActions";
+import { getGroupChatRoomId, getOrCreatePeerChatRoomAction } from "@/app/actions/chatActions";
 import GroupChatPanel from "@/components/chat/GroupChatPanel";
+import RoommateReviewModal from "@/components/RoommateReviewModal";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardFooter } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { isActiveMatchGroupStatus } from "@/lib/intent-group-ui";
 import {
   calculateHabitRadarSimilarity,
@@ -16,20 +18,19 @@ import {
 } from "@/lib/matchingAlgorithm";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
+import type { GroupTenantMember } from "@/types/chat";
 
 type TeammateProfile = {
   userId: string;
   displayName: string;
   avatarUrl: string | null;
-  phone: string | null;
-  wechatId: string | null;
   /** SyncNest 習慣雷達契合度；null 時顯示「新室友」 */
   syncNestScore: number | null;
 };
 
-const CONTACT_LOCK_LABEL = "齊人後解鎖聯絡方式";
-const CONTACT_LOCK_TOOLTIP =
-  "當群組滿員並全體確認後，即可解鎖與室友對話";
+const PLATFORM_CHAT_LOCK_LABEL = "齊人後可私聊";
+const PLATFORM_CHAT_LOCK_TOOLTIP =
+  "當群組滿員並全體確認後，即可透過平台與室友私聊";
 
 export type MatchedTeammatesProps = {
   viewerUserId: string;
@@ -55,56 +56,6 @@ function resolveTeammateDisplayName(profile: {
   const nick = typeof profile?.nickname === "string" ? profile.nickname.trim() : "";
   if (nick) return nick;
   return "室友";
-}
-
-function normalizePhone(value: unknown): string | null {
-  const raw = typeof value === "string" ? value.trim() : "";
-  return raw.length > 0 ? raw : null;
-}
-
-function normalizeWechatId(value: unknown): string | null {
-  const raw = typeof value === "string" ? value.trim() : "";
-  return raw.length > 0 ? raw : null;
-}
-
-async function copyWechatId(wechatId: string) {
-  try {
-    await navigator.clipboard.writeText(wechatId);
-    toast.success("已複製 WeChat ID");
-  } catch (e) {
-    console.error("[MatchedTeammates] copy wechat", e);
-    toast.error("複製失敗，請手動選取");
-  }
-}
-
-/** 鎖定狀態下遮蔽尾碼，保留 FOMO 提示（例：+852 9123 ****） */
-function maskPhone(phone: string): string {
-  const trimmed = phone.trim();
-  const digits = trimmed.replace(/\D/g, "");
-  if (digits.length < 4) return "****";
-
-  const visibleTail = digits.slice(-4);
-  const prefixDigits = digits.slice(0, -4);
-
-  if (prefixDigits.startsWith("852") && prefixDigits.length >= 7) {
-    const local = prefixDigits.slice(3);
-    const chunk = local.length >= 4 ? local.slice(0, 4) : local;
-    return `+852 ${chunk} ****`;
-  }
-
-  if (prefixDigits.length >= 4) {
-    return `${prefixDigits.slice(0, 4)} ****`;
-  }
-
-  return `${visibleTail.slice(0, 1)}*** ****`;
-}
-
-function buildTeammateWhatsAppUrl(phone: string, displayName: string): string {
-  const digits = phone.replace(/\D/g, "");
-  const msg = encodeURIComponent(
-    `你好！我們在 ShareHouse 852 已配對成功，我是你的室友，想跟你聯絡一下～（${displayName}）`
-  );
-  return `https://wa.me/${digits}?text=${msg}`;
 }
 
 function avatarInitial(name: string): string {
@@ -189,24 +140,24 @@ function TeammateAvatar({ name, avatarUrl }: { name: string; avatarUrl: string |
   );
 }
 
-function ContactLockButton() {
+function PlatformChatLockButton() {
   return (
     <div className="group/tooltip relative w-full">
       <button
         type="button"
         disabled
-        aria-label={`${CONTACT_LOCK_LABEL}。${CONTACT_LOCK_TOOLTIP}`}
+        aria-label={`${PLATFORM_CHAT_LOCK_LABEL}。${PLATFORM_CHAT_LOCK_TOOLTIP}`}
         className="inline-flex w-full cursor-not-allowed items-center justify-center gap-2 rounded-lg border border-zinc-200/90 bg-zinc-100/80 px-3 py-2.5 text-xs font-semibold text-zinc-400 opacity-80 transition-colors"
       >
         <Lock className="h-3.5 w-3.5 shrink-0" aria-hidden />
         <span aria-hidden>🔒</span>
-        {CONTACT_LOCK_LABEL}
+        {PLATFORM_CHAT_LOCK_LABEL}
       </button>
       <p
         role="tooltip"
         className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-2 w-[min(100%,14rem)] -translate-x-1/2 rounded-md border border-zinc-200 bg-zinc-900 px-2.5 py-1.5 text-center text-[10px] leading-snug text-zinc-100 opacity-0 shadow-lg transition-opacity duration-200 group-hover/tooltip:opacity-100 group-focus-within/tooltip:opacity-100"
       >
-        {CONTACT_LOCK_TOOLTIP}
+        {PLATFORM_CHAT_LOCK_TOOLTIP}
       </p>
     </div>
   );
@@ -214,92 +165,68 @@ function ContactLockButton() {
 
 function TeammateCard({
   mate,
-  canRevealContact,
+  canPlatformChat,
+  canReview,
+  chatLoading,
+  onPlatformChat,
+  onReview,
 }: {
   mate: TeammateProfile;
-  canRevealContact: boolean;
+  canPlatformChat: boolean;
+  canReview: boolean;
+  chatLoading: boolean;
+  onPlatformChat: () => void;
+  onReview: () => void;
 }) {
   return (
     <Card
       className={cn(
-        "flex min-w-0 flex-col overflow-hidden border-zinc-200/90 bg-white shadow-sm",
+        "flex h-full min-w-0 flex-col overflow-hidden border-zinc-200/90 bg-white shadow-sm",
         "transition-all duration-200 hover:-translate-y-0.5 hover:border-zinc-300 hover:shadow-md"
       )}
     >
-      <CardContent className="flex min-w-0 flex-1 flex-col gap-3 p-4">
-        <div className="flex min-w-0 items-start gap-3">
+      <CardContent className="flex min-h-[12rem] min-w-0 flex-1 flex-col items-center gap-3 p-4 text-center">
+        <div className="flex flex-col items-center gap-2">
           <TeammateAvatar name={mate.displayName} avatarUrl={mate.avatarUrl} />
-          <div className="min-w-0 flex-1 space-y-1.5">
-            <p className="truncate text-base font-semibold tracking-tight text-zinc-900">
-              {mate.displayName}
-            </p>
-            <TeammateTrustBadge score={mate.syncNestScore} />
-          </div>
+          <p className="max-w-full truncate text-base font-semibold tracking-tight text-zinc-900">
+            {mate.displayName}
+          </p>
         </div>
 
-        {mate.phone ? (
-          <p className="text-xs text-zinc-600">
-            <span className="font-medium text-zinc-500">電話：</span>
-            {canRevealContact ? (
-              <a
-                href={`tel:${mate.phone.replace(/\s/g, "")}`}
-                className="font-semibold text-[#0f2540] underline-offset-2 hover:underline"
-              >
-                {mate.phone}
-              </a>
-            ) : (
-              <span className="font-mono font-medium tracking-wide text-zinc-400">
-                {maskPhone(mate.phone)}
-              </span>
-            )}
-          </p>
-        ) : null}
+        <TeammateTrustBadge score={mate.syncNestScore} />
 
-        {canRevealContact && mate.wechatId ? (
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-zinc-500">
-            <span>
-              WeChat:{" "}
-              <span className="font-medium text-zinc-700">{mate.wechatId}</span>
-            </span>
-            <button
+        <div className="mt-auto w-full space-y-2 pt-1">
+          {canReview ? (
+            <Button
               type="button"
-              onClick={() => void copyWechatId(mate.wechatId!)}
-              className="inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-700"
-              aria-label={`複製 ${mate.displayName} 的 WeChat ID`}
+              variant="outline"
+              onClick={onReview}
+              className="h-10 w-full gap-2 border-amber-200/80 bg-amber-50/50 text-sm font-semibold text-amber-900 hover:bg-amber-50"
             >
-              <ClipboardCopy className="h-3 w-3 shrink-0" aria-hidden />
-              <span>複製</span>
-            </button>
-          </div>
-        ) : null}
-      </CardContent>
-
-      <CardFooter className="border-t border-zinc-100 bg-zinc-50/50 p-3 pt-0">
-        {canRevealContact ? (
-          mate.phone ? (
-            <a
-              href={buildTeammateWhatsAppUrl(mate.phone, mate.displayName)}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-[#25D366] px-3 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-[#1fb855] hover:shadow-md active:scale-[0.98]"
+              <Star className="h-4 w-4 shrink-0" aria-hidden />
+              評價此室友
+            </Button>
+          ) : null}
+          {canPlatformChat ? (
+            <Button
+              type="button"
+              disabled={chatLoading}
+              onClick={onPlatformChat}
+              className="h-10 w-full gap-2 bg-[#0f2540] text-sm font-semibold text-white shadow-sm hover:bg-[#1a3a5c] active:scale-[0.98]"
             >
-              <MessageCircle className="h-4 w-4 shrink-0" aria-hidden />
+              {chatLoading ? (
+                <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden />
+              ) : (
+                <MessageCircle className="h-4 w-4 shrink-0" aria-hidden />
+              )}
               <span aria-hidden>💬</span>
-              WhatsApp 聯絡室友
-            </a>
-          ) : mate.wechatId ? (
-            <p className="w-full py-2 text-center text-xs text-zinc-500">
-              請使用上方 WeChat ID 聯絡室友
-            </p>
+              平台私聊
+            </Button>
           ) : (
-            <p className="w-full py-2 text-center text-xs text-zinc-500">
-              室友尚未提供聯絡方式
-            </p>
-          )
-        ) : (
-          <ContactLockButton />
-        )}
-      </CardFooter>
+            <PlatformChatLockButton />
+          )}
+        </div>
+      </CardContent>
     </Card>
   );
 }
@@ -312,6 +239,7 @@ export default function MatchedTeammates({
   targetPropertyId = null,
   className,
 }: MatchedTeammatesProps) {
+  const router = useRouter();
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
   const [loading, setLoading] = useState(true);
   const [teammates, setTeammates] = useState<TeammateProfile[]>([]);
@@ -321,14 +249,17 @@ export default function MatchedTeammates({
   const [groupChatOpen, setGroupChatOpen] = useState(false);
   const [groupChatRoomId, setGroupChatRoomId] = useState<string | null>(null);
   const [groupChatBootstrapping, setGroupChatBootstrapping] = useState(false);
+  const [openingPeerChatUserId, setOpeningPeerChatUserId] = useState<string | null>(
+    null
+  );
+  const [reviewTarget, setReviewTarget] = useState<TeammateProfile | null>(null);
 
   void intentStatus;
   const normalizedGroupStatus = isActiveMatchGroupStatus(groupStatus)
     ? groupStatus
     : null;
   const shouldFetch = normalizedGroupStatus != null;
-  const canRevealContact =
-    normalizedGroupStatus === "confirmed" || normalizedGroupStatus === "matched";
+  const canPlatformChat = normalizedGroupStatus === "confirmed";
   const showGroupChatEntry = normalizedGroupStatus === "confirmed";
 
   const openGroupChat = useCallback(async () => {
@@ -351,6 +282,38 @@ export default function MatchedTeammates({
   const closeGroupChat = useCallback(() => {
     setGroupChatOpen(false);
   }, []);
+
+  const handlePeerMemberClick = useCallback(
+    async (member: GroupTenantMember) => {
+      const result = await getOrCreatePeerChatRoomAction(member.id);
+      if (!result.success) {
+        toast.error(result.error);
+        return;
+      }
+      setGroupChatOpen(false);
+      router.push(`/messages?room=${encodeURIComponent(result.roomId)}`);
+    },
+    [router]
+  );
+
+  const handleTeammatePlatformChat = useCallback(
+    async (targetUserId: string) => {
+      if (openingPeerChatUserId) return;
+
+      setOpeningPeerChatUserId(targetUserId);
+      try {
+        const result = await getOrCreatePeerChatRoomAction(targetUserId);
+        if (!result.success) {
+          toast.error(result.error);
+          return;
+        }
+        router.push(`/messages?room=${encodeURIComponent(result.roomId)}`);
+      } finally {
+        setOpeningPeerChatUserId(null);
+      }
+    },
+    [openingPeerChatUserId, router]
+  );
 
   useEffect(() => {
     if (!shouldFetch || !viewerUserId) {
@@ -502,7 +465,7 @@ export default function MatchedTeammates({
         const { data: profileRows, error: profErr } = await supabase
           .from("profiles")
           .select(
-            "id, display_name, nickname, avatar_url, phone, wechat_id, habit_cleanliness, habit_ac_temp, habit_guests, habit_noise"
+            "id, display_name, nickname, avatar_url, habit_cleanliness, habit_ac_temp, habit_guests, habit_noise"
           )
           .in("id", allUserIdsForHabits);
 
@@ -542,8 +505,6 @@ export default function MatchedTeammates({
           const rawAvatar =
             typeof profile?.avatar_url === "string" ? profile.avatar_url.trim() : "";
           const avatarUrl = rawAvatar && isHttpUrl(rawAvatar) ? rawAvatar : null;
-          const phone = normalizePhone(profile?.phone);
-          const wechatId = normalizeWechatId(profile?.wechat_id);
 
           const teammateHabits = habitsById.get(uid) ?? null;
           let syncNestScore: number | null = null;
@@ -556,8 +517,6 @@ export default function MatchedTeammates({
             userId: uid,
             displayName,
             avatarUrl,
-            phone,
-            wechatId,
             syncNestScore,
           };
         });
@@ -618,9 +577,6 @@ export default function MatchedTeammates({
               群組聊天
             </Button>
           ) : null}
-          {!canRevealContact ? (
-            <p className="text-[11px] font-medium text-zinc-500">聯絡方式已鎖定 · 齊人後解鎖</p>
-          ) : null}
         </div>
       </div>
 
@@ -636,12 +592,28 @@ export default function MatchedTeammates({
       ) : (
         <ul className="mt-4 grid grid-cols-1 gap-3 min-[400px]:grid-cols-2 lg:grid-cols-3">
           {teammates.map((mate) => (
-            <li key={mate.userId} className="min-w-0">
-              <TeammateCard mate={mate} canRevealContact={canRevealContact} />
+            <li key={mate.userId} className="flex min-w-0">
+              <TeammateCard
+                mate={mate}
+                canPlatformChat={canPlatformChat}
+                canReview={canPlatformChat}
+                chatLoading={openingPeerChatUserId === mate.userId}
+                onPlatformChat={() => void handleTeammatePlatformChat(mate.userId)}
+                onReview={() => setReviewTarget(mate)}
+              />
             </li>
           ))}
         </ul>
       )}
+
+      <RoommateReviewModal
+        open={reviewTarget != null}
+        onOpenChange={(open) => {
+          if (!open) setReviewTarget(null);
+        }}
+        targetUserId={reviewTarget?.userId ?? null}
+        targetDisplayName={reviewTarget?.displayName ?? "室友"}
+      />
 
       <GroupChatPanel
         isOpen={groupChatOpen}
@@ -650,6 +622,7 @@ export default function MatchedTeammates({
         groupId={resolvedGroupId}
         title="室友群組聊天"
         onClose={closeGroupChat}
+        onPeerMemberClick={(member) => void handlePeerMemberClick(member)}
       />
     </section>
   );

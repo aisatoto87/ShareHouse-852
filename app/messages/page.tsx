@@ -1,9 +1,12 @@
+import { Suspense } from "react";
 import { redirect } from "next/navigation";
 import MessagesPageClient from "@/app/messages/MessagesPageClient";
 import Navbar from "@/components/Navbar";
 import { checkAdminAccessFromProfile } from "@/lib/admin-auth";
+import { resolveRoomType } from "@/lib/chat-room-utils";
+import { canAccessMessagesInbox, isLandlordProfileRole } from "@/lib/user-roles";
 import { createSupabaseServerClient, getServerUser } from "@/lib/supabase/server";
-import type { ChatRoomRow, ChatRoomType } from "@/types/chat";
+import type { ChatRoomRow } from "@/types/chat";
 
 export const dynamic = "force-dynamic";
 
@@ -27,6 +30,20 @@ export default async function MessagesPage() {
     redirect("/admin/inbox");
   }
 
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("role")
+    .eq("id", user.id)
+    .maybeSingle();
+
+  const profileRole = typeof profile?.role === "string" ? profile.role : null;
+
+  if (!canAccessMessagesInbox(profileRole)) {
+    redirect("/dashboard");
+  }
+
+  const isLandlordViewer = isLandlordProfileRole(profileRole);
+
   const { data, error } = await supabase
     .from("chat_rooms")
     .select(ROOM_SELECT)
@@ -37,7 +54,16 @@ export default async function MessagesPage() {
     .filter((row) => row.room_id)
     .map((row) => ({
       ...row,
-      room_type: (row.room_type === "group" ? "group" : "direct") as ChatRoomType,
+      room_type: resolveRoomType({
+        room_type:
+          row.room_type === "group"
+            ? "group"
+            : row.room_type === "peer"
+              ? "peer"
+              : "direct",
+        match_group_id:
+          typeof row.match_group_id === "string" ? row.match_group_id : null,
+      }),
       match_group_id:
         typeof row.match_group_id === "string" ? row.match_group_id : null,
       profiles: null,
@@ -50,15 +76,26 @@ export default async function MessagesPage() {
         <section className="rounded-2xl border border-[#0f2540]/15 bg-white p-6 shadow-sm sm:p-8">
           <h1 className="text-2xl font-bold tracking-tight text-[#0f2540]">💬 我的訊息</h1>
           <p className="mt-2 text-sm text-zinc-500">
-            集中管理與 ShareHouse 管家的客服對話，以及合租群組的室友聊天。
+            {isLandlordViewer
+              ? "集中管理與 ShareHouse 管家的客服對話，以及放盤相關的官方溝通。"
+              : "集中管理與 ShareHouse 管家的客服對話、合租群組聊天，以及室友之間的單對單私聊。"}
           </p>
         </section>
 
-        <MessagesPageClient
-          initialRooms={rooms}
-          userId={user.id}
-          fetchError={error?.message ?? null}
-        />
+        <Suspense
+          fallback={
+            <div className="rounded-2xl border border-zinc-200 bg-white p-8 text-sm text-zinc-500">
+              載入訊息中…
+            </div>
+          }
+        >
+          <MessagesPageClient
+            initialRooms={rooms}
+            userId={user.id}
+            fetchError={error?.message ?? null}
+            viewerRole={profileRole}
+          />
+        </Suspense>
       </main>
     </div>
   );

@@ -2,9 +2,10 @@
 
 import { revalidatePath } from "next/cache";
 import { checkAdminAccessFromProfile } from "@/lib/admin-auth";
+import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { createSupabaseServerClient, getServerUser } from "@/lib/supabase/server";
 
-import type { GroupTenantMember } from "@/types/chat";
+import type { AdminPeerParticipant, GroupTenantMember } from "@/types/chat";
 
 export type GetOrCreateChatRoomResult =
   | { success: true; roomId: string }
@@ -17,12 +18,14 @@ export type MarkMessagesAsReadResult = { success: true } | { success: false; err
 async function findActiveChatRoom(
   supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>,
   tenantId: string,
-  propertyId: string | null
+  propertyId: string | null,
+  roomType: "direct" | "group" | "peer" = "direct"
 ) {
   let query = supabase
     .from("chat_rooms")
     .select("room_id")
     .eq("tenant_id", tenantId)
+    .eq("room_type", roomType)
     .eq("status", "active")
     .order("updated_at", { ascending: false })
     .limit(1);
@@ -46,7 +49,7 @@ export async function getOrCreateChatRoom(
 ): Promise<GetOrCreateChatRoomResult> {
   const { user } = await getServerUser();
   if (!user?.id) {
-    return { success: false, error: "請先登入後再使用站內查詢。" };
+    return { success: false, error: "無法建立對話，請重新開啟客服視窗後再試。" };
   }
 
   const trimmedPropertyId =
@@ -75,6 +78,7 @@ export async function getOrCreateChatRoom(
       tenant_id: user.id,
       property_id: trimmedPropertyId,
       status: "active",
+      room_type: "direct",
     })
     .select("room_id")
     .single();
@@ -100,6 +104,96 @@ export async function getOrCreateChatRoom(
   return {
     success: false,
     error: insertError?.message ?? "無法建立對話室，請稍後再試。",
+  };
+}
+
+/**
+ * Admin 專用：取得或建立與指定租客的官方客服對話（room_type = direct）。
+ * propertyId 可選；未傳則建立／匹配通用客服房（property_id IS NULL）。
+ */
+export async function getOrCreateDirectChatRoomForTenantAction(
+  tenantUserId: string,
+  propertyId?: string | null
+): Promise<GetOrCreateChatRoomResult> {
+  const trimmedTenantId =
+    typeof tenantUserId === "string" ? tenantUserId.trim() : "";
+  if (!trimmedTenantId) {
+    return { success: false, error: "缺少租客 ID。" };
+  }
+
+  const supabase = await createSupabaseServerClient();
+  const { user } = await getServerUser(supabase);
+  const { isAdmin } = await checkAdminAccessFromProfile(supabase as never, user);
+
+  if (!isAdmin) {
+    return { success: false, error: "無權限執行此操作。" };
+  }
+
+  if (user?.id === trimmedTenantId) {
+    return { success: false, error: "無法與自己建立客服對話。" };
+  }
+
+  const trimmedPropertyId =
+    typeof propertyId === "string" && propertyId.trim() !== "" ? propertyId.trim() : null;
+
+  const admin = createSupabaseAdminClient();
+
+  const { data: existing, error: findError } = await findActiveChatRoom(
+    admin as never,
+    trimmedTenantId,
+    trimmedPropertyId,
+    "direct"
+  );
+
+  if (findError) {
+    console.error(
+      "[chatActions/getOrCreateDirectChatRoomForTenantAction] find failed",
+      findError
+    );
+    return { success: false, error: findError.message };
+  }
+
+  if (existing?.room_id) {
+    return { success: true, roomId: existing.room_id };
+  }
+
+  const { data: created, error: insertError } = await admin
+    .from("chat_rooms")
+    .insert({
+      tenant_id: trimmedTenantId,
+      property_id: trimmedPropertyId,
+      status: "active",
+      room_type: "direct",
+    })
+    .select("room_id")
+    .single();
+
+  if (!insertError && created?.room_id) {
+    revalidatePath("/admin/inbox");
+    return { success: true, roomId: created.room_id };
+  }
+
+  if (insertError?.code === "23505") {
+    const { data: raced, error: raceFindError } = await findActiveChatRoom(
+      admin as never,
+      trimmedTenantId,
+      trimmedPropertyId,
+      "direct"
+    );
+
+    if (!raceFindError && raced?.room_id) {
+      revalidatePath("/admin/inbox");
+      return { success: true, roomId: raced.room_id };
+    }
+  }
+
+  console.error(
+    "[chatActions/getOrCreateDirectChatRoomForTenantAction] insert failed",
+    insertError
+  );
+  return {
+    success: false,
+    error: insertError?.message ?? "無法建立客服對話室，請稍後再試。",
   };
 }
 
@@ -249,5 +343,331 @@ export async function markMessagesAsRead(
     return { success: true };
   }
 
+  return { success: true };
+}
+
+const PEER_GROUP_ERROR = "您與該用戶不處於同一個有效配對群組中";
+
+/**
+ * 取得或建立與同群組室友的 peer 單對單私聊室。
+ * 安全檢查：雙方須在相同 status=confirmed 的 match_group 內。
+ */
+export async function getOrCreatePeerChatRoomAction(
+  targetUserId: string
+): Promise<GetOrCreateChatRoomResult> {
+  const trimmedTarget =
+    typeof targetUserId === "string" ? targetUserId.trim() : "";
+  if (!trimmedTarget) {
+    return { success: false, error: "缺少對象用戶 ID。" };
+  }
+
+  const { user } = await getServerUser();
+  if (!user?.id) {
+    return { success: false, error: "請先登入後再私聊室友。" };
+  }
+
+  if (trimmedTarget === user.id) {
+    return { success: false, error: "無法與自己建立私聊。" };
+  }
+
+  const supabase = await createSupabaseServerClient();
+
+  const { data: sharedGroupId, error: groupError } = await supabase.rpc(
+    "users_share_confirmed_match_group",
+    { p_user_a: user.id, p_user_b: trimmedTarget }
+  );
+
+  if (groupError) {
+    console.error(
+      "[chatActions/getOrCreatePeerChatRoomAction] group check failed",
+      groupError
+    );
+    return { success: false, error: groupError.message };
+  }
+
+  if (typeof sharedGroupId !== "string" || sharedGroupId.trim() === "") {
+    return { success: false, error: PEER_GROUP_ERROR };
+  }
+
+  const [userLow, userHigh] =
+    user.id < trimmedTarget
+      ? [user.id, trimmedTarget]
+      : [trimmedTarget, user.id];
+
+  const { data: existing, error: findError } = await supabase
+    .from("chat_rooms")
+    .select("room_id")
+    .eq("room_type", "peer")
+    .eq("status", "active")
+    .eq("peer_user_a", userLow)
+    .eq("peer_user_b", userHigh)
+    .order("created_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+
+  if (findError) {
+    console.error(
+      "[chatActions/getOrCreatePeerChatRoomAction] find failed",
+      findError
+    );
+    return { success: false, error: findError.message };
+  }
+
+  if (existing?.room_id) {
+    return { success: true, roomId: existing.room_id };
+  }
+
+  const { data: created, error: insertError } = await supabase
+    .from("chat_rooms")
+    .insert({
+      tenant_id: user.id,
+      status: "active",
+      room_type: "peer",
+      match_group_id: sharedGroupId,
+      peer_user_a: userLow,
+      peer_user_b: userHigh,
+    })
+    .select("room_id")
+    .single();
+
+  if (!insertError && created?.room_id) {
+    revalidatePath("/messages");
+    return { success: true, roomId: created.room_id };
+  }
+
+  if (insertError?.code === "23505") {
+    const { data: raced, error: raceFindError } = await supabase
+      .from("chat_rooms")
+      .select("room_id")
+      .eq("room_type", "peer")
+      .eq("status", "active")
+      .eq("peer_user_a", userLow)
+      .eq("peer_user_b", userHigh)
+      .order("created_at", { ascending: true })
+      .limit(1)
+      .maybeSingle();
+
+    if (!raceFindError && raced?.room_id) {
+      revalidatePath("/messages");
+      return { success: true, roomId: raced.room_id };
+    }
+  }
+
+  if (
+    insertError?.message?.includes("有效配對群組") ||
+    insertError?.code === "42501"
+  ) {
+    return { success: false, error: PEER_GROUP_ERROR };
+  }
+
+  const { data: rpcRoomId, error: rpcError } = await supabase.rpc(
+    "get_or_create_peer_chat_room",
+    { p_target_user_id: trimmedTarget }
+  );
+
+  if (!rpcError && typeof rpcRoomId === "string" && rpcRoomId.trim() !== "") {
+    revalidatePath("/messages");
+    return { success: true, roomId: rpcRoomId };
+  }
+
+  console.error(
+    "[chatActions/getOrCreatePeerChatRoomAction] create failed",
+    insertError ?? rpcError
+  );
+  return {
+    success: false,
+    error:
+      insertError?.message ??
+      rpcError?.message ??
+      "無法建立私聊室，請稍後再試。",
+  };
+}
+
+export type GetPeerParticipantsForAdminResult =
+  | { success: true; participants: AdminPeerParticipant[] }
+  | { success: false; error: string };
+
+function mapAdminPeerParticipant(row: Record<string, unknown>): AdminPeerParticipant | null {
+  const id = typeof row.id === "string" ? row.id : "";
+  if (!id) return null;
+
+  return {
+    id,
+    display_name: row.display_name != null ? String(row.display_name) : null,
+    nickname: row.nickname != null ? String(row.nickname) : null,
+    phone: row.phone != null ? String(row.phone) : null,
+    wechat_id: row.wechat_id != null ? String(row.wechat_id) : null,
+    avatar_url: row.avatar_url != null ? String(row.avatar_url) : null,
+  };
+}
+
+/** Admin 專用：取得 P2P 私聊雙方租客的真實聯絡資料（繞過 profiles RLS） */
+export async function getPeerParticipantsForAdminAction(options: {
+  roomId?: string;
+  userIds?: string[];
+}): Promise<GetPeerParticipantsForAdminResult> {
+  const supabase = await createSupabaseServerClient();
+  const { user } = await getServerUser(supabase);
+  const { isAdmin } = await checkAdminAccessFromProfile(supabase as never, user);
+
+  if (!isAdmin) {
+    return { success: false, error: "無權限執行此操作。" };
+  }
+
+  let targetUserIds = [...new Set((options.userIds ?? []).map((id) => id.trim()).filter(Boolean))];
+
+  if (targetUserIds.length === 0) {
+    const trimmedRoomId = typeof options.roomId === "string" ? options.roomId.trim() : "";
+    if (!trimmedRoomId) {
+      return { success: false, error: "缺少必要參數。" };
+    }
+
+    const admin = createSupabaseAdminClient();
+    const { data: room, error: roomError } = await admin
+      .from("chat_rooms")
+      .select("room_type, peer_user_a, peer_user_b")
+      .eq("room_id", trimmedRoomId)
+      .maybeSingle();
+
+    if (roomError) {
+      console.error("[chatActions/getPeerParticipantsForAdminAction] room", roomError);
+      return { success: false, error: roomError.message };
+    }
+
+    if (!room || room.room_type !== "peer") {
+      return { success: false, error: "非 P2P 私聊室。" };
+    }
+
+    targetUserIds = [room.peer_user_a, room.peer_user_b].filter(
+      (id): id is string => typeof id === "string" && id.trim() !== ""
+    );
+  }
+
+  if (targetUserIds.length === 0) {
+    return { success: true, participants: [] };
+  }
+
+  const admin = createSupabaseAdminClient();
+  const { data, error } = await admin
+    .from("profiles")
+    .select("id, display_name, nickname, phone, wechat_id, avatar_url")
+    .in("id", targetUserIds);
+
+  if (error) {
+    console.error("[chatActions/getPeerParticipantsForAdminAction] profiles", error);
+    return { success: false, error: error.message };
+  }
+
+  const participants = (data ?? [])
+    .map((row) => mapAdminPeerParticipant(row as Record<string, unknown>))
+    .filter((row): row is AdminPeerParticipant => row != null)
+    .sort((a, b) => a.id.localeCompare(b.id));
+
+  return { success: true, participants };
+}
+
+export type SubmitChatReportResult = { success: true } | { success: false; error: string };
+
+/**
+ * 租客提交 P2P 私聊舉報；寫入 chat_reports 並由 Admin 於收件箱處理。
+ */
+export async function submitChatReport(
+  roomId: string,
+  reportedUserId: string,
+  reason: string
+): Promise<SubmitChatReportResult> {
+  const trimmedRoomId = typeof roomId === "string" ? roomId.trim() : "";
+  const trimmedReported =
+    typeof reportedUserId === "string" ? reportedUserId.trim() : "";
+  const trimmedReason = typeof reason === "string" ? reason.trim() : "";
+
+  if (!trimmedRoomId || !trimmedReported || !trimmedReason) {
+    return { success: false, error: "請填寫完整舉報資訊。" };
+  }
+
+  if (trimmedReason.length > 2000) {
+    return { success: false, error: "舉報原因過長，請精簡後再試。" };
+  }
+
+  const { user } = await getServerUser();
+  if (!user?.id) {
+    return { success: false, error: "請先登入後再提交舉報。" };
+  }
+
+  if (trimmedReported === user.id) {
+    return { success: false, error: "無法舉報自己。" };
+  }
+
+  const supabase = await createSupabaseServerClient();
+
+  const { data: room, error: roomError } = await supabase
+    .from("chat_rooms")
+    .select("room_id, room_type, status")
+    .eq("room_id", trimmedRoomId)
+    .maybeSingle();
+
+  if (roomError) {
+    console.error("[chatActions/submitChatReport] room lookup failed", roomError);
+    return { success: false, error: roomError.message };
+  }
+
+  if (!room || room.room_type !== "peer" || room.status !== "active") {
+    return { success: false, error: "僅能舉報進行中的室友私聊。" };
+  }
+
+  const { data: canAccess, error: accessError } = await supabase.rpc(
+    "can_access_peer_room",
+    { p_room_id: trimmedRoomId }
+  );
+
+  if (accessError) {
+    console.error("[chatActions/submitChatReport] access check failed", accessError);
+    return { success: false, error: accessError.message };
+  }
+
+  if (!canAccess) {
+    return { success: false, error: "您無權限提交此舉報。" };
+  }
+
+  const { data: participants, error: participantsError } = await supabase
+    .from("chat_room_participants")
+    .select("user_id")
+    .eq("room_id", trimmedRoomId);
+
+  if (participantsError) {
+    console.error(
+      "[chatActions/submitChatReport] participants lookup failed",
+      participantsError
+    );
+    return { success: false, error: participantsError.message };
+  }
+
+  const participantIds = new Set(
+    (participants ?? [])
+      .map((row) => (typeof row.user_id === "string" ? row.user_id : ""))
+      .filter(Boolean)
+  );
+
+  if (!participantIds.has(user.id) || !participantIds.has(trimmedReported)) {
+    return {
+      success: false,
+      error: "被舉報人必須為此私聊室的對方室友。",
+    };
+  }
+
+  const { error: insertError } = await supabase.from("chat_reports").insert({
+    reporter_id: user.id,
+    reported_user_id: trimmedReported,
+    room_id: trimmedRoomId,
+    reason: trimmedReason,
+    status: "pending",
+  });
+
+  if (insertError) {
+    console.error("[chatActions/submitChatReport] insert failed", insertError);
+    return { success: false, error: insertError.message };
+  }
+
+  revalidatePath("/admin/inbox");
   return { success: true };
 }

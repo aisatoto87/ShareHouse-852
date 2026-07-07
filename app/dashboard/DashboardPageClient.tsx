@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import HabitDefenseSliders from "@/components/HabitDefenseSliders";
 import MatchedTeammates from "@/components/MatchedTeammates";
 import MatchingOptInPanel from "@/components/MatchingOptInPanel";
+import RoommateReviewsPanel from "@/components/RoommateReviewsPanel";
 import ViewingProgressPanel from "@/components/ViewingProgressPanel";
 import Navbar from "@/components/Navbar";
 import { Badge } from "@/components/ui/badge";
@@ -376,7 +377,7 @@ function intentStatusBadge(
   }
 }
 
-const DASHBOARD_TABS = ["personal", "profile", "intents", "properties"] as const;
+const DASHBOARD_TABS = ["personal", "profile", "reviews", "intents", "properties"] as const;
 type DashboardTab = (typeof DASHBOARD_TABS)[number];
 
 function isDashboardTab(value: string | null): value is DashboardTab {
@@ -396,9 +397,7 @@ export default function DashboardPageClient() {
   const [isSaving, setIsSaving] = useState(false);
   const [isSavingPersonal, setIsSavingPersonal] = useState(false);
   const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
-  const [activeTab, setActiveTab] = useState<"personal" | "profile" | "intents" | "properties">(
-    "personal"
-  );
+  const [activeTab, setActiveTab] = useState<DashboardTab>("personal");
 
   const [email, setEmail] = useState("");
   const [lastNameZh, setLastNameZh] = useState("");
@@ -447,43 +446,19 @@ export default function DashboardPageClient() {
         setUserId(user.id);
         setEmail(typeof user.email === "string" ? user.email : "");
 
-        const [
-          { data: profileData },
-          { data: propertyRows, error: propertyError },
-          { data: myReviews, error: reviewsError },
-        ] = await Promise.all([
-          supabase
-            .from("profiles")
-            .select(
-              "habit_cleanliness, habit_ac_temp, habit_guests, habit_noise, role, last_name_zh, last_name_en, nickname, phone, wechat_id, avatar_url, display_name, is_verified"
-            )
-            .eq("id", user.id)
-            .maybeSingle(),
-          supabase.from("properties").select("*").order("created_at", { ascending: false }),
-          supabase.from("reviews").select("rating").eq("reviewee_id", user.id),
-        ]);
+        const [{ data: profileData }, { data: propertyRows, error: propertyError }] =
+          await Promise.all([
+            supabase
+              .from("profiles")
+              .select(
+                "habit_cleanliness, habit_ac_temp, habit_guests, habit_noise, role, last_name_zh, last_name_en, nickname, phone, wechat_id, avatar_url, display_name, is_verified, community_reputation_score, community_reputation_count"
+              )
+              .eq("id", user.id)
+              .maybeSingle(),
+            supabase.from("properties").select("*").order("created_at", { ascending: false }),
+          ]);
 
         if (cancelled) return;
-
-        if (reviewsError) {
-          console.error("[dashboard] my reviews", reviewsError);
-          setMyRating({ average: 3, count: 0 });
-        } else {
-          const reviewRows = Array.isArray(myReviews) ? myReviews : [];
-          const count = reviewRows.length;
-          if (count === 0) {
-            setMyRating({ average: 3, count: 0 });
-          } else {
-            const sum = reviewRows.reduce(
-              (acc, row) => acc + (typeof row.rating === "number" ? row.rating : Number(row.rating) || 0),
-              0
-            );
-            setMyRating({
-              average: Math.round((sum / count) * 10) / 10,
-              count,
-            });
-          }
-        }
 
         if (propertyError) {
           setProperties([]);
@@ -516,6 +491,23 @@ export default function DashboardPageClient() {
           const av = typeof profileData.avatar_url === "string" ? profileData.avatar_url : "";
           const dn = typeof profileData.display_name === "string" ? profileData.display_name : "";
           const verified = profileData.is_verified === true;
+          const reputationCount =
+            typeof profileData.community_reputation_count === "number"
+              ? profileData.community_reputation_count
+              : Number(profileData.community_reputation_count) || 0;
+          const reputationScore =
+            typeof profileData.community_reputation_score === "number"
+              ? profileData.community_reputation_score
+              : profileData.community_reputation_score != null
+                ? Number(profileData.community_reputation_score)
+                : null;
+          setMyRating({
+            average:
+              reputationCount > 0 && reputationScore != null && Number.isFinite(reputationScore)
+                ? Math.round(reputationScore * 10) / 10
+                : 3,
+            count: reputationCount,
+          });
 
           setLastNameZh(lnZh);
           setLastNameEn(lnEn);
@@ -1045,6 +1037,17 @@ export default function DashboardPageClient() {
             </button>
             <button
               type="button"
+              onClick={() => setActiveTab("reviews")}
+              className={`border-b-2 px-1 pb-3 text-sm font-semibold transition-colors ${
+                activeTab === "reviews"
+                  ? "border-[#0f2540] text-[#0f2540]"
+                  : "border-transparent text-zinc-500 hover:text-zinc-700"
+              }`}
+            >
+              室友評價
+            </button>
+            <button
+              type="button"
               onClick={() => setActiveTab("intents")}
               className={`border-b-2 px-1 pb-3 text-sm font-semibold transition-colors ${
                 activeTab === "intents"
@@ -1410,6 +1413,18 @@ export default function DashboardPageClient() {
                     )}
                   </Button>
                 </div>
+              </div>
+            </>
+          ) : activeTab === "reviews" ? (
+            <>
+              <div className="flex flex-col space-y-1.5 p-6">
+                <h2 className="text-2xl font-semibold leading-none tracking-tight">室友評價</h2>
+                <p className="text-sm text-zinc-500">
+                  查看其他室友給你的評價，了解你在平台上的社群信譽。
+                </p>
+              </div>
+              <div className="space-y-6 p-6 pt-0">
+                <RoommateReviewsPanel />
               </div>
             </>
           ) : activeTab === "intents" ? (

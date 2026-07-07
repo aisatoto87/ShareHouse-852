@@ -30,19 +30,6 @@ export function groupTenantInitials(member: GroupTenantMember): string {
   return label.slice(0, 2).toUpperCase() || "?";
 }
 
-/** 顯示用：可排除當前登入用戶（租客視角只看其他室友） */
-export function filterGroupMembersForDisplay(
-  members: GroupTenantMember[],
-  excludeUserId?: string | null
-): GroupTenantMember[] {
-  const exclude =
-    typeof excludeUserId === "string" && excludeUserId.trim() !== ""
-      ? excludeUserId.trim()
-      : null;
-  if (!exclude) return members;
-  return members.filter((member) => member.id !== exclude);
-}
-
 function mapRpcRow(row: Record<string, unknown>): GroupTenantMember | null {
   const id =
     typeof row.user_id === "string"
@@ -94,16 +81,18 @@ function sortMembers(members: GroupTenantMember[]): GroupTenantMember[] {
 async function fetchGroupTenantMembersViaRpc(
   supabase: SupabaseClient,
   matchGroupId: string
-): Promise<GroupTenantMember[] | null> {
+): Promise<{ members: GroupTenantMember[] | null; error: string | null }> {
   const { data, error } = await supabase.rpc("get_group_tenant_members", {
     p_group_id: matchGroupId,
   });
 
   if (error) {
-    if (error.code !== "PGRST202" && !error.message.includes("get_group_tenant_members")) {
-      console.warn("[fetchGroupTenantMembers] RPC unavailable", error.message);
-    }
-    return null;
+    console.warn("[fetchGroupTenantMembers] RPC error", {
+      groupId: matchGroupId,
+      code: error.code,
+      message: error.message,
+    });
+    return { members: null, error: error.message };
   }
 
   const seen = new Set<string>();
@@ -116,34 +105,49 @@ async function fetchGroupTenantMembersViaRpc(
     members.push(member);
   }
 
-  return sortMembers(members);
+  return { members: sortMembers(members), error: null };
 }
 
 async function fetchGroupTenantMembersDirect(
   supabase: SupabaseClient,
   matchGroupId: string
 ): Promise<GroupTenantMember[]> {
-  const { data, error } = await supabase
-    .from("group_members")
-    .select("user_id, profiles:user_id ( id, display_name, nickname, avatar_url, role )")
-    .eq("group_id", matchGroupId);
+  const selectAttempts = [
+    "user_id, profiles ( id, display_name, nickname, avatar_url, role )",
+    "user_id, profiles:user_id ( id, display_name, nickname, avatar_url, role )",
+  ];
 
-  if (error) {
-    console.error("[fetchGroupTenantMembers] direct query failed", error.message);
-    return [];
+  for (const select of selectAttempts) {
+    const { data, error } = await supabase
+      .from("group_members")
+      .select(select)
+      .eq("group_id", matchGroupId);
+
+    if (error) {
+      console.warn("[fetchGroupTenantMembers] direct query failed", {
+        groupId: matchGroupId,
+        select,
+        message: error.message,
+      });
+      continue;
+    }
+
+    const seen = new Set<string>();
+    const members: GroupTenantMember[] = [];
+
+    for (const row of data ?? []) {
+      const member = parseGroupMemberRow(row as unknown as Record<string, unknown>);
+      if (!member || seen.has(member.id)) continue;
+      seen.add(member.id);
+      members.push(member);
+    }
+
+    if (members.length > 0) {
+      return sortMembers(members);
+    }
   }
 
-  const seen = new Set<string>();
-  const members: GroupTenantMember[] = [];
-
-  for (const row of data ?? []) {
-    const member = parseGroupMemberRow(row as Record<string, unknown>);
-    if (!member || seen.has(member.id)) continue;
-    seen.add(member.id);
-    members.push(member);
-  }
-
-  return sortMembers(members);
+  return [];
 }
 
 /** 依 match_group_id 取得群組內租客成員（優先 RPC 繞過 RLS） */
@@ -155,9 +159,14 @@ export async function fetchGroupTenantMembers(
   if (!groupId) return [];
 
   const viaRpc = await fetchGroupTenantMembersViaRpc(supabase, groupId);
-  if (viaRpc != null) return viaRpc;
+  if (viaRpc.members != null && viaRpc.members.length > 0) {
+    return viaRpc.members;
+  }
 
-  return fetchGroupTenantMembersDirect(supabase, groupId);
+  const direct = await fetchGroupTenantMembersDirect(supabase, groupId);
+  if (direct.length > 0) return direct;
+
+  return viaRpc.members ?? [];
 }
 
 /** 批次取得多個群組的租客成員 */

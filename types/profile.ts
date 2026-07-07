@@ -18,6 +18,7 @@ export function needsProfileRoleOnboarding(role: string | null | undefined): boo
 export type ProfileRow = {
   id: string;
   role: ProfileRole | null;
+  account_status?: string | null;
   display_name: string | null;
   last_name_zh?: string | null;
   last_name_en?: string | null;
@@ -25,4 +26,6 @@ export type ProfileRow = {
   phone?: string | null;
   wechat_id?: string | null;
   avatar_url?: string | null;
+  community_reputation_score?: number | null;
+  community_reputation_count?: number | null;
 };

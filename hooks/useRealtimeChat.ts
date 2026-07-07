@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { RealtimeChannel } from "@supabase/supabase-js";
+import { toast } from "sonner";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import {
   coerceIsRead,
@@ -28,8 +29,21 @@ const MESSAGE_SELECT_BASE =
 
 const MESSAGE_SELECT_WITH_SENDER = `${MESSAGE_SELECT_BASE}, profiles:sender_id ( id, display_name, nickname, avatar_url )`;
 
+function isChatPermissionError(error: { code?: string; message?: string }) {
+  const code = error.code ?? "";
+  const message = (error.message ?? "").toLowerCase();
+  return (
+    code === "42501" ||
+    message.includes("row-level security") ||
+    message.includes("permission denied") ||
+    message.includes("not authorized")
+  );
+}
+
 function messageSelectFor(roomType?: ChatRoomType): string {
-  return roomType === "group" ? MESSAGE_SELECT_WITH_SENDER : MESSAGE_SELECT_BASE;
+  return roomType === "group" || roomType === "peer"
+    ? MESSAGE_SELECT_WITH_SENDER
+    : MESSAGE_SELECT_BASE;
 }
 
 function sortMessages(rows: ChatMessage[]): ChatMessage[] {
@@ -125,7 +139,7 @@ export function useRealtimeChat(
   options?: UseRealtimeChatOptions
 ): UseRealtimeChatResult {
   const roomType = options?.roomType ?? "direct";
-  const isGroupChat = roomType === "group";
+  const isGroupChat = roomType === "group" || roomType === "peer";
   const messageSelect = messageSelectFor(roomType);
 
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
@@ -361,6 +375,9 @@ export function useRealtimeChat(
       setSending(false);
 
       if (insertError) {
+        if (isChatPermissionError(insertError)) {
+          toast.error("您已不在該群組中，無法發送訊息。");
+        }
         setError(insertError.message);
         return false;
       }

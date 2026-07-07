@@ -4,6 +4,7 @@ import { Loader2 } from "lucide-react";
 import GroupTenantAvatarGroup from "@/components/chat/GroupTenantAvatarGroup";
 import { useGroupTenantMembers } from "@/hooks/useGroupTenantMembers";
 import { cn } from "@/lib/utils";
+import type { GroupTenantMember } from "@/types/chat";
 
 type GroupChatMemberBarProps = {
   matchGroupId: string | null | undefined;
@@ -11,9 +12,15 @@ type GroupChatMemberBarProps = {
   size?: "sm" | "md";
   className?: string;
   label?: string;
-  excludeUserId?: string | null;
   maxVisible?: number;
+  currentUserId?: string | null;
+  onMemberClick?: (member: GroupTenantMember) => void;
+  memberClickMode?: "peer" | "admin-direct";
 };
+
+function emptyHintClass(tone: "light" | "dark"): string {
+  return tone === "dark" ? "text-xs text-white/50" : "text-xs text-zinc-400";
+}
 
 export default function GroupChatMemberBar({
   matchGroupId,
@@ -21,10 +28,25 @@ export default function GroupChatMemberBar({
   size = "md",
   className,
   label = "群組室友",
-  excludeUserId,
   maxVisible,
+  currentUserId,
+  onMemberClick,
+  memberClickMode = "peer",
 }: GroupChatMemberBarProps) {
-  const { members, loading } = useGroupTenantMembers(matchGroupId);
+  const resolvedGroupId =
+    typeof matchGroupId === "string" && matchGroupId.trim() !== ""
+      ? matchGroupId.trim()
+      : null;
+
+  const { members, loading } = useGroupTenantMembers(resolvedGroupId);
+
+  if (!resolvedGroupId) {
+    return (
+      <div className={cn("flex flex-col gap-1", className)}>
+        <p className={emptyHintClass(tone)}>缺少群組 ID，無法載入室友</p>
+      </div>
+    );
+  }
 
   if (loading) {
     return (
@@ -48,12 +70,6 @@ export default function GroupChatMemberBar({
     );
   }
 
-  const visibleCount = excludeUserId
-    ? members.filter((member) => member.id !== excludeUserId).length
-    : members.length;
-
-  if (visibleCount === 0) return null;
-
   return (
     <div className={cn("flex min-w-0 flex-col gap-1.5 overflow-visible", className)}>
       <p
@@ -68,8 +84,11 @@ export default function GroupChatMemberBar({
         members={members}
         size={size}
         tone={tone}
-        excludeUserId={excludeUserId}
         maxVisible={maxVisible}
+        emptyHint="尚無成員"
+        currentUserId={currentUserId}
+        onMemberClick={onMemberClick}
+        memberClickMode={memberClickMode}
       />
     </div>
   );

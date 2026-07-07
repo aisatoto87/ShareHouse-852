@@ -1,4 +1,4 @@
-export type ChatRoomType = "direct" | "group";
+export type ChatRoomType = "direct" | "group" | "peer";
 
 export type ChatSenderProfile = {
   id: string;
@@ -45,9 +45,31 @@ export type ChatRoomRow = {
   property_id: string | null;
   room_type: ChatRoomType;
   match_group_id: string | null;
+  peer_user_a?: string | null;
+  peer_user_b?: string | null;
   status: ChatRoomStatus | string;
   created_at: string;
   updated_at: string;
   profiles: ChatRoomProfile | ChatRoomProfile[] | null;
   properties: ChatRoomProperty | ChatRoomProperty[] | null;
+};
+
+/** Admin 監管 P2P 私聊時顯示的租客完整資料 */
+export type AdminPeerParticipant = {
+  id: string;
+  display_name: string | null;
+  nickname: string | null;
+  phone: string | null;
+  wechat_id: string | null;
+  avatar_url: string | null;
+};
+
+export type ChatReportRow = {
+  id: string;
+  reporter_id: string;
+  reported_user_id: string;
+  room_id: string;
+  reason: string;
+  status: string;
+  created_at: string;
 };

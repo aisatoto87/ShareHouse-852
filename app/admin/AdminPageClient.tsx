@@ -7,10 +7,12 @@ import { Loader2, Lock, PlusCircle, RefreshCw, ShieldAlert } from "lucide-react"
 import { toast } from "sonner";
 import Navbar from "@/components/Navbar";
 import AdminCardActions from "@/components/admin/AdminCardActions";
+import { UnreadCountBadge } from "@/components/chat/UnreadCountBadge";
 import PropertyCard from "@/components/PropertyCard";
 import SharedPropertyForm from "@/components/SharedPropertyForm";
 import { propertyRowToInitialData, roomPricesArrayToDbObject } from "@/lib/map-property-row-to-shared-form-initial";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
+import { useUnreadCount } from "@/hooks/useUnreadCount";
 import { mapRowToProperty } from "@/lib/property-mapper";
 import type { Property } from "@/types/property";
 import type { SharedPropertyFormInitialData, SharedPropertyFormSubmitPayload } from "@/types/shared-property-form";
@@ -65,6 +67,10 @@ export default function AdminPageClient() {
   const [editFormKey, setEditFormKey] = useState(0);
 
   const [pendingCount, setPendingCount] = useState(0);
+  const { unreadCount: inboxUnreadCount } = useUnreadCount({
+    enabled: unlocked,
+    scope: "admin",
+  });
   const [showLandlordModal, setShowLandlordModal] = useState(false);
   const [landlords, setLandlords] = useState<LandlordRow[]>([]);
   const [isLoadingLandlords, setIsLoadingLandlords] = useState(false);
@@ -573,9 +579,13 @@ export default function AdminPageClient() {
 
             <Link
               href="/admin/inbox"
-              className="inline-flex items-center justify-center rounded-lg bg-[#0f2540] px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-[#1a3a5c]"
+              className="relative inline-flex items-center justify-center rounded-lg bg-[#0f2540] px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-[#1a3a5c]"
             >
               💬 即時對話收件箱
+              <UnreadCountBadge
+                count={inboxUnreadCount}
+                className="absolute -right-2 -top-2 ring-2 ring-white"
+              />
             </Link>
           </div>
         </div>

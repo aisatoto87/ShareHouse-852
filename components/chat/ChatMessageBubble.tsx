@@ -61,7 +61,7 @@ export default function ChatMessageBubble({
 }: ChatMessageBubbleProps) {
   const isOwnMessage = message.sender_id === currentUserId;
   const showReadReceipt = isOwnMessage && isMessageRead(message);
-  const showGroupSender = variant === "group" && !isOwnMessage;
+  const showGroupSender = (variant === "group" || variant === "peer") && !isOwnMessage;
   const senderLabel = senderDisplayName(message.sender);
 
   const bubble = (

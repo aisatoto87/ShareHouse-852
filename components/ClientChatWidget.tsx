@@ -10,13 +10,13 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { usePathname, useRouter } from "next/navigation";
 import { Loader2, MessageCircle, Send, X } from "lucide-react";
 import { toast } from "sonner";
 import { getOrCreateChatRoom } from "@/app/actions/chatActions";
 import ChatMessageBubble from "@/components/chat/ChatMessageBubble";
 import { useMarkChatAsRead } from "@/hooks/useMarkChatAsRead";
 import { useRealtimeChat } from "@/hooks/useRealtimeChat";
+import { ensureGuestProfile, isAnonymousUser } from "@/lib/guest-profile";
 import { createSupabaseBrowserClient, getBrowserUser } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -44,8 +44,6 @@ type ChatWidgetProviderProps = {
 };
 
 export function ChatWidgetProvider({ children }: ChatWidgetProviderProps) {
-  const router = useRouter();
-  const pathname = usePathname();
   const [isOpen, setIsOpen] = useState(false);
   const [isBootstrapping, setIsBootstrapping] = useState(false);
   const [roomId, setRoomId] = useState<string | null>(null);
@@ -63,13 +61,19 @@ export function ChatWidgetProvider({ children }: ChatWidgetProviderProps) {
 
       try {
         const supabase = createSupabaseBrowserClient();
-        const { user } = await getBrowserUser(supabase);
+        let { user } = await getBrowserUser(supabase);
 
         if (!user?.id) {
-          toast.error("請先登入後再使用站內查詢。");
-          const next = encodeURIComponent(pathname || "/");
-          router.push(`/login?next=${next}`);
-          return;
+          const { data, error: anonError } = await supabase.auth.signInAnonymously();
+          if (anonError || !data.user?.id) {
+            toast.error(anonError?.message ?? "無法啟動客服對話，請稍後再試。");
+            return;
+          }
+          user = data.user;
+        }
+
+        if (isAnonymousUser(user)) {
+          await ensureGuestProfile(supabase, user.id);
         }
 
         setUserId(user.id);
@@ -88,7 +92,7 @@ export function ChatWidgetProvider({ children }: ChatWidgetProviderProps) {
         setIsBootstrapping(false);
       }
     },
-    [pathname, router]
+    []
   );
 
   const closeChat = useCallback(() => {

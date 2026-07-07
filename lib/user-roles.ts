@@ -12,6 +12,21 @@ export function isManagerProfileRole(role: unknown): boolean {
   return r === "admin" || r === "manager";
 }
 
+/** 可使用「我的訊息」收件箱的身分（租客、業主、雙身分） */
+export const MESSAGES_INBOX_ROLES = ["tenant", "landlord", "both"] as const;
+
+export type MessagesInboxRole = (typeof MESSAGES_INBOX_ROLES)[number];
+
+export function canAccessMessagesInbox(profileRole: unknown): boolean {
+  const r = typeof profileRole === "string" ? profileRole.trim().toLowerCase() : "";
+  return (MESSAGES_INBOX_ROLES as readonly string[]).includes(r);
+}
+
+export function isLandlordProfileRole(profileRole: unknown): boolean {
+  const r = typeof profileRole === "string" ? profileRole.trim().toLowerCase() : "";
+  return r === "landlord" || r === "both";
+}
+
 export function hasManagerNavbarAccess(
   user: User | null,
   profileRole: string

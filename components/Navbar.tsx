@@ -9,8 +9,11 @@ import {
   createSupabaseBrowserClient,
   getBrowserSession,
 } from "@/lib/supabase/client";
+import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { hasManagerNavbarAccess } from "@/lib/user-roles";
+import { UnreadCountBadge } from "@/components/chat/UnreadCountBadge";
+import { useUnreadCount } from "@/hooks/useUnreadCount";
+import { hasManagerNavbarAccess, canAccessMessagesInbox } from "@/lib/user-roles";
 
 const navTextLinkClass =
   "inline-flex items-center rounded-full border border-zinc-300 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-100";
@@ -22,6 +25,18 @@ export default function Navbar() {
   const [profileRole, setProfileRole] = useState<string>("");
 
   const showManagerPortal = hasManagerNavbarAccess(user, profileRole);
+  const showMessagesInbox = Boolean(user) && canAccessMessagesInbox(profileRole) && !showManagerPortal;
+
+  const { unreadCount: tenantUnreadCount } = useUnreadCount({
+    enabled: showMessagesInbox,
+    scope: "tenant",
+    userId: user?.id ?? null,
+  });
+  const { unreadCount: adminUnreadCount } = useUnreadCount({
+    enabled: showManagerPortal,
+    scope: "admin",
+    userId: user?.id ?? null,
+  });
 
   useEffect(() => {
     let mounted = true;
@@ -117,14 +132,22 @@ export default function Navbar() {
           </Button>
 
           {user && showManagerPortal ? (
-            <Link href="/admin" className={navTextLinkClass}>
+            <Link href="/admin" className={cn(navTextLinkClass, "relative")}>
               管家後台
+              <UnreadCountBadge
+                count={adminUnreadCount}
+                className="absolute -right-1 -top-1 ring-2 ring-white"
+              />
             </Link>
           ) : null}
 
-          {user && !showManagerPortal ? (
-            <Link href="/messages" className={navTextLinkClass}>
+          {showMessagesInbox ? (
+            <Link href="/messages" className={cn(navTextLinkClass, "relative")}>
               💬 我的訊息
+              <UnreadCountBadge
+                count={tenantUnreadCount}
+                className="absolute -right-1 -top-1 ring-2 ring-white"
+              />
             </Link>
           ) : null}
 
