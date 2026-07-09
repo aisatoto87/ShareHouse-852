@@ -16,6 +16,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -43,6 +44,11 @@ import {
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
 import { cancelHousingIntentAction } from "@/app/actions/intentActions";
+import { getMyCommunityReputation, updateProfileBio } from "@/app/actions/profileActions";
+import {
+  resolveCommunityReputationDisplay,
+  type CommunityReputationDisplay,
+} from "@/lib/community-reputation";
 
 type HabitKey = "habit_cleanliness" | "habit_ac_temp" | "habit_guests" | "habit_noise";
 
@@ -380,6 +386,132 @@ function intentStatusBadge(
 const DASHBOARD_TABS = ["personal", "profile", "reviews", "intents", "properties"] as const;
 type DashboardTab = (typeof DASHBOARD_TABS)[number];
 
+const PROFILE_SELECT_CORE =
+  "habit_cleanliness, habit_ac_temp, habit_guests, habit_noise, role, last_name_zh, last_name_en, nickname, phone, wechat_id, avatar_url, display_name, is_verified";
+
+const PROFILE_SELECT_EXTENDED = `${PROFILE_SELECT_CORE}, bio, community_reputation_score, community_reputation_count`;
+
+function isMissingOptionalProfileColumnError(message: string): boolean {
+  const lower = message.toLowerCase();
+  return (
+    lower.includes("bio") ||
+    lower.includes("community_reputation") ||
+    lower.includes("column") ||
+    lower.includes("schema cache")
+  );
+}
+
+function applyProfileRecordToForm(
+  profileData: Record<string, unknown>,
+  apply: {
+    setHabits: (habits: HabitState) => void;
+    setUserRole: (role: string) => void;
+    setLastNameZh: (value: string) => void;
+    setLastNameEn: (value: string) => void;
+    setNickname: (value: string) => void;
+    setPhone: (value: string) => void;
+    setWechatId: (value: string) => void;
+    setAvatarUrl: (value: string) => void;
+    setBioText: (value: string) => void;
+    setSavedBio: (value: string) => void;
+    setIsVerified: (value: boolean) => void;
+    setMyRating: (value: CommunityReputationDisplay) => void;
+    setSalutationMode: (mode: SalutationMode) => void;
+    setZhHonorificSuffix: (value: string) => void;
+    setEnEnglishTitle: (value: string) => void;
+    setDisplayName: (value: string) => void;
+  }
+) {
+  const nextHabits: HabitState = {
+    habit_cleanliness: clampHabitValue(profileData.habit_cleanliness),
+    habit_ac_temp: clampHabitValue(profileData.habit_ac_temp),
+    habit_guests: clampHabitValue(profileData.habit_guests),
+    habit_noise: clampHabitValue(profileData.habit_noise),
+  };
+  apply.setHabits(nextHabits);
+  apply.setUserRole(
+    typeof profileData.role === "string" && profileData.role.trim()
+      ? profileData.role
+      : "tenant"
+  );
+
+  const lnZh =
+    typeof profileData.last_name_zh === "string" ? profileData.last_name_zh : "";
+  const lnEn =
+    typeof profileData.last_name_en === "string" ? profileData.last_name_en : "";
+  const nn = typeof profileData.nickname === "string" ? profileData.nickname : "";
+  const ph = typeof profileData.phone === "string" ? profileData.phone : "";
+  const wx = typeof profileData.wechat_id === "string" ? profileData.wechat_id : "";
+  const av = typeof profileData.avatar_url === "string" ? profileData.avatar_url : "";
+  const bio = typeof profileData.bio === "string" ? profileData.bio : "";
+  const dn =
+    typeof profileData.display_name === "string" ? profileData.display_name : "";
+  const verified = profileData.is_verified === true;
+  const reputationCount =
+    typeof profileData.community_reputation_count === "number"
+      ? profileData.community_reputation_count
+      : Number(profileData.community_reputation_count) || 0;
+  const reputationScore =
+    typeof profileData.community_reputation_score === "number"
+      ? profileData.community_reputation_score
+      : profileData.community_reputation_score != null
+        ? Number(profileData.community_reputation_score)
+        : null;
+
+  apply.setMyRating(resolveCommunityReputationDisplay(reputationCount, reputationScore));
+  apply.setLastNameZh(lnZh);
+  apply.setLastNameEn(lnEn);
+  apply.setNickname(nn);
+  apply.setPhone(ph);
+  apply.setWechatId(wx);
+  apply.setAvatarUrl(av);
+  apply.setBioText(bio);
+  apply.setSavedBio(bio.trim());
+  apply.setIsVerified(verified);
+
+  const mode = inferSalutationMode(dn, lnZh, lnEn, nn);
+  const zhSuffix = mode === "chinese" ? inferZhSuffix(dn, lnZh) : "先生";
+  const enTitle = mode === "english" ? inferEnTitle(dn, lnEn) : "Mr.";
+  apply.setSalutationMode(mode);
+  if (mode === "chinese") apply.setZhHonorificSuffix(zhSuffix);
+  if (mode === "english") apply.setEnEnglishTitle(enTitle);
+  apply.setDisplayName(
+    dn || assembleDisplayName(mode, lnZh, zhSuffix, lnEn, enTitle, nn)
+  );
+}
+
+function resetProfileFormToEmpty(apply: {
+  setUserRole: (role: string) => void;
+  setLastNameZh: (value: string) => void;
+  setLastNameEn: (value: string) => void;
+  setNickname: (value: string) => void;
+  setPhone: (value: string) => void;
+  setWechatId: (value: string) => void;
+  setAvatarUrl: (value: string) => void;
+  setBioText: (value: string) => void;
+  setSavedBio: (value: string) => void;
+  setIsVerified: (value: boolean) => void;
+  setSalutationMode: (mode: SalutationMode) => void;
+  setZhHonorificSuffix: (value: string) => void;
+  setEnEnglishTitle: (value: string) => void;
+  setDisplayName: (value: string) => void;
+}) {
+  apply.setUserRole("tenant");
+  apply.setLastNameZh("");
+  apply.setLastNameEn("");
+  apply.setNickname("");
+  apply.setPhone("");
+  apply.setWechatId("");
+  apply.setAvatarUrl("");
+  apply.setBioText("");
+  apply.setSavedBio("");
+  apply.setIsVerified(false);
+  apply.setSalutationMode("chinese");
+  apply.setZhHonorificSuffix("先生");
+  apply.setEnEnglishTitle("Mr.");
+  apply.setDisplayName("");
+}
+
 function isDashboardTab(value: string | null): value is DashboardTab {
   return value != null && DASHBOARD_TABS.includes(value as DashboardTab);
 }
@@ -411,7 +543,13 @@ export default function DashboardPageClient() {
   const [salutationMode, setSalutationMode] = useState<SalutationMode>("chinese");
   const [zhHonorificSuffix, setZhHonorificSuffix] = useState<string>("先生");
   const [enEnglishTitle, setEnEnglishTitle] = useState<string>("Mr.");
-  const [myRating, setMyRating] = useState<{ average: number; count: number }>({ average: 3, count: 0 });
+  const [myRating, setMyRating] = useState<CommunityReputationDisplay>(() =>
+    resolveCommunityReputationDisplay(0, null)
+  );
+  const [bioText, setBioText] = useState("");
+  const [isSavingBio, setIsSavingBio] = useState(false);
+  const savedBioRef = useRef("");
+  const profileLoadedRef = useRef(false);
   const [intentRows, setIntentRows] = useState<HousingIntentRow[]>([]);
   const [intentsLoading, setIntentsLoading] = useState(false);
   const [cancellingId, setCancellingId] = useState<string | null>(null);
@@ -446,19 +584,46 @@ export default function DashboardPageClient() {
         setUserId(user.id);
         setEmail(typeof user.email === "string" ? user.email : "");
 
-        const [{ data: profileData }, { data: propertyRows, error: propertyError }] =
+        const [{ data: profileData, error: profileError }, { data: propertyRows, error: propertyError }, reputationResult] =
           await Promise.all([
             supabase
               .from("profiles")
-              .select(
-                "habit_cleanliness, habit_ac_temp, habit_guests, habit_noise, role, last_name_zh, last_name_en, nickname, phone, wechat_id, avatar_url, display_name, is_verified, community_reputation_score, community_reputation_count"
-              )
+              .select(PROFILE_SELECT_EXTENDED)
               .eq("id", user.id)
               .maybeSingle(),
             supabase.from("properties").select("*").order("created_at", { ascending: false }),
+            getMyCommunityReputation(),
           ]);
 
         if (cancelled) return;
+
+        let resolvedProfile =
+          profileData && typeof profileData === "object"
+            ? (profileData as Record<string, unknown>)
+            : null;
+
+        if (profileError) {
+          console.error("[dashboard] profile fetch (extended)", profileError);
+          const message = profileError.message ?? "";
+          if (isMissingOptionalProfileColumnError(message)) {
+            const { data: coreProfile, error: coreError } = await supabase
+              .from("profiles")
+              .select(PROFILE_SELECT_CORE)
+              .eq("id", user.id)
+              .maybeSingle();
+
+            if (cancelled) return;
+
+            if (coreError) {
+              console.error("[dashboard] profile fetch (core)", coreError);
+              toast.error("讀取個人資料失敗，請重新整理頁面。");
+            } else if (coreProfile) {
+              resolvedProfile = coreProfile as Record<string, unknown>;
+            }
+          } else {
+            toast.error("讀取個人資料失敗，請重新整理頁面。");
+          }
+        }
 
         if (propertyError) {
           setProperties([]);
@@ -472,67 +637,37 @@ export default function DashboardPageClient() {
           setProperties(ownProperties);
         }
 
-        if (profileData) {
-          const nextHabits: HabitState = {
-            habit_cleanliness: clampHabitValue(profileData.habit_cleanliness),
-            habit_ac_temp: clampHabitValue(profileData.habit_ac_temp),
-            habit_guests: clampHabitValue(profileData.habit_guests),
-            habit_noise: clampHabitValue(profileData.habit_noise),
-          };
-          setHabits(nextHabits);
-          setUserRole(profileData.role || "tenant");
+        const formApply = {
+          setHabits,
+          setUserRole,
+          setLastNameZh,
+          setLastNameEn,
+          setNickname,
+          setPhone,
+          setWechatId,
+          setAvatarUrl,
+          setBioText,
+          setSavedBio: (value: string) => {
+            savedBioRef.current = value;
+          },
+          setIsVerified,
+          setMyRating,
+          setSalutationMode,
+          setZhHonorificSuffix,
+          setEnEnglishTitle,
+          setDisplayName,
+        };
 
-          const lnZh = typeof profileData.last_name_zh === "string" ? profileData.last_name_zh : "";
-          const lnEn = typeof profileData.last_name_en === "string" ? profileData.last_name_en : "";
-          const nn = typeof profileData.nickname === "string" ? profileData.nickname : "";
-          const ph = typeof profileData.phone === "string" ? profileData.phone : "";
-          const wx =
-            typeof profileData.wechat_id === "string" ? profileData.wechat_id : "";
-          const av = typeof profileData.avatar_url === "string" ? profileData.avatar_url : "";
-          const dn = typeof profileData.display_name === "string" ? profileData.display_name : "";
-          const verified = profileData.is_verified === true;
-          const reputationCount =
-            typeof profileData.community_reputation_count === "number"
-              ? profileData.community_reputation_count
-              : Number(profileData.community_reputation_count) || 0;
-          const reputationScore =
-            typeof profileData.community_reputation_score === "number"
-              ? profileData.community_reputation_score
-              : profileData.community_reputation_score != null
-                ? Number(profileData.community_reputation_score)
-                : null;
-          setMyRating({
-            average:
-              reputationCount > 0 && reputationScore != null && Number.isFinite(reputationScore)
-                ? Math.round(reputationScore * 10) / 10
-                : 3,
-            count: reputationCount,
-          });
+        if (resolvedProfile) {
+          applyProfileRecordToForm(resolvedProfile, formApply);
+          profileLoadedRef.current = true;
+        } else if (!profileError) {
+          resetProfileFormToEmpty(formApply);
+          profileLoadedRef.current = true;
+        }
 
-          setLastNameZh(lnZh);
-          setLastNameEn(lnEn);
-          setNickname(nn);
-          setPhone(ph);
-          setWechatId(wx);
-          setAvatarUrl(av);
-          setIsVerified(verified);
-
-          const mode = inferSalutationMode(dn, lnZh, lnEn, nn);
-          setSalutationMode(mode);
-          if (mode === "chinese") setZhHonorificSuffix(inferZhSuffix(dn, lnZh));
-          if (mode === "english") setEnEnglishTitle(inferEnTitle(dn, lnEn));
-        } else {
-          setUserRole("tenant");
-          setLastNameZh("");
-          setLastNameEn("");
-          setNickname("");
-          setPhone("");
-          setWechatId("");
-          setAvatarUrl("");
-          setIsVerified(false);
-          setSalutationMode("chinese");
-          setZhHonorificSuffix("先生");
-          setEnEnglishTitle("Mr.");
+        if (!cancelled && reputationResult.success) {
+          setMyRating(reputationResult.reputation);
         }
       } catch (error) {
         console.error("[dashboard] fetchProfile:", error);
@@ -954,8 +1089,42 @@ export default function DashboardPageClient() {
     toast.success("頭像已上傳，記得按下方儲存以寫入個人檔案。");
   };
 
+  const handleSaveBio = async () => {
+    if (!userId || isSavingBio) return;
+    if (!profileLoadedRef.current) {
+      toast.error("個人資料尚未載入完成，請稍後再試。");
+      return;
+    }
+
+    const trimmed = bioText.trim();
+    if (trimmed.length > 100) {
+      toast.error("自我介紹最多 100 字。");
+      return;
+    }
+    if (trimmed === savedBioRef.current) return;
+
+    setIsSavingBio(true);
+    const result = await updateProfileBio(trimmed);
+    setIsSavingBio(false);
+
+    if (!result.success) {
+      toast.error(result.error);
+      return;
+    }
+
+    savedBioRef.current = trimmed;
+    setBioText(trimmed);
+    toast.success("自我介紹已更新");
+  };
+
   const handleSavePersonal = async () => {
     if (!userId) return toast.error("請先登入再儲存。");
+    if (!profileLoadedRef.current) {
+      return toast.error("個人資料尚未載入完成，請稍後再試。");
+    }
+    if (isLoading) {
+      return toast.error("個人資料載入中，請稍後再儲存。");
+    }
     const assembled = assembleDisplayName(
       salutationMode,
       lastNameZh,
@@ -1134,11 +1303,62 @@ export default function DashboardPageClient() {
                                 ⭐
                               </span>
                               <span className="text-3xl font-bold tabular-nums tracking-tight text-[#0f2540]">
-                                {myRating.average.toFixed(1)}
+                                {myRating.displayScore.toFixed(1)}
                               </span>
-                              <span className="pb-0.5 text-sm text-zinc-500">
-                                {myRating.count === 0 ? "(新加入)" : `(${myRating.count} 則評價)`}
-                              </span>
+                              <span className="pb-0.5 text-sm text-zinc-500">{myRating.label}</span>
+                            </div>
+                          </div>
+                          <div className="sm:col-span-2">
+                            <Label htmlFor="profile-bio">自我介紹 (讓室友更了解你)</Label>
+                            <div className="relative mt-1.5">
+                              <Textarea
+                                id="profile-bio"
+                                value={bioText}
+                                onChange={(e) => setBioText(e.target.value)}
+                                onBlur={() => void handleSaveBio()}
+                                placeholder="簡單介紹你的生活習慣、興趣或找室友的期望…"
+                                rows={3}
+                                maxLength={100}
+                                disabled={isSavingBio}
+                                className="resize-none border-zinc-200 pr-16 pb-8"
+                              />
+                              <div className="pointer-events-none absolute bottom-2 right-3 flex items-center gap-2">
+                                {isSavingBio ? (
+                                  <Loader2 className="h-3.5 w-3.5 animate-spin text-zinc-400" aria-hidden />
+                                ) : null}
+                                <span
+                                  className={cn(
+                                    "text-xs tabular-nums",
+                                    bioText.length >= 100
+                                      ? "font-semibold text-red-600"
+                                      : bioText.length >= 85
+                                        ? "font-medium text-amber-600"
+                                        : "text-zinc-500"
+                                  )}
+                                  aria-live="polite"
+                                >
+                                  {bioText.length} / 100
+                                </span>
+                              </div>
+                            </div>
+                            <div className="mt-2 flex justify-end">
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                disabled={isSavingBio || bioText.trim() === savedBioRef.current}
+                                onClick={() => void handleSaveBio()}
+                                className="h-8 border-zinc-200 text-xs"
+                              >
+                                {isSavingBio ? (
+                                  <>
+                                    <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                                    儲存中…
+                                  </>
+                                ) : (
+                                  "儲存自我介紹"
+                                )}
+                              </Button>
                             </div>
                           </div>
                           <div className="sm:col-span-2">

@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { computeCommunityReputationFromRatings } from "@/lib/community-reputation";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { createSupabaseServerClient, getServerUser } from "@/lib/supabase/server";
 import type { RoommateReviewWithReviewer } from "@/types/review";
@@ -54,17 +55,8 @@ async function refreshTargetReputation(targetUserId: string): Promise<void> {
       return;
     }
 
-    const ratings = (rows ?? [])
-      .map((row) =>
-        typeof row.rating === "number" ? row.rating : Number(row.rating)
-      )
-      .filter((n) => Number.isFinite(n));
-
-    const count = ratings.length;
-    const average =
-      count > 0
-        ? Math.round((ratings.reduce((sum, n) => sum + n, 0) / count) * 100) / 100
-        : null;
+    const ratings = (rows ?? []).map((row) => row.rating);
+    const { average, count } = computeCommunityReputationFromRatings(ratings);
 
     const { error: updateError } = await admin
       .from("profiles")
@@ -164,7 +156,7 @@ export async function getMyRoommateReviews(): Promise<GetMyRoommateReviewsResult
 
   const { data: reviewRows, error: reviewError } = await supabase
     .from("roommate_reviews")
-    .select("id, reviewer_id, target_user_id, rating, review_text, tags, created_at")
+    .select("*, reviewer:profiles!reviewer_id(display_name, avatar_url, bio)")
     .eq("target_user_id", user.id)
     .order("created_at", { ascending: false });
 
@@ -174,50 +166,24 @@ export async function getMyRoommateReviews(): Promise<GetMyRoommateReviewsResult
   }
 
   const rows = Array.isArray(reviewRows) ? reviewRows : [];
-  const reviewerIds = [
-    ...new Set(
-      rows
-        .map((row) =>
-          typeof row.reviewer_id === "string" ? row.reviewer_id : String(row.reviewer_id ?? "")
-        )
-        .filter(Boolean)
-    ),
-  ];
-
-  const profileById = new Map<string, { display_name: string | null; nickname: string | null; avatar_url: string | null }>();
-
-  if (reviewerIds.length > 0) {
-    const { data: profiles, error: profileError } = await supabase
-      .from("profiles")
-      .select("id, display_name, nickname, avatar_url")
-      .in("id", reviewerIds);
-
-    if (profileError) {
-      console.error("[reviewActions] reviewer profiles", profileError);
-    } else {
-      for (const profile of profiles ?? []) {
-        const id = typeof profile.id === "string" ? profile.id : String(profile.id ?? "");
-        if (!id) continue;
-        profileById.set(id, {
-          display_name:
-            typeof profile.display_name === "string" ? profile.display_name : null,
-          nickname: typeof profile.nickname === "string" ? profile.nickname : null,
-          avatar_url:
-            typeof profile.avatar_url === "string" ? profile.avatar_url : null,
-        });
-      }
-    }
-  }
 
   const reviews: RoommateReviewWithReviewer[] = rows.map((row) => {
     const reviewerId =
       typeof row.reviewer_id === "string" ? row.reviewer_id : String(row.reviewer_id ?? "");
-    const profile = profileById.get(reviewerId) ?? null;
+    const reviewerRaw = row.reviewer as
+      | { display_name?: string | null; avatar_url?: string | null; bio?: string | null }
+      | { display_name?: string | null; avatar_url?: string | null; bio?: string | null }[]
+      | null;
+    const reviewerProfile = Array.isArray(reviewerRaw) ? (reviewerRaw[0] ?? null) : reviewerRaw;
     const rawAvatar =
-      typeof profile?.avatar_url === "string" ? profile.avatar_url.trim() : "";
+      typeof reviewerProfile?.avatar_url === "string" ? reviewerProfile.avatar_url.trim() : "";
     const avatarUrl =
       rawAvatar.startsWith("http://") || rawAvatar.startsWith("https://")
         ? rawAvatar
+        : null;
+    const bio =
+      typeof reviewerProfile?.bio === "string" && reviewerProfile.bio.trim()
+        ? reviewerProfile.bio.trim()
         : null;
 
     return {
@@ -232,12 +198,15 @@ export async function getMyRoommateReviews(): Promise<GetMyRoommateReviewsResult
       review_text:
         typeof row.review_text === "string" ? row.review_text : null,
       tags: Array.isArray(row.tags)
-        ? row.tags.filter((t): t is string => typeof t === "string")
+        ? row.tags.filter((t: unknown): t is string => typeof t === "string")
         : [],
       created_at:
         typeof row.created_at === "string" ? row.created_at : String(row.created_at ?? ""),
-      reviewer_display_name: resolveDisplayName(profile),
-      reviewer_avatar_url: avatarUrl,
+      reviewer: {
+        display_name: resolveDisplayName(reviewerProfile),
+        avatar_url: avatarUrl,
+        bio,
+      },
     };
   });
 

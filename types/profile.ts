@@ -26,6 +26,7 @@ export type ProfileRow = {
   phone?: string | null;
   wechat_id?: string | null;
   avatar_url?: string | null;
+  bio?: string | null;
   community_reputation_score?: number | null;
   community_reputation_count?: number | null;
 };

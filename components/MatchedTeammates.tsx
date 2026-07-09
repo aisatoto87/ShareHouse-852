@@ -16,6 +16,10 @@ import {
   profileRowToUserHabits,
   type UserHabits,
 } from "@/lib/matchingAlgorithm";
+import {
+  resolveCommunityReputationDisplay,
+  type CommunityReputationDisplay,
+} from "@/lib/community-reputation";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
 import type { GroupTenantMember } from "@/types/chat";
@@ -26,7 +30,24 @@ type TeammateProfile = {
   avatarUrl: string | null;
   /** SyncNest 習慣雷達契合度；null 時顯示「新室友」 */
   syncNestScore: number | null;
+  bio: string | null;
+  reputation: CommunityReputationDisplay;
 };
+
+const PROFILE_SELECT_CORE =
+  "id, display_name, nickname, avatar_url, habit_cleanliness, habit_ac_temp, habit_guests, habit_noise";
+
+const PROFILE_SELECT_EXTENDED = `${PROFILE_SELECT_CORE}, bio, community_reputation_score, community_reputation_count`;
+
+function isMissingOptionalProfileColumnError(message: string): boolean {
+  const lower = message.toLowerCase();
+  return (
+    lower.includes("bio") ||
+    lower.includes("community_reputation") ||
+    lower.includes("column") ||
+    lower.includes("schema cache")
+  );
+}
 
 const PLATFORM_CHAT_LOCK_LABEL = "齊人後可私聊";
 const PLATFORM_CHAT_LOCK_TOOLTIP =
@@ -89,6 +110,39 @@ function syncNestBadgeClass(score: number): string {
     return "border-amber-200/80 bg-gradient-to-r from-amber-50 to-orange-50/80 text-amber-900";
   }
   return "border-zinc-200 bg-zinc-100 text-zinc-700";
+}
+
+function TeammateReputationLine({ reputation }: { reputation: CommunityReputationDisplay }) {
+  if (reputation.isNewMember) {
+    return (
+      <p className="w-full text-center text-sm text-gray-500">
+        <span aria-hidden>⭐ </span>
+        3.0 (新加入)
+      </p>
+    );
+  }
+
+  return (
+    <p className="w-full text-center text-sm font-semibold text-amber-500">
+      <span aria-hidden>⭐ </span>
+      {reputation.displayScore.toFixed(1)}
+      <span className="font-normal text-gray-500"> ({reputation.count} 則評價)</span>
+    </p>
+  );
+}
+
+function TeammateBioBlock({ bio }: { bio: string | null }) {
+  const hasBio = typeof bio === "string" && bio.trim().length > 0;
+
+  return (
+    <div className="mb-3 mt-2 w-full rounded-md bg-gray-50 p-2">
+      {hasBio ? (
+        <p className="line-clamp-2 text-xs text-gray-600">{bio}</p>
+      ) : (
+        <p className="text-xs italic text-gray-400">這個室友很神秘，還沒寫自我介紹...</p>
+      )}
+    </div>
+  );
 }
 
 function TeammateTrustBadge({ score }: { score: number | null }) {
@@ -185,15 +239,19 @@ function TeammateCard({
         "transition-all duration-200 hover:-translate-y-0.5 hover:border-zinc-300 hover:shadow-md"
       )}
     >
-      <CardContent className="flex min-h-[12rem] min-w-0 flex-1 flex-col items-center gap-3 p-4 text-center">
-        <div className="flex flex-col items-center gap-2">
+      <CardContent className="flex min-h-[16rem] min-w-0 flex-1 flex-col items-center gap-2 p-4 text-center">
+        <div className="flex w-full flex-col items-center gap-2">
           <TeammateAvatar name={mate.displayName} avatarUrl={mate.avatarUrl} />
-          <p className="max-w-full truncate text-base font-semibold tracking-tight text-zinc-900">
+          <p className="max-w-full truncate text-lg font-bold text-zinc-900">
             {mate.displayName}
           </p>
         </div>
 
+        <TeammateReputationLine reputation={mate.reputation} />
+
         <TeammateTrustBadge score={mate.syncNestScore} />
+
+        <TeammateBioBlock bio={mate.bio} />
 
         <div className="mt-auto w-full space-y-2 pt-1">
           {canReview ? (
@@ -464,64 +522,100 @@ export default function MatchedTeammates({
 
         const { data: profileRows, error: profErr } = await supabase
           .from("profiles")
-          .select(
-            "id, display_name, nickname, avatar_url, habit_cleanliness, habit_ac_temp, habit_guests, habit_noise"
-          )
+          .select(PROFILE_SELECT_EXTENDED)
           .in("id", allUserIdsForHabits);
 
         if (cancelled) return;
         if (profErr) {
-          console.error("[MatchedTeammates] profiles", profErr);
-          setFetchError(profErr.message);
+          console.error("[MatchedTeammates] profiles (extended)", profErr);
+          const message = profErr.message ?? "";
+          if (!isMissingOptionalProfileColumnError(message)) {
+            setFetchError(profErr.message);
+            return;
+          }
+
+          const { data: coreProfileRows, error: coreProfErr } = await supabase
+            .from("profiles")
+            .select(PROFILE_SELECT_CORE)
+            .in("id", allUserIdsForHabits);
+
+          if (cancelled) return;
+          if (coreProfErr) {
+            console.error("[MatchedTeammates] profiles (core)", coreProfErr);
+            setFetchError(coreProfErr.message);
+            return;
+          }
+
+          processProfileRows(coreProfileRows ?? []);
           return;
         }
 
-        const profileById = new Map<string, Record<string, unknown>>();
-        const habitsById = new Map<string, UserHabits>();
-        for (const row of profileRows ?? []) {
-          const r = row as unknown as Record<string, unknown>;
-          const id = typeof r.id === "string" ? r.id : String(r.id ?? "");
-          if (!id) continue;
-          profileById.set(id, r);
-          const habits = profileRowToUserHabits({
-            habit_cleanliness: r.habit_cleanliness,
-            habit_ac_temp: r.habit_ac_temp,
-            habit_guests: r.habit_guests,
-            habit_noise: r.habit_noise,
-          });
-          if (habits) habitsById.set(id, habits);
-        }
+        processProfileRows(profileRows ?? []);
 
-        const viewerHabits = habitsById.get(viewerUserId) ?? null;
-
-        const loaded: TeammateProfile[] = otherUserIds.map((uid) => {
-          const profile = profileById.get(uid) ?? null;
-          const displayName = resolveTeammateDisplayName(
-            profile as {
-              display_name?: string | null;
-              nickname?: string | null;
-            } | null
-          );
-          const rawAvatar =
-            typeof profile?.avatar_url === "string" ? profile.avatar_url.trim() : "";
-          const avatarUrl = rawAvatar && isHttpUrl(rawAvatar) ? rawAvatar : null;
-
-          const teammateHabits = habitsById.get(uid) ?? null;
-          let syncNestScore: number | null = null;
-          if (viewerHabits && teammateHabits) {
-            const score = calculateHabitRadarSimilarity(viewerHabits, teammateHabits);
-            syncNestScore = score > 0 ? score : null;
+        function processProfileRows(rows: unknown[]) {
+          const profileById = new Map<string, Record<string, unknown>>();
+          const habitsById = new Map<string, UserHabits>();
+          for (const row of rows) {
+            const r = row as Record<string, unknown>;
+            const id = typeof r.id === "string" ? r.id : String(r.id ?? "");
+            if (!id) continue;
+            profileById.set(id, r);
+            const habits = profileRowToUserHabits({
+              habit_cleanliness: r.habit_cleanliness,
+              habit_ac_temp: r.habit_ac_temp,
+              habit_guests: r.habit_guests,
+              habit_noise: r.habit_noise,
+            });
+            if (habits) habitsById.set(id, habits);
           }
 
-          return {
-            userId: uid,
-            displayName,
-            avatarUrl,
-            syncNestScore,
-          };
-        });
+          const viewerHabits = habitsById.get(viewerUserId) ?? null;
 
-        if (!cancelled) setTeammates(loaded);
+          const loaded: TeammateProfile[] = otherUserIds.map((uid) => {
+            const profile = profileById.get(uid) ?? null;
+            const displayName = resolveTeammateDisplayName(
+              profile as {
+                display_name?: string | null;
+                nickname?: string | null;
+              } | null
+            );
+            const rawAvatar =
+              typeof profile?.avatar_url === "string" ? profile.avatar_url.trim() : "";
+            const avatarUrl = rawAvatar && isHttpUrl(rawAvatar) ? rawAvatar : null;
+            const bio =
+              typeof profile?.bio === "string" && profile.bio.trim()
+                ? profile.bio.trim()
+                : null;
+            const reputationCount =
+              typeof profile?.community_reputation_count === "number"
+                ? profile.community_reputation_count
+                : Number(profile?.community_reputation_count) || 0;
+            const reputationScore =
+              typeof profile?.community_reputation_score === "number"
+                ? profile.community_reputation_score
+                : profile?.community_reputation_score != null
+                  ? Number(profile.community_reputation_score)
+                  : null;
+
+            const teammateHabits = habitsById.get(uid) ?? null;
+            let syncNestScore: number | null = null;
+            if (viewerHabits && teammateHabits) {
+              const score = calculateHabitRadarSimilarity(viewerHabits, teammateHabits);
+              syncNestScore = score > 0 ? score : null;
+            }
+
+            return {
+              userId: uid,
+              displayName,
+              avatarUrl,
+              syncNestScore,
+              bio,
+              reputation: resolveCommunityReputationDisplay(reputationCount, reputationScore),
+            };
+          });
+
+          if (!cancelled) setTeammates(loaded);
+        }
       } catch (e) {
         console.error("[MatchedTeammates] load", e);
         if (!cancelled) {

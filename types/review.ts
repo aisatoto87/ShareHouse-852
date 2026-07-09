@@ -8,9 +8,14 @@ export type RoommateReviewRow = {
   created_at: string;
 };
 
+export type RoommateReviewReviewer = {
+  display_name: string;
+  avatar_url: string | null;
+  bio: string | null;
+};
+
 export type RoommateReviewWithReviewer = RoommateReviewRow & {
-  reviewer_display_name: string;
-  reviewer_avatar_url: string | null;
+  reviewer: RoommateReviewReviewer;
 };
 
 export const ROOMMATE_REVIEW_TAG_OPTIONS = [

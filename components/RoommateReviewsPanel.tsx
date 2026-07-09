@@ -1,22 +1,18 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Loader2, UserRound } from "lucide-react";
-import { toast } from "sonner";
+import { Loader2, Star, UserRound } from "lucide-react";
 import { getMyRoommateReviews } from "@/app/actions/reviewActions";
-import { Badge } from "@/components/ui/badge";
-import { Card, CardContent } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import type { RoommateReviewWithReviewer } from "@/types/review";
 
 function formatReviewDate(iso: string): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return "";
-  return date.toLocaleDateString("zh-HK", {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-  });
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 function avatarInitial(name: string): string {
@@ -25,73 +21,107 @@ function avatarInitial(name: string): string {
   return [...trimmed][0] ?? "?";
 }
 
+function ReviewerAvatar({
+  name,
+  avatarUrl,
+}: {
+  name: string;
+  avatarUrl: string | null;
+}) {
+  if (avatarUrl) {
+    return (
+      <img
+        src={avatarUrl}
+        alt=""
+        className="h-11 w-11 shrink-0 rounded-full object-cover ring-2 ring-white shadow-sm"
+      />
+    );
+  }
+
+  return (
+    <div
+      className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-[#0f2540] to-[#2d5a87] text-sm font-bold text-white shadow-sm"
+      aria-hidden
+    >
+      {avatarInitial(name)}
+    </div>
+  );
+}
+
 function StarRating({ rating }: { rating: number }) {
   return (
     <div className="flex items-center gap-0.5" aria-label={`${rating} 星評分`}>
       {[1, 2, 3, 4, 5].map((n) => (
-        <span
+        <Star
           key={n}
-          className={cn("text-sm leading-none", n <= rating ? "text-amber-500" : "text-zinc-300")}
+          className={cn(
+            "h-4 w-4",
+            n <= rating ? "fill-amber-400 text-amber-400" : "text-gray-200"
+          )}
           aria-hidden
-        >
-          ★
-        </span>
+        />
       ))}
     </div>
   );
 }
 
-function ReviewCard({ review }: { review: RoommateReviewWithReviewer }) {
+function TagBadge({ tag, index }: { tag: string; index: number }) {
+  const isPink = index % 2 === 1;
   return (
-    <Card className="border-zinc-200/90 bg-white shadow-sm">
-      <CardContent className="flex gap-4 p-4">
-        {review.reviewer_avatar_url ? (
-          <img
-            src={review.reviewer_avatar_url}
-            alt=""
-            className="h-12 w-12 shrink-0 rounded-full object-cover ring-2 ring-white shadow-sm"
-          />
-        ) : (
-          <div
-            className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-[#0f2540] to-[#2d5a87] text-sm font-bold text-white shadow-sm"
-            aria-hidden
-          >
-            {avatarInitial(review.reviewer_display_name)}
-          </div>
-        )}
+    <span
+      className={cn(
+        "mr-2 inline-block rounded-md px-2 py-1 text-xs",
+        isPink ? "bg-pink-50 text-pink-600" : "bg-blue-50 text-blue-600"
+      )}
+    >
+      {tag}
+    </span>
+  );
+}
 
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <p className="font-semibold text-zinc-900">{review.reviewer_display_name}</p>
-            <time className="text-xs text-zinc-500" dateTime={review.created_at}>
-              {formatReviewDate(review.created_at)}
-            </time>
-          </div>
+function ReviewCard({ review }: { review: RoommateReviewWithReviewer }) {
+  const { reviewer } = review;
+  const hasReviewText =
+    typeof review.review_text === "string" && review.review_text.trim().length > 0;
+  const bioText = reviewer.bio?.trim() || "這個室友很神秘，還沒寫自我介紹";
 
-          <div className="mt-1">
-            <StarRating rating={review.rating} />
-          </div>
-
-          {review.tags.length > 0 ? (
-            <div className="mt-2 flex flex-wrap gap-1.5">
-              {review.tags.map((tag) => (
-                <Badge
-                  key={tag}
-                  variant="secondary"
-                  className="border-zinc-200 bg-zinc-50 px-2 py-0 text-[11px] font-medium text-zinc-700"
-                >
-                  {tag}
-                </Badge>
-              ))}
-            </div>
-          ) : null}
-
-          {review.review_text ? (
-            <p className="mt-2 text-sm leading-relaxed text-zinc-700">{review.review_text}</p>
-          ) : null}
+  return (
+    <article className="mb-4 flex flex-col gap-y-3 rounded-xl border border-gray-100 bg-white p-5 shadow-sm">
+      <header className="flex items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <ReviewerAvatar name={reviewer.display_name} avatarUrl={reviewer.avatar_url} />
+          <p className="truncate font-semibold text-gray-900">{reviewer.display_name}</p>
         </div>
-      </CardContent>
-    </Card>
+        <time className="shrink-0 text-sm text-gray-400" dateTime={review.created_at}>
+          {formatReviewDate(review.created_at)}
+        </time>
+      </header>
+
+      <div className="flex flex-col gap-2">
+        <StarRating rating={review.rating} />
+        {review.tags.length > 0 ? (
+          <div className="flex flex-wrap gap-y-1">
+            {review.tags.map((tag, index) => (
+              <TagBadge key={tag} tag={tag} index={index} />
+            ))}
+          </div>
+        ) : null}
+      </div>
+
+      {hasReviewText ? (
+        <p className="text-base font-medium leading-relaxed text-gray-800">{review.review_text}</p>
+      ) : (
+        <p className="text-sm leading-relaxed text-gray-500">
+          （對方僅評分與選擇標籤，未編寫自訂評語）
+        </p>
+      )}
+
+      <footer className="border-t border-gray-100 pt-3">
+        <p className="rounded-md bg-gray-50 p-2 text-xs italic text-gray-400">
+          💬 關於評價者：{bioText}
+        </p>
+      </footer>
+    </article>
   );
 }
 
@@ -160,7 +190,7 @@ export default function RoommateReviewsPanel() {
   }
 
   return (
-    <ul className="space-y-3">
+    <ul className="list-none">
       {reviews.map((review) => (
         <li key={review.id}>
           <ReviewCard review={review} />
