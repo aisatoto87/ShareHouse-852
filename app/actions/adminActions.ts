@@ -4,8 +4,18 @@ import { revalidatePath } from "next/cache";
 import { checkAdminAccessFromProfile } from "@/lib/admin-auth";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { createSupabaseServerClient, getServerUser } from "@/lib/supabase/server";
+import type { ChatReportRow } from "@/types/chat";
 
 export type AdminActionResult = { success: true } | { success: false; error: string };
+
+export type AdminChatReportRow = ChatReportRow & {
+  reporter_label: string;
+  reported_label: string;
+};
+
+export type GetPendingChatReportsForAdminResult =
+  | { success: true; reports: AdminChatReportRow[] }
+  | { success: false; error: string };
 
 async function requireAdmin(): Promise<
   | { ok: true }
@@ -70,7 +80,86 @@ async function resolveReport(reportId: string, status: string): Promise<AdminAct
   }
 
   revalidatePath("/admin/inbox");
+  revalidatePath("/admin/moderation");
   return { success: true };
+}
+
+function resolveProfileLabel(profile: {
+  display_name?: string | null;
+  nickname?: string | null;
+} | null): string {
+  const display =
+    typeof profile?.display_name === "string" ? profile.display_name.trim() : "";
+  if (display) return display;
+  const nick = typeof profile?.nickname === "string" ? profile.nickname.trim() : "";
+  if (nick) return nick;
+  return "用戶";
+}
+
+/** 管家審查中心：待處理聊天舉報列表 */
+export async function getPendingChatReportsForAdmin(): Promise<GetPendingChatReportsForAdminResult> {
+  const auth = await requireAdmin();
+  if (!auth.ok) {
+    return { success: false, error: auth.error };
+  }
+
+  const admin = createSupabaseAdminClient();
+  const { data: rows, error } = await admin
+    .from("chat_reports")
+    .select("id, reporter_id, reported_user_id, room_id, reason, status, created_at")
+    .eq("status", "pending")
+    .order("created_at", { ascending: false });
+
+  if (error) {
+    console.error("[adminActions] getPendingChatReportsForAdmin", error);
+    return { success: false, error: error.message || "讀取舉報失敗。" };
+  }
+
+  const rawRows = Array.isArray(rows) ? rows : [];
+  const userIds = [
+    ...new Set(
+      rawRows.flatMap((row) => {
+        const r = row as Record<string, unknown>;
+        const reporter = typeof r.reporter_id === "string" ? r.reporter_id : "";
+        const reported =
+          typeof r.reported_user_id === "string" ? r.reported_user_id : "";
+        return [reporter, reported].filter(Boolean);
+      })
+    ),
+  ];
+
+  const labelById = new Map<string, string>();
+  if (userIds.length > 0) {
+    const { data: profiles } = await admin
+      .from("profiles")
+      .select("id, display_name, nickname")
+      .in("id", userIds);
+
+    for (const profile of profiles ?? []) {
+      const id = typeof profile.id === "string" ? profile.id : String(profile.id ?? "");
+      if (!id) continue;
+      labelById.set(id, resolveProfileLabel(profile));
+    }
+  }
+
+  const reports: AdminChatReportRow[] = rawRows.map((row) => {
+    const r = row as Record<string, unknown>;
+    const reporterId = String(r.reporter_id ?? "");
+    const reportedId = String(r.reported_user_id ?? "");
+    return {
+      id: String(r.id ?? ""),
+      reporter_id: reporterId,
+      reported_user_id: reportedId,
+      room_id: String(r.room_id ?? ""),
+      reason: String(r.reason ?? ""),
+      status: String(r.status ?? "pending"),
+      created_at: String(r.created_at ?? ""),
+      reporter_label: labelById.get(reporterId) ?? `用戶 ${reporterId.slice(0, 8)}`,
+      reported_label: labelById.get(reportedId) ?? `用戶 ${reportedId.slice(0, 8)}`,
+    };
+  });
+
+  return { success: true, reports };
 }
 
 /** 解散被舉報的 peer 私聊室，並結案舉報 */

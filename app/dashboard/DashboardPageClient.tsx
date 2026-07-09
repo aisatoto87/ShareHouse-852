@@ -7,6 +7,8 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import HabitDefenseSliders from "@/components/HabitDefenseSliders";
 import MatchedTeammates from "@/components/MatchedTeammates";
+import IncomingNudgeBanner from "@/components/IncomingNudgeBanner";
+import SentNudgeVerificationBanner from "@/components/SentNudgeVerificationBanner";
 import MatchingOptInPanel from "@/components/MatchingOptInPanel";
 import RoommateReviewsPanel from "@/components/RoommateReviewsPanel";
 import ViewingProgressPanel from "@/components/ViewingProgressPanel";
@@ -1241,6 +1243,13 @@ export default function DashboardPageClient() {
             )}
           </div>
         </div>
+
+        {userId ? (
+          <>
+            <IncomingNudgeBanner />
+            <SentNudgeVerificationBanner />
+          </>
+        ) : null}
 
         <div className="rounded-xl border border-zinc-200 bg-white text-zinc-950 shadow-sm">
           {activeTab === "personal" ? (

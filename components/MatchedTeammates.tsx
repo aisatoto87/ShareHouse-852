@@ -2,9 +2,10 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Loader2, Lock, MessageCircle, Star, Users } from "lucide-react";
+import { Bell, Loader2, Lock, MessageCircle, Star, Users } from "lucide-react";
 import { toast } from "sonner";
 import { getGroupChatRoomId, getOrCreatePeerChatRoomAction } from "@/app/actions/chatActions";
+import AnonymousNudgeModal from "@/components/AnonymousNudgeModal";
 import GroupChatPanel from "@/components/chat/GroupChatPanel";
 import RoommateReviewModal from "@/components/RoommateReviewModal";
 import { Badge } from "@/components/ui/badge";
@@ -47,6 +48,72 @@ function isMissingOptionalProfileColumnError(message: string): boolean {
     lower.includes("column") ||
     lower.includes("schema cache")
   );
+}
+
+function buildTeammateProfiles(
+  rows: unknown[],
+  viewerUserId: string,
+  otherUserIds: string[]
+): TeammateProfile[] {
+  const profileById = new Map<string, Record<string, unknown>>();
+  const habitsById = new Map<string, UserHabits>();
+
+  for (const row of rows) {
+    const r = row as Record<string, unknown>;
+    const id = typeof r.id === "string" ? r.id : String(r.id ?? "");
+    if (!id) continue;
+    profileById.set(id, r);
+    const habits = profileRowToUserHabits({
+      habit_cleanliness: r.habit_cleanliness,
+      habit_ac_temp: r.habit_ac_temp,
+      habit_guests: r.habit_guests,
+      habit_noise: r.habit_noise,
+    });
+    if (habits) habitsById.set(id, habits);
+  }
+
+  const viewerHabits = habitsById.get(viewerUserId) ?? null;
+
+  return otherUserIds.map((uid) => {
+    const profile = profileById.get(uid) ?? null;
+    const displayName = resolveTeammateDisplayName(
+      profile as {
+        display_name?: string | null;
+        nickname?: string | null;
+      } | null
+    );
+    const rawAvatar =
+      typeof profile?.avatar_url === "string" ? profile.avatar_url.trim() : "";
+    const avatarUrl = rawAvatar && isHttpUrl(rawAvatar) ? rawAvatar : null;
+    const bio =
+      typeof profile?.bio === "string" && profile.bio.trim() ? profile.bio.trim() : null;
+    const reputationCount =
+      typeof profile?.community_reputation_count === "number"
+        ? profile.community_reputation_count
+        : Number(profile?.community_reputation_count) || 0;
+    const reputationScore =
+      typeof profile?.community_reputation_score === "number"
+        ? profile.community_reputation_score
+        : profile?.community_reputation_score != null
+          ? Number(profile.community_reputation_score)
+          : null;
+
+    const teammateHabits = habitsById.get(uid) ?? null;
+    let syncNestScore: number | null = null;
+    if (viewerHabits && teammateHabits) {
+      const score = calculateHabitRadarSimilarity(viewerHabits, teammateHabits);
+      syncNestScore = score > 0 ? score : null;
+    }
+
+    return {
+      userId: uid,
+      displayName,
+      avatarUrl,
+      syncNestScore,
+      bio,
+      reputation: resolveCommunityReputationDisplay(reputationCount, reputationScore),
+    };
+  });
 }
 
 const PLATFORM_CHAT_LOCK_LABEL = "齊人後可私聊";
@@ -134,13 +201,20 @@ function TeammateReputationLine({ reputation }: { reputation: CommunityReputatio
 function TeammateBioBlock({ bio }: { bio: string | null }) {
   const hasBio = typeof bio === "string" && bio.trim().length > 0;
 
-  return (
-    <div className="mb-3 mt-2 w-full rounded-md bg-gray-50 p-2">
-      {hasBio ? (
-        <p className="line-clamp-2 text-xs text-gray-600">{bio}</p>
-      ) : (
+  if (!hasBio) {
+    return (
+      <div className="mb-3 mt-2 w-full text-left">
         <p className="text-xs italic text-gray-400">這個室友很神秘，還沒寫自我介紹...</p>
-      )}
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className="mb-3 mt-2 w-full border-l-2 border-indigo-200 pl-3 ml-1 text-left"
+      title={bio}
+    >
+      <p className="line-clamp-3 text-xs leading-relaxed text-gray-600">{bio}</p>
     </div>
   );
 }
@@ -221,16 +295,20 @@ function TeammateCard({
   mate,
   canPlatformChat,
   canReview,
+  canNudge,
   chatLoading,
   onPlatformChat,
   onReview,
+  onNudge,
 }: {
   mate: TeammateProfile;
   canPlatformChat: boolean;
   canReview: boolean;
+  canNudge: boolean;
   chatLoading: boolean;
   onPlatformChat: () => void;
   onReview: () => void;
+  onNudge: () => void;
 }) {
   return (
     <Card
@@ -254,6 +332,18 @@ function TeammateCard({
         <TeammateBioBlock bio={mate.bio} />
 
         <div className="mt-auto w-full space-y-2 pt-1">
+          {canNudge ? (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={onNudge}
+              className="h-10 w-full gap-2 border-violet-200/80 bg-violet-50/40 text-sm font-semibold text-violet-900 hover:bg-violet-50"
+            >
+              <Bell className="h-4 w-4 shrink-0" aria-hidden />
+              <span aria-hidden>🔔</span>
+              匿名微提醒
+            </Button>
+          ) : null}
           {canReview ? (
             <Button
               type="button"
@@ -311,6 +401,7 @@ export default function MatchedTeammates({
     null
   );
   const [reviewTarget, setReviewTarget] = useState<TeammateProfile | null>(null);
+  const [nudgeTarget, setNudgeTarget] = useState<TeammateProfile | null>(null);
 
   void intentStatus;
   const normalizedGroupStatus = isActiveMatchGroupStatus(groupStatus)
@@ -318,6 +409,7 @@ export default function MatchedTeammates({
     : null;
   const shouldFetch = normalizedGroupStatus != null;
   const canPlatformChat = normalizedGroupStatus === "confirmed";
+  const canNudge = normalizedGroupStatus != null;
   const showGroupChatEntry = normalizedGroupStatus === "confirmed";
 
   const openGroupChat = useCallback(async () => {
@@ -546,75 +638,14 @@ export default function MatchedTeammates({
             return;
           }
 
-          processProfileRows(coreProfileRows ?? []);
+          if (!cancelled) {
+            setTeammates(buildTeammateProfiles(coreProfileRows ?? [], viewerUserId, otherUserIds));
+          }
           return;
         }
 
-        processProfileRows(profileRows ?? []);
-
-        function processProfileRows(rows: unknown[]) {
-          const profileById = new Map<string, Record<string, unknown>>();
-          const habitsById = new Map<string, UserHabits>();
-          for (const row of rows) {
-            const r = row as Record<string, unknown>;
-            const id = typeof r.id === "string" ? r.id : String(r.id ?? "");
-            if (!id) continue;
-            profileById.set(id, r);
-            const habits = profileRowToUserHabits({
-              habit_cleanliness: r.habit_cleanliness,
-              habit_ac_temp: r.habit_ac_temp,
-              habit_guests: r.habit_guests,
-              habit_noise: r.habit_noise,
-            });
-            if (habits) habitsById.set(id, habits);
-          }
-
-          const viewerHabits = habitsById.get(viewerUserId) ?? null;
-
-          const loaded: TeammateProfile[] = otherUserIds.map((uid) => {
-            const profile = profileById.get(uid) ?? null;
-            const displayName = resolveTeammateDisplayName(
-              profile as {
-                display_name?: string | null;
-                nickname?: string | null;
-              } | null
-            );
-            const rawAvatar =
-              typeof profile?.avatar_url === "string" ? profile.avatar_url.trim() : "";
-            const avatarUrl = rawAvatar && isHttpUrl(rawAvatar) ? rawAvatar : null;
-            const bio =
-              typeof profile?.bio === "string" && profile.bio.trim()
-                ? profile.bio.trim()
-                : null;
-            const reputationCount =
-              typeof profile?.community_reputation_count === "number"
-                ? profile.community_reputation_count
-                : Number(profile?.community_reputation_count) || 0;
-            const reputationScore =
-              typeof profile?.community_reputation_score === "number"
-                ? profile.community_reputation_score
-                : profile?.community_reputation_score != null
-                  ? Number(profile.community_reputation_score)
-                  : null;
-
-            const teammateHabits = habitsById.get(uid) ?? null;
-            let syncNestScore: number | null = null;
-            if (viewerHabits && teammateHabits) {
-              const score = calculateHabitRadarSimilarity(viewerHabits, teammateHabits);
-              syncNestScore = score > 0 ? score : null;
-            }
-
-            return {
-              userId: uid,
-              displayName,
-              avatarUrl,
-              syncNestScore,
-              bio,
-              reputation: resolveCommunityReputationDisplay(reputationCount, reputationScore),
-            };
-          });
-
-          if (!cancelled) setTeammates(loaded);
+        if (!cancelled) {
+          setTeammates(buildTeammateProfiles(profileRows ?? [], viewerUserId, otherUserIds));
         }
       } catch (e) {
         console.error("[MatchedTeammates] load", e);
@@ -691,9 +722,11 @@ export default function MatchedTeammates({
                 mate={mate}
                 canPlatformChat={canPlatformChat}
                 canReview={canPlatformChat}
+                canNudge={canNudge}
                 chatLoading={openingPeerChatUserId === mate.userId}
                 onPlatformChat={() => void handleTeammatePlatformChat(mate.userId)}
                 onReview={() => setReviewTarget(mate)}
+                onNudge={() => setNudgeTarget(mate)}
               />
             </li>
           ))}
@@ -707,6 +740,16 @@ export default function MatchedTeammates({
         }}
         targetUserId={reviewTarget?.userId ?? null}
         targetDisplayName={reviewTarget?.displayName ?? "室友"}
+      />
+
+      <AnonymousNudgeModal
+        open={nudgeTarget != null}
+        onOpenChange={(open) => {
+          if (!open) setNudgeTarget(null);
+        }}
+        groupId={resolvedGroupId}
+        targetUserId={nudgeTarget?.userId ?? null}
+        targetDisplayName={nudgeTarget?.displayName ?? "室友"}
       />
 
       <GroupChatPanel

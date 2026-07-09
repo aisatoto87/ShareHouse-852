@@ -5,14 +5,13 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Loader2, Lock, PlusCircle, RefreshCw, ShieldAlert } from "lucide-react";
 import { toast } from "sonner";
-import Navbar from "@/components/Navbar";
 import AdminCardActions from "@/components/admin/AdminCardActions";
 import { UnreadCountBadge } from "@/components/chat/UnreadCountBadge";
 import PropertyCard from "@/components/PropertyCard";
 import SharedPropertyForm from "@/components/SharedPropertyForm";
 import { propertyRowToInitialData, roomPricesArrayToDbObject } from "@/lib/map-property-row-to-shared-form-initial";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
-import { useUnreadCount } from "@/hooks/useUnreadCount";
+import { useAdminPendingCounts } from "@/hooks/useAdminPendingCounts";
 import { mapRowToProperty } from "@/lib/property-mapper";
 import type { Property } from "@/types/property";
 import type { SharedPropertyFormInitialData, SharedPropertyFormSubmitPayload } from "@/types/shared-property-form";
@@ -66,11 +65,7 @@ export default function AdminPageClient() {
   const [editSubmitting, setEditSubmitting] = useState(false);
   const [editFormKey, setEditFormKey] = useState(0);
 
-  const [pendingCount, setPendingCount] = useState(0);
-  const { unreadCount: inboxUnreadCount } = useUnreadCount({
-    enabled: unlocked,
-    scope: "admin",
-  });
+  const { inbox_unread_count, moderation_total_count } = useAdminPendingCounts(unlocked);
   const [showLandlordModal, setShowLandlordModal] = useState(false);
   const [landlords, setLandlords] = useState<LandlordRow[]>([]);
   const [isLoadingLandlords, setIsLoadingLandlords] = useState(false);
@@ -86,27 +81,6 @@ export default function AdminPageClient() {
     if (!unlocked) return;
     void fetchProperties();
   }, [unlocked]);
-
-  useEffect(() => {
-    if (!unlocked) return;
-
-    let active = true;
-    const fetchPendingInquiries = async () => {
-      const { data, error } = await supabase.from("inquiries").select("status");
-      if (!active) return;
-      if (error) {
-        setPendingCount(0);
-        return;
-      }
-      const count = (data ?? []).filter((item) => ((item.status as string | null) || "").toLowerCase() === "pending").length;
-      setPendingCount(count);
-    };
-
-    void fetchPendingInquiries();
-    return () => {
-      active = false;
-    };
-  }, [supabase, unlocked]);
 
   useEffect(() => {
     if (!showLandlordModal) return;
@@ -499,10 +473,8 @@ export default function AdminPageClient() {
 
   if (!unlocked) {
     return (
-      <div className="min-h-screen bg-zinc-50">
-        <Navbar />
-        <main className="mx-auto flex max-w-md items-center px-4 py-16 sm:px-6">
-          <Card className="w-full border-zinc-200 shadow-sm">
+      <div className="mx-auto flex max-w-md justify-center py-8">
+        <Card className="w-full border-zinc-200 shadow-sm">
             <CardContent className="space-y-4 p-6">
               <h1 className="flex items-center gap-2 text-lg font-semibold text-[#0f2540]">
                 <Lock className="h-5 w-5" />
@@ -527,15 +499,12 @@ export default function AdminPageClient() {
               </Button>
             </CardContent>
           </Card>
-        </main>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-zinc-50">
-      <Navbar />
-      <main className="mx-auto max-w-6xl space-y-8 px-4 py-8 sm:px-6 sm:py-10">
+    <div className="mx-auto max-w-6xl space-y-8">
         <div className="mb-8 flex flex-col items-start justify-between gap-4 border-b border-zinc-200 pb-6 sm:flex-row sm:items-center">
           <div>
             <h1 className="text-3xl font-bold tracking-tight text-zinc-900">管家總指揮部</h1>
@@ -566,15 +535,14 @@ export default function AdminPageClient() {
             </Link>
 
             <Link
-              href="/admin/inquiries"
-              className="relative inline-flex items-center justify-center rounded-lg border border-[#0f2540]/30 bg-[#0f2540]/5 px-4 py-2 text-sm font-semibold text-[#0f2540] transition-colors hover:bg-[#0f2540]/10"
+              href="/admin/moderation"
+              className="relative inline-flex items-center justify-center rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm font-semibold text-red-800 transition-colors hover:bg-red-100"
             >
-              📋 查詢表格
-              {pendingCount > 0 && (
-                <span className="absolute -right-2 -top-2 flex h-5 w-5 items-center justify-center rounded-full bg-red-500 text-[10px] font-bold text-white shadow-sm ring-2 ring-white">
-                  {pendingCount}
-                </span>
-              )}
+              🛡️ 投訴與審查中心
+              <UnreadCountBadge
+                count={moderation_total_count}
+                className="absolute -right-2 -top-2 ring-2 ring-red-50"
+              />
             </Link>
 
             <Link
@@ -583,7 +551,7 @@ export default function AdminPageClient() {
             >
               💬 即時對話收件箱
               <UnreadCountBadge
-                count={inboxUnreadCount}
+                count={inbox_unread_count}
                 className="absolute -right-2 -top-2 ring-2 ring-white"
               />
             </Link>
@@ -733,7 +701,6 @@ export default function AdminPageClient() {
             </div>
           )}
         </section>
-      </main>
       <Dialog open={showLandlordModal} onOpenChange={setShowLandlordModal}>
         <DialogContent className="max-h-[85vh] max-w-4xl overflow-hidden p-0">
           <DialogHeader className="border-b border-zinc-200 p-5">

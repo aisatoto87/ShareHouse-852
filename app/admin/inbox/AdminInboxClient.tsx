@@ -6,11 +6,10 @@ import Link from "next/link";
 import { ArrowLeft, Eye, Loader2, MessageCircle, Send, Users, XCircle } from "lucide-react";
 import { toast } from "sonner";
 import {
-  banReportedUser,
-  disbandReportedChatRoom,
-  dismissChatReport,
-} from "@/app/actions/adminActions";
-import { closeChatRoomAction, getOrCreateDirectChatRoomForTenantAction, getPeerParticipantsForAdminAction } from "@/app/actions/chatActions";
+  closeChatRoomAction,
+  getOrCreateDirectChatRoomForTenantAction,
+  getPeerParticipantsForAdminAction,
+} from "@/app/actions/chatActions";
 import ChatMessageBubble from "@/components/chat/ChatMessageBubble";
 import ClientOnlyFormattedTime from "@/components/chat/ClientOnlyFormattedTime";
 import GroupChatMemberBar from "@/components/chat/GroupChatMemberBar";
@@ -32,26 +31,18 @@ import { createSupabaseBrowserClient, getBrowserUser } from "@/lib/supabase/clie
 import { cn } from "@/lib/utils";
 import type {
   AdminPeerParticipant,
-  ChatReportRow,
   ChatRoomProfile,
   ChatRoomProperty,
   ChatRoomRow,
   GroupTenantMember,
 } from "@/types/chat";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 
 type AdminInboxClientProps = {
   initialRooms: ChatRoomRow[];
   fetchError: string | null;
-  initialPendingReportRoomIds?: string[];
+  initialRoomId?: string | null;
 };
 
 const ROOM_SELECT =
@@ -160,7 +151,6 @@ function RoomListItem({
   onSelect,
   peerParticipantsById,
   membersByGroupId,
-  pendingReportRoomIds,
   roomUnreadCount = 0,
 }: {
   room: ChatRoomRow;
@@ -168,7 +158,6 @@ function RoomListItem({
   onSelect: (roomId: string) => void;
   peerParticipantsById: Record<string, AdminPeerParticipant>;
   membersByGroupId: Record<string, GroupTenantMember[]>;
-  pendingReportRoomIds: Set<string>;
   roomUnreadCount?: number;
 }) {
   const profile = pickOne(room.profiles);
@@ -223,12 +212,6 @@ function RoomListItem({
               <span className="inline-block rounded-full bg-zinc-700 px-2 py-0.5 text-[10px] font-medium text-white">
                 私聊監管
               </span>
-              {pendingReportRoomIds.has(room.room_id) ? (
-                <span className="inline-flex items-center gap-0.5 rounded-full bg-red-600 px-2 py-0.5 text-[10px] font-bold text-white shadow-sm">
-                  <span aria-hidden>🚨</span>
-                  待處理舉報
-                </span>
-              ) : null}
             </div>
           ) : groupRoom ? (
             <div className="mt-1.5 overflow-visible">
@@ -418,73 +401,6 @@ function PeerAdminHeader({
   );
 }
 
-function PeerReportModerationBanner({
-  report,
-  reportedLabel,
-  extraPendingCount,
-  acting,
-  onDisband,
-  onBan,
-  onDismiss,
-}: {
-  report: ChatReportRow;
-  reportedLabel: string;
-  extraPendingCount: number;
-  acting: boolean;
-  onDisband: () => void;
-  onBan: () => void;
-  onDismiss: () => void;
-}) {
-  return (
-    <div className="mb-2 rounded-xl border-2 border-red-300 bg-red-50 px-4 py-3 shadow-sm">
-      <p className="text-sm font-semibold text-red-900">
-        <span aria-hidden>🚨</span> 此對話包含未處理的舉報紀錄
-      </p>
-      <p className="mt-1.5 text-xs leading-relaxed text-red-800">
-        舉報原因：<span className="font-medium">{report.reason}</span>
-      </p>
-      <p className="mt-1 text-[11px] text-red-700">被舉報人：{reportedLabel}</p>
-      {extraPendingCount > 0 ? (
-        <p className="mt-1 text-[11px] font-medium text-red-700">
-          另有 {extraPendingCount} 筆待處理舉報
-        </p>
-      ) : null}
-      <div className="mt-3 flex flex-wrap gap-2">
-        <Button
-          type="button"
-          size="sm"
-          disabled={acting}
-          onClick={onDisband}
-          className="h-8 bg-red-700 text-white hover:bg-red-800"
-        >
-          {acting ? <Loader2 className="mr-1 size-3.5 animate-spin" /> : null}
-          終止此私聊
-        </Button>
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          disabled={acting}
-          onClick={onBan}
-          className="h-8 border-red-300 text-red-700 hover:bg-red-100"
-        >
-          封鎖涉事用戶
-        </Button>
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          disabled={acting}
-          onClick={onDismiss}
-          className="h-8 border-zinc-300 text-zinc-700 hover:bg-zinc-100"
-        >
-          無異常，結案
-        </Button>
-      </div>
-    </div>
-  );
-}
-
 type ChatPanelProps = {
   room: ChatRoomRow;
   adminUserId: string;
@@ -492,7 +408,6 @@ type ChatPanelProps = {
   onTenantMemberClick?: (member: GroupTenantMember) => void;
   onPeerTenantContact?: (participant: AdminPeerParticipant) => void;
   openingTenantDirectChatUserId?: string | null;
-  onReportResolved?: () => void;
 };
 
 function ChatPanel({
@@ -502,9 +417,7 @@ function ChatPanel({
   onTenantMemberClick,
   onPeerTenantContact,
   openingTenantDirectChatUserId = null,
-  onReportResolved,
 }: ChatPanelProps) {
-  const supabase = useMemo(() => createSupabaseBrowserClient(), []);
   const profile = pickOne(room.profiles);
   const tenantName = profileLabel(profile);
   const title = propertyTitle(room);
@@ -519,9 +432,6 @@ function ChatPanel({
   const [closing, setClosing] = useState(false);
   const [peerParticipants, setPeerParticipants] = useState<AdminPeerParticipant[]>([]);
   const [peerParticipantsLoading, setPeerParticipantsLoading] = useState(false);
-  const [pendingReports, setPendingReports] = useState<ChatReportRow[]>([]);
-  const [moderationActing, setModerationActing] = useState(false);
-  const [banConfirmReport, setBanConfirmReport] = useState<ChatReportRow | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
@@ -555,134 +465,6 @@ function ChatPanel({
       active = false;
     };
   }, [peerRoom, room.room_id]);
-
-  const loadPendingReports = useCallback(async () => {
-    if (!peerRoom) {
-      setPendingReports([]);
-      return;
-    }
-
-    const { data, error } = await supabase
-      .from("chat_reports")
-      .select("id, reporter_id, reported_user_id, room_id, reason, status, created_at")
-      .eq("room_id", room.room_id)
-      .eq("status", "pending")
-      .order("created_at", { ascending: false });
-
-    if (error) {
-      console.warn("[AdminInbox/ChatPanel] pending reports failed", error.message);
-      setPendingReports([]);
-      return;
-    }
-
-    setPendingReports((data ?? []) as ChatReportRow[]);
-  }, [peerRoom, room.room_id, supabase]);
-
-  useEffect(() => {
-    void loadPendingReports();
-  }, [loadPendingReports]);
-
-  useEffect(() => {
-    if (!peerRoom) return;
-
-    let active = true;
-    const channelTopic = `admin-room-reports:${room.room_id}:${crypto.randomUUID()}`;
-
-    const channel = supabase
-      .channel(channelTopic)
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "chat_reports",
-          filter: `room_id=eq.${room.room_id}`,
-        },
-        () => {
-          if (!active) return;
-          void loadPendingReports();
-        }
-      )
-      .subscribe();
-
-    return () => {
-      active = false;
-      void channel.unsubscribe();
-      void supabase.removeChannel(channel);
-    };
-  }, [loadPendingReports, peerRoom, room.room_id, supabase]);
-
-  const primaryPendingReport = pendingReports[0] ?? null;
-  const reportedParticipant = primaryPendingReport
-    ? peerParticipants.find((p) => p.id === primaryPendingReport.reported_user_id)
-    : null;
-  const reportedLabel = adminParticipantLabel(reportedParticipant ?? null);
-
-  const handleDisbandReport = useCallback(async () => {
-    if (!primaryPendingReport || moderationActing) return;
-
-    setModerationActing(true);
-    try {
-      const result = await disbandReportedChatRoom(room.room_id, primaryPendingReport.id);
-      if (!result.success) {
-        toast.error(result.error);
-        return;
-      }
-      toast.success("聊天室已解散");
-      onReportResolved?.();
-      await loadPendingReports();
-      onRoomClosed(room.room_id);
-    } finally {
-      setModerationActing(false);
-    }
-  }, [
-    loadPendingReports,
-    moderationActing,
-    onReportResolved,
-    onRoomClosed,
-    primaryPendingReport,
-    room.room_id,
-  ]);
-
-  const handleDismissReport = useCallback(async () => {
-    if (!primaryPendingReport || moderationActing) return;
-
-    setModerationActing(true);
-    try {
-      const result = await dismissChatReport(primaryPendingReport.id);
-      if (!result.success) {
-        toast.error(result.error);
-        return;
-      }
-      toast.success("舉報已結案");
-      onReportResolved?.();
-      await loadPendingReports();
-    } finally {
-      setModerationActing(false);
-    }
-  }, [loadPendingReports, moderationActing, onReportResolved, primaryPendingReport]);
-
-  const handleConfirmBan = useCallback(async () => {
-    if (!banConfirmReport || moderationActing) return;
-
-    setModerationActing(true);
-    try {
-      const result = await banReportedUser(
-        banConfirmReport.reported_user_id,
-        banConfirmReport.id
-      );
-      if (!result.success) {
-        toast.error(result.error);
-        return;
-      }
-      toast.success("用戶已封鎖");
-      setBanConfirmReport(null);
-      onReportResolved?.();
-      await loadPendingReports();
-    } finally {
-      setModerationActing(false);
-    }
-  }, [banConfirmReport, loadPendingReports, moderationActing, onReportResolved]);
 
   useEffect(() => {
     setDraft("");
@@ -836,17 +618,6 @@ function ChatPanel({
         ref={scrollContainerRef}
         className="flex-1 space-y-3 overflow-y-auto px-4 py-4 sm:px-6"
       >
-        {peerRoom && primaryPendingReport ? (
-          <PeerReportModerationBanner
-            report={primaryPendingReport}
-            reportedLabel={reportedLabel}
-            extraPendingCount={Math.max(0, pendingReports.length - 1)}
-            acting={moderationActing}
-            onDisband={() => void handleDisbandReport()}
-            onBan={() => setBanConfirmReport(primaryPendingReport)}
-            onDismiss={() => void handleDismissReport()}
-          />
-        ) : null}
         {loading ? (
           <div className="flex h-full min-h-[200px] items-center justify-center text-sm text-zinc-500">
             <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -914,47 +685,6 @@ function ChatPanel({
           </div>
         </footer>
       )}
-
-      <Dialog
-        open={banConfirmReport != null}
-        onOpenChange={(open) => {
-          if (!open && !moderationActing) setBanConfirmReport(null);
-        }}
-      >
-        <DialogContent className="max-w-md border-zinc-200 bg-white">
-          <DialogHeader>
-            <DialogTitle className="text-lg text-red-900">
-              <span aria-hidden>🚨</span> 確認封鎖用戶
-            </DialogTitle>
-            <DialogDescription className="text-sm leading-relaxed text-zinc-600">
-              您即將封鎖被舉報人{" "}
-              <span className="font-semibold text-zinc-900">{reportedLabel}</span>
-              。此操作將停權其帳號並禁止登入平台，確定要繼續嗎？
-            </DialogDescription>
-          </DialogHeader>
-          <div className="flex justify-end gap-2 pt-2">
-            <Button
-              type="button"
-              variant="outline"
-              disabled={moderationActing}
-              onClick={() => setBanConfirmReport(null)}
-            >
-              取消
-            </Button>
-            <Button
-              type="button"
-              disabled={moderationActing}
-              onClick={() => void handleConfirmBan()}
-              className="bg-red-700 text-white hover:bg-red-800"
-            >
-              {moderationActing ? (
-                <Loader2 className="mr-1.5 size-4 animate-spin" aria-hidden />
-              ) : null}
-              確認封鎖
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }
@@ -962,47 +692,24 @@ function ChatPanel({
 export default function AdminInboxClient({
   initialRooms,
   fetchError,
-  initialPendingReportRoomIds = [],
+  initialRoomId = null,
 }: AdminInboxClientProps) {
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
   const [rooms, setRooms] = useState<ChatRoomRow[]>(() =>
     initialRooms.map(normalizeRoomRow)
   );
-  const [selectedRoomId, setSelectedRoomId] = useState<string | null>(
-    initialRooms[0]?.room_id ?? null
-  );
+  const [selectedRoomId, setSelectedRoomId] = useState<string | null>(() => {
+    const trimmed = typeof initialRoomId === "string" ? initialRoomId.trim() : "";
+    if (trimmed && initialRooms.some((room) => room.room_id === trimmed)) {
+      return trimmed;
+    }
+    return initialRooms[0]?.room_id ?? null;
+  });
   const [adminUserId, setAdminUserId] = useState<string | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [openingTenantDirectChatUserId, setOpeningTenantDirectChatUserId] = useState<
     string | null
   >(null);
-  const [pendingReportRoomIds, setPendingReportRoomIds] = useState<Set<string>>(
-    () => new Set(initialPendingReportRoomIds)
-  );
-
-  const refreshPendingReports = useCallback(async () => {
-    const { data, error } = await supabase
-      .from("chat_reports")
-      .select("room_id")
-      .eq("status", "pending");
-
-    if (error) {
-      console.warn("[AdminInbox] pending reports fetch failed", error.message);
-      return;
-    }
-
-    setPendingReportRoomIds(
-      new Set(
-        (data ?? [])
-          .map((row) =>
-            typeof (row as { room_id?: unknown }).room_id === "string"
-              ? (row as { room_id: string }).room_id
-              : ""
-          )
-          .filter(Boolean)
-      )
-    );
-  }, [supabase]);
 
   const handleRoomClosed = useCallback((roomId: string) => {
     setRooms((prev) => prev.filter((room) => room.room_id !== roomId));
@@ -1103,33 +810,6 @@ export default function AdminInboxClient({
       void supabase.removeChannel(channel);
     };
   }, [refreshActiveRooms, supabase]);
-
-  useEffect(() => {
-    void refreshPendingReports();
-  }, [refreshPendingReports]);
-
-  useEffect(() => {
-    let active = true;
-    const channelTopic = `admin-chat-reports:${crypto.randomUUID()}`;
-
-    const channel = supabase
-      .channel(channelTopic)
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "chat_reports" },
-        () => {
-          if (!active) return;
-          void refreshPendingReports();
-        }
-      )
-      .subscribe();
-
-    return () => {
-      active = false;
-      void channel.unsubscribe();
-      void supabase.removeChannel(channel);
-    };
-  }, [refreshPendingReports, supabase]);
 
   const selectedRoom = rooms.find((room) => room.room_id === selectedRoomId) ?? null;
   const mobileChatOpen = Boolean(selectedRoomId);
@@ -1259,7 +939,6 @@ export default function AdminInboxClient({
                           onSelect={setSelectedRoomId}
                           peerParticipantsById={peerParticipantsById}
                           membersByGroupId={membersByGroupId}
-                          pendingReportRoomIds={pendingReportRoomIds}
                           roomUnreadCount={unreadByRoomId[room.room_id] ?? 0}
                         />
                       ))}
@@ -1278,7 +957,6 @@ export default function AdminInboxClient({
                           onSelect={setSelectedRoomId}
                           peerParticipantsById={peerParticipantsById}
                           membersByGroupId={membersByGroupId}
-                          pendingReportRoomIds={pendingReportRoomIds}
                           roomUnreadCount={unreadByRoomId[room.room_id] ?? 0}
                         />
                       ))}
@@ -1297,7 +975,6 @@ export default function AdminInboxClient({
                           onSelect={setSelectedRoomId}
                           peerParticipantsById={peerParticipantsById}
                           membersByGroupId={membersByGroupId}
-                          pendingReportRoomIds={pendingReportRoomIds}
                           roomUnreadCount={unreadByRoomId[room.room_id] ?? 0}
                         />
                       ))}
@@ -1351,7 +1028,6 @@ export default function AdminInboxClient({
                   )
                 }
                 openingTenantDirectChatUserId={openingTenantDirectChatUserId}
-                onReportResolved={() => void refreshPendingReports()}
               />
             </>
           ) : (
