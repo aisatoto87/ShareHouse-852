@@ -6,6 +6,7 @@ import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { createSupabaseServerClient, getServerUser } from "@/lib/supabase/server";
 
 import type { AdminPeerParticipant, GroupTenantMember } from "@/types/chat";
+import type { GuestChatMessage } from "@/types/guest-chat";
 
 export type GetOrCreateChatRoomResult =
   | { success: true; roomId: string }
@@ -14,6 +15,24 @@ export type GetOrCreateChatRoomResult =
 export type CloseChatRoomResult = { success: true } | { success: false; error: string };
 
 export type MarkMessagesAsReadResult = { success: true } | { success: false; error: string };
+
+export type GuestChatActionResult<T> =
+  | { success: true; data: T }
+  | { success: false; error: string };
+
+const GUEST_SESSION_UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function normalizeGuestSessionId(value: string): string | null {
+  const trimmed = typeof value === "string" ? value.trim() : "";
+  if (!trimmed || !GUEST_SESSION_UUID_RE.test(trimmed)) return null;
+  return trimmed;
+}
+
+function normalizeMessageContent(value: string): string | null {
+  const trimmed = typeof value === "string" ? value.trim() : "";
+  return trimmed.length > 0 ? trimmed : null;
+}
 
 async function findActiveChatRoom(
   supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>,
@@ -105,6 +124,142 @@ export async function getOrCreateChatRoom(
     success: false,
     error: insertError?.message ?? "無法建立對話室，請稍後再試。",
   };
+}
+
+/**
+ * 僅查詢當前用戶的 active 客服對話室（不建立新紀錄）。
+ * 用於已登入用戶開啟聊天視窗時載入歷史訊息。
+ */
+export async function findActiveSupportChatRoom(
+  propertyId?: string | null
+): Promise<GetOrCreateChatRoomResult> {
+  const { user } = await getServerUser();
+  if (!user?.id) {
+    return { success: false, error: "未登入" };
+  }
+
+  const trimmedPropertyId =
+    typeof propertyId === "string" && propertyId.trim() !== "" ? propertyId.trim() : null;
+
+  const supabase = await createSupabaseServerClient();
+  const { data: existing, error: findError } = await findActiveChatRoom(
+    supabase,
+    user.id,
+    trimmedPropertyId
+  );
+
+  if (findError) {
+    console.error("[chatActions/findActiveSupportChatRoom] find failed", findError);
+    return { success: false, error: findError.message };
+  }
+
+  if (existing?.room_id) {
+    return { success: true, roomId: existing.room_id };
+  }
+
+  return { success: false, error: "尚無對話紀錄" };
+}
+
+export type SendGuestChatMessageResult =
+  | { success: true; messageId: string }
+  | { success: false; error: string };
+
+/**
+ * 訪客發送客服訊息（寫入 guest_chats，不建立 profiles / chat_rooms）。
+ */
+export async function sendGuestChatMessageAction(options: {
+  guestSessionId: string;
+  content: string;
+  propertyId?: string | null;
+}): Promise<SendGuestChatMessageResult> {
+  const sessionId = normalizeGuestSessionId(options.guestSessionId);
+  const content = normalizeMessageContent(options.content);
+
+  if (!sessionId) {
+    return { success: false, error: "無效的訪客 Session。" };
+  }
+
+  if (!content) {
+    return { success: false, error: "訊息不可為空。" };
+  }
+
+  if (content.length > 4000) {
+    return { success: false, error: "訊息過長，請精簡後再試。" };
+  }
+
+  const trimmedPropertyId =
+    typeof options.propertyId === "string" && options.propertyId.trim() !== ""
+      ? options.propertyId.trim()
+      : null;
+
+  const admin = createSupabaseAdminClient();
+  const { data, error } = await admin
+    .from("guest_chats")
+    .insert({
+      session_id: sessionId,
+      sender_type: "guest",
+      content,
+      property_id: trimmedPropertyId,
+    })
+    .select("id")
+    .single();
+
+  if (error || !data?.id) {
+    console.error("[chatActions/sendGuestChatMessageAction] insert failed", error);
+    return { success: false, error: error?.message ?? "無法發送訊息，請稍後再試。" };
+  }
+
+  return { success: true, messageId: data.id };
+}
+
+export type GetGuestChatMessagesResult = GuestChatActionResult<GuestChatMessage[]>;
+
+/**
+ * 依訪客 session_id 讀取對話紀錄（經 service role，無需登入）。
+ */
+export async function getGuestChatMessagesAction(
+  guestSessionId: string
+): Promise<GetGuestChatMessagesResult> {
+  const sessionId = normalizeGuestSessionId(guestSessionId);
+  if (!sessionId) {
+    return { success: false, error: "無效的訪客 Session。" };
+  }
+
+  const admin = createSupabaseAdminClient();
+  const { data, error } = await admin
+    .from("guest_chats")
+    .select("id, session_id, sender_type, content, property_id, is_read, created_at")
+    .eq("session_id", sessionId)
+    .order("created_at", { ascending: true });
+
+  if (error) {
+    console.error("[chatActions/getGuestChatMessagesAction] fetch failed", error);
+    return { success: false, error: error.message };
+  }
+
+  const messages = (data ?? [])
+    .map((row) => {
+      const record = row as Record<string, unknown>;
+      const id = typeof record.id === "string" ? record.id : "";
+      const senderType = record.sender_type === "admin" ? "admin" : "guest";
+      const rowContent = typeof record.content === "string" ? record.content : "";
+      const createdAt = typeof record.created_at === "string" ? record.created_at : "";
+      if (!id || !rowContent || !createdAt) return null;
+
+      return {
+        id,
+        session_id: sessionId,
+        sender_type: senderType as "guest" | "admin",
+        content: rowContent,
+        property_id:
+          typeof record.property_id === "string" ? record.property_id : null,
+        is_read: record.is_read === true,
+        created_at: createdAt,
+      };
+    })
+    .filter((row): row is NonNullable<typeof row> => row != null);
+
+  return { success: true, data: messages };
 }
 
 /**

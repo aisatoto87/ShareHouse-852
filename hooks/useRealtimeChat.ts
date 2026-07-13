@@ -21,7 +21,7 @@ type UseRealtimeChatResult = {
   loading: boolean;
   sending: boolean;
   error: string | null;
-  sendMessage: (content: string, senderId: string) => Promise<boolean>;
+  sendMessage: (content: string, senderId: string, overrideRoomId?: string) => Promise<boolean>;
 };
 
 const MESSAGE_SELECT_BASE =
@@ -355,9 +355,14 @@ export function useRealtimeChat(
   }, [fetchMessages, roomId]);
 
   const sendMessage = useCallback(
-    async (content: string, senderId: string): Promise<boolean> => {
+    async (
+      content: string,
+      senderId: string,
+      overrideRoomId?: string
+    ): Promise<boolean> => {
       const trimmed = content.trim();
-      if (!roomId || !trimmed || !senderId) return false;
+      const targetRoomId = overrideRoomId ?? roomId;
+      if (!targetRoomId || !trimmed || !senderId) return false;
 
       setSending(true);
       setError(null);
@@ -365,7 +370,7 @@ export function useRealtimeChat(
       const { data, error: insertError } = await supabase
         .from("chat_messages")
         .insert({
-          room_id: roomId,
+          room_id: targetRoomId,
           sender_id: senderId,
           content: trimmed,
         })

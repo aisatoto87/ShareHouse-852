@@ -29,7 +29,7 @@ const STATUS_LABELS: Record<string, string> = {
 
 const ADMIN_GROUP_STATUSES = ["recruiting", "pending_opt_in", "confirmed", "matched"] as const;
 
-function pickPropertyTitle(properties: unknown, propertyId: string | null): string {
+export function pickPropertyTitle(properties: unknown, propertyId: string | null): string {
   if (properties && typeof properties === "object" && !Array.isArray(properties)) {
     const title = (properties as { title?: unknown }).title;
     if (typeof title === "string" && title.trim()) return title.trim();
@@ -63,7 +63,7 @@ function pickProfileField(
   return "";
 }
 
-function parseMembers(groupMembers: unknown): AdminGroupMember[] {
+export function parseMembers(groupMembers: unknown): AdminGroupMember[] {
   if (!Array.isArray(groupMembers)) return [];
 
   return groupMembers

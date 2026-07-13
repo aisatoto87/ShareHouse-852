@@ -12,11 +12,19 @@ import {
 } from "react";
 import { Loader2, MessageCircle, Send, X } from "lucide-react";
 import { toast } from "sonner";
-import { getOrCreateChatRoom } from "@/app/actions/chatActions";
+import {
+  findActiveSupportChatRoom,
+  getOrCreateChatRoom,
+} from "@/app/actions/chatActions";
 import ChatMessageBubble from "@/components/chat/ChatMessageBubble";
+import { useGuestChat } from "@/hooks/useGuestChat";
 import { useMarkChatAsRead } from "@/hooks/useMarkChatAsRead";
 import { useRealtimeChat } from "@/hooks/useRealtimeChat";
-import { ensureGuestProfile, isAnonymousUser } from "@/lib/guest-profile";
+import {
+  getGuestSessionId,
+  getOrCreateGuestSessionId,
+  GUEST_SELF_SENDER_ID,
+} from "@/lib/guest-session";
 import { createSupabaseBrowserClient, getBrowserUser } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -24,8 +32,7 @@ import { Input } from "@/components/ui/input";
 
 type ChatWidgetContextValue = {
   isOpen: boolean;
-  isBootstrapping: boolean;
-  openChat: (options?: { propertyId?: string | null; propertyTitle?: string | null }) => Promise<void>;
+  openChat: (options?: { propertyId?: string | null; propertyTitle?: string | null }) => void;
   closeChat: () => void;
 };
 
@@ -45,52 +52,19 @@ type ChatWidgetProviderProps = {
 
 export function ChatWidgetProvider({ children }: ChatWidgetProviderProps) {
   const [isOpen, setIsOpen] = useState(false);
-  const [isBootstrapping, setIsBootstrapping] = useState(false);
-  const [roomId, setRoomId] = useState<string | null>(null);
+  const [propertyId, setPropertyId] = useState<string | null>(null);
   const [propertyTitle, setPropertyTitle] = useState<string | null>(null);
-  const [userId, setUserId] = useState<string | null>(null);
-  const openChatLockRef = useRef(false);
+  const [authenticatedUserId, setAuthenticatedUserId] = useState<string | null>(null);
 
   const openChat = useCallback(
-    async (options?: { propertyId?: string | null; propertyTitle?: string | null }) => {
-      if (openChatLockRef.current) return;
-
-      openChatLockRef.current = true;
-      setIsBootstrapping(true);
+    (options?: { propertyId?: string | null; propertyTitle?: string | null }) => {
       setPropertyTitle(options?.propertyTitle?.trim() || null);
-
-      try {
-        const supabase = createSupabaseBrowserClient();
-        let { user } = await getBrowserUser(supabase);
-
-        if (!user?.id) {
-          const { data, error: anonError } = await supabase.auth.signInAnonymously();
-          if (anonError || !data.user?.id) {
-            toast.error(anonError?.message ?? "無法啟動客服對話，請稍後再試。");
-            return;
-          }
-          user = data.user;
-        }
-
-        if (isAnonymousUser(user)) {
-          await ensureGuestProfile(supabase, user.id);
-        }
-
-        setUserId(user.id);
-
-        const result = await getOrCreateChatRoom(options?.propertyId ?? null);
-
-        if (!result.success) {
-          toast.error(result.error);
-          return;
-        }
-
-        setRoomId(result.roomId);
-        setIsOpen(true);
-      } finally {
-        openChatLockRef.current = false;
-        setIsBootstrapping(false);
-      }
+      setPropertyId(
+        typeof options?.propertyId === "string" && options.propertyId.trim() !== ""
+          ? options.propertyId.trim()
+          : null
+      );
+      setIsOpen(true);
     },
     []
   );
@@ -99,9 +73,31 @@ export function ChatWidgetProvider({ children }: ChatWidgetProviderProps) {
     setIsOpen(false);
   }, []);
 
+  useEffect(() => {
+    if (!isOpen) return;
+
+    let cancelled = false;
+
+    void (async () => {
+      const supabase = createSupabaseBrowserClient();
+      const { user } = await getBrowserUser(supabase);
+      if (cancelled) return;
+
+      if (user?.id && !user.is_anonymous) {
+        setAuthenticatedUserId(user.id);
+      } else {
+        setAuthenticatedUserId(null);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen]);
+
   const value = useMemo(
-    () => ({ isOpen, isBootstrapping, openChat, closeChat }),
-    [closeChat, isBootstrapping, isOpen, openChat]
+    () => ({ isOpen, openChat, closeChat }),
+    [closeChat, isOpen, openChat]
   );
 
   return (
@@ -109,9 +105,9 @@ export function ChatWidgetProvider({ children }: ChatWidgetProviderProps) {
       {children}
       <ClientChatPanel
         isOpen={isOpen}
-        roomId={roomId}
-        userId={userId}
+        propertyId={propertyId}
         propertyTitle={propertyTitle}
+        authenticatedUserId={authenticatedUserId}
         onClose={closeChat}
       />
     </ChatWidgetContext.Provider>
@@ -120,30 +116,66 @@ export function ChatWidgetProvider({ children }: ChatWidgetProviderProps) {
 
 type ClientChatPanelProps = {
   isOpen: boolean;
-  roomId: string | null;
-  userId: string | null;
+  propertyId: string | null;
   propertyTitle: string | null;
+  authenticatedUserId: string | null;
   onClose: () => void;
 };
 
 function ClientChatPanel({
   isOpen,
-  roomId,
-  userId,
+  propertyId,
   propertyTitle,
+  authenticatedUserId,
   onClose,
 }: ClientChatPanelProps) {
-  const { messages, loading, sending, error, sendMessage } = useRealtimeChat(
-    isOpen ? roomId : null
-  );
+  const isGuestMode = !authenticatedUserId;
+  const [roomId, setRoomId] = useState<string | null>(null);
+  const [guestSessionId, setGuestSessionId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  useMarkChatAsRead(roomId, userId, messages, { enabled: isOpen });
+  const authenticatedChat = useRealtimeChat(isOpen && !isGuestMode ? roomId : null);
+  const guestChat = useGuestChat(isOpen && isGuestMode ? guestSessionId : null, {
+    propertyId,
+  });
+
+  const messages = isGuestMode ? guestChat.messages : authenticatedChat.messages;
+  const loading = isGuestMode ? guestChat.loading : authenticatedChat.loading;
+  const sending = isGuestMode ? guestChat.sending : authenticatedChat.sending;
+  const error = isGuestMode ? guestChat.error : authenticatedChat.error;
+  const currentUserId = isGuestMode ? GUEST_SELF_SENDER_ID : authenticatedUserId;
+
+  useMarkChatAsRead(roomId, authenticatedUserId, messages, {
+    enabled: isOpen && !isGuestMode,
+  });
 
   useEffect(() => {
-    if (!isOpen) setDraft("");
-  }, [isOpen, roomId]);
+    if (!isOpen) {
+      setDraft("");
+      setRoomId(null);
+      setGuestSessionId(null);
+      return;
+    }
+
+    if (isGuestMode) {
+      setGuestSessionId(getGuestSessionId());
+      setRoomId(null);
+      return;
+    }
+
+    let cancelled = false;
+
+    void (async () => {
+      const result = await findActiveSupportChatRoom(propertyId);
+      if (cancelled) return;
+      setRoomId(result.success ? result.roomId : null);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isGuestMode, isOpen, propertyId]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -152,10 +184,45 @@ function ClientChatPanel({
 
   const handleSend = useCallback(async () => {
     const text = draft.trim();
-    if (!text || sending || !userId) return;
-    const ok = await sendMessage(text, userId);
+    if (!text || sending) return;
+
+    if (isGuestMode) {
+      const sessionId = getOrCreateGuestSessionId();
+      setGuestSessionId(sessionId);
+      const ok = await guestChat.sendMessage(text, sessionId);
+      if (ok) setDraft("");
+      return;
+    }
+
+    if (!authenticatedUserId) return;
+
+    let activeRoomId = roomId;
+    if (!activeRoomId) {
+      const result = await getOrCreateChatRoom(propertyId);
+      if (!result.success) {
+        toast.error(result.error);
+        return;
+      }
+      activeRoomId = result.roomId;
+      setRoomId(activeRoomId);
+    }
+
+    const ok = await authenticatedChat.sendMessage(
+      text,
+      authenticatedUserId,
+      activeRoomId
+    );
     if (ok) setDraft("");
-  }, [draft, sendMessage, sending, userId]);
+  }, [
+    authenticatedChat,
+    authenticatedUserId,
+    draft,
+    guestChat,
+    isGuestMode,
+    propertyId,
+    roomId,
+    sending,
+  ]);
 
   const onKeyDown = (event: { key: string; shiftKey: boolean; preventDefault: () => void }) => {
     if (event.key === "Enter" && !event.shiftKey) {
@@ -206,7 +273,7 @@ function ClientChatPanel({
               <ChatMessageBubble
                 key={message.message_id}
                 message={message}
-                currentUserId={userId}
+                currentUserId={currentUserId}
               />
             ))
           )}
@@ -226,13 +293,13 @@ function ClientChatPanel({
               onChange={(event) => setDraft(event.target.value)}
               onKeyDown={onKeyDown}
               placeholder="輸入訊息…"
-              disabled={sending || !userId}
+              disabled={sending}
               className="h-10 flex-1 rounded-xl border-zinc-200 bg-zinc-50 text-sm"
             />
             <Button
               type="button"
               onClick={() => void handleSend()}
-              disabled={sending || !draft.trim() || !userId}
+              disabled={sending || !draft.trim()}
               className="h-10 rounded-xl bg-[#0f2540] px-3 hover:bg-[#1a3a5c]"
             >
               {sending ? (
@@ -255,25 +322,20 @@ type ClientChatTriggerButtonProps = {
 
 /** 全域懸浮「聯絡客服」按鈕（置於 FloatingContact 欄位最上方） */
 export function ClientChatTriggerButton({ className }: ClientChatTriggerButtonProps) {
-  const { openChat, isBootstrapping } = useClientChat();
+  const { openChat } = useClientChat();
 
   return (
     <button
       type="button"
-      onClick={() => void openChat()}
-      disabled={isBootstrapping}
+      onClick={() => openChat()}
       aria-label="聯絡客服 — 站內即時查詢"
       title="💬 聯絡客服"
       className={cn(
-        "flex size-14 items-center justify-center rounded-full bg-[#0f2540] text-white shadow-lg transition-all hover:scale-105 hover:bg-[#1a3a5c] hover:shadow-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0f2540] focus-visible:ring-offset-2 disabled:opacity-70",
+        "flex size-14 items-center justify-center rounded-full bg-[#0f2540] text-white shadow-lg transition-all hover:scale-105 hover:bg-[#1a3a5c] hover:shadow-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0f2540] focus-visible:ring-offset-2",
         className
       )}
     >
-      {isBootstrapping ? (
-        <Loader2 className="size-6 animate-spin" aria-hidden />
-      ) : (
-        <MessageCircle className="size-7" aria-hidden />
-      )}
+      <MessageCircle className="size-7" aria-hidden />
     </button>
   );
 }

@@ -18,6 +18,30 @@ export const GLOBAL_FROZEN_GROUP_STATUSES = [
   "confirmed",
 ] as const;
 
+/**
+ * 觸發 Global Freeze 的 housing_intents.status（用戶已有進行中配對，禁止新增排隊）。
+ */
+export const GLOBAL_FREEZE_BLOCKING_INTENT_STATUSES = [
+  "matching",
+  "pending_opt_in",
+  "recruiting",
+  "confirmed",
+  "matched",
+] as const;
+
+export function isGlobalFreezeBlockingIntentStatus(status: unknown): boolean {
+  const s = typeof status === "string" ? status.trim().toLowerCase() : "";
+  return GLOBAL_FREEZE_BLOCKING_INTENT_STATUSES.includes(
+    s as (typeof GLOBAL_FREEZE_BLOCKING_INTENT_STATUSES)[number]
+  );
+}
+
+export function userHasGlobalFreezeBlockingIntent(
+  intents: ReadonlyArray<{ status: string }>
+): boolean {
+  return intents.some((row) => isGlobalFreezeBlockingIntentStatus(row.status));
+}
+
 export function isGloballyFrozenHousingIntentStatus(status: unknown): boolean {
   const s = typeof status === "string" ? status.trim().toLowerCase() : "";
   return GLOBAL_FROZEN_INTENT_STATUSES.includes(

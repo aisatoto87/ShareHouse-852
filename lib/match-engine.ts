@@ -8,7 +8,7 @@ import {
   resolveTargetHeadcount,
   type UserHabits,
 } from "@/lib/matchingAlgorithm";
-import { fetchGloballyFrozenUserIds } from "@/lib/global-freeze";
+import { fetchGloballyFrozenUserIds, fetchWaitingMatchCandidates } from "@/lib/global-freeze";
 import { resolveHousingIntentStatusForGroup } from "@/lib/housing-intent-status";
 import { invokeProcessGroupMatchV2IfFull } from "@/lib/process-group-match-v2";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
@@ -233,39 +233,6 @@ async function countGroupMembers(admin: AdminClient, groupId: string): Promise<n
   return count ?? 0;
 }
 
-/** 逐筆 INSERT group_members（必須有明確的 Supabase insert 實體代碼） */
-async function insertSingleGroupMember(
-  admin: AdminClient,
-  groupId: string,
-  userId: string,
-  hasAgreed = false
-): Promise<void> {
-  const targetGroupId = groupId.trim();
-  const currentUserId = userId.trim();
-
-  if (!targetGroupId || !currentUserId) {
-    throw new Error("group_members 寫入失敗：缺少 group_id 或 user_id。");
-  }
-
-  const { error: insertError } = await admin.from("group_members").insert({
-    group_id: targetGroupId,
-    user_id: currentUserId,
-    has_agreed: hasAgreed,
-  });
-
-  if (insertError) {
-    console.error("寫入 group_members 失敗", insertError);
-    throw insertError;
-  }
-
-  const confirmed = await userIsGroupMember(admin, targetGroupId, currentUserId);
-  if (!confirmed) {
-    throw new Error(
-      `group_members 寫入後驗證失敗：找不到 user_id=${currentUserId} group_id=${targetGroupId}`
-    );
-  }
-}
-
 async function userIsGroupMember(
   admin: AdminClient,
   groupId: string,
@@ -365,47 +332,76 @@ async function createMatchGroupWithMembers(params: {
   return { groupId, verifiedSize: liveCount };
 }
 
-/** 將單一成員加入既有群組；INSERT 成功後才更新 match_groups */
+type JoinRecruitingGroupMemberRpcRow = {
+  out_current_size?: number;
+  out_target_size?: number;
+  out_fully_staffed?: boolean;
+  out_already_member?: boolean;
+};
+
+function parseJoinRecruitingGroupMemberRpcResult(data: unknown): {
+  currentSize: number;
+  targetSize: number;
+  fullyStaffed: boolean;
+  alreadyMember: boolean;
+} {
+  const row = (Array.isArray(data) ? data[0] : data) as JoinRecruitingGroupMemberRpcRow | null;
+  const currentSize = parseGroupSize(row?.out_current_size);
+  const targetSize = Math.max(parseGroupSize(row?.out_target_size), 2);
+
+  if (currentSize < 1 || targetSize < 2) {
+    throw new Error(
+      `RPC join_recruiting_group_member 回傳無效：${JSON.stringify(data ?? null)}`
+    );
+  }
+
+  return {
+    currentSize,
+    targetSize,
+    fullyStaffed: row?.out_fully_staffed === true,
+    alreadyMember: row?.out_already_member === true,
+  };
+}
+
+function isGroupFullJoinError(message: string): boolean {
+  return /群組已滿|group is full|already full/i.test(message);
+}
+
+/** 透過 RPC 原子加入招募群組（FOR UPDATE + 寫入前再次驗證人數） */
 async function addMemberToExistingGroup(params: {
   admin: AdminClient;
   groupId: string;
   userId: string;
+}): Promise<{
+  currentSize: number;
   targetSize: number;
-  recruitingWhileOpen: boolean;
   fullyStaffed: boolean;
-}): Promise<number> {
-  const { admin, groupId, userId, targetSize, recruitingWhileOpen, fullyStaffed } = params;
+  alreadyMember: boolean;
+}> {
+  const { admin, groupId, userId } = params;
 
   if (!groupId.trim() || !userId.trim()) {
     throw new Error("加入群組失敗：缺少 group_id 或 user_id。");
   }
 
-  const alreadyMember = await userIsGroupMember(admin, groupId, userId);
-  if (alreadyMember) {
-    const existingSize = await countGroupMembers(admin, groupId);
-    if (existingSize < 1) {
-      throw new Error("群組資料異常：成員列不存在但判定已在群組內。");
-    }
-    return existingSize;
-  }
-
-  await insertSingleGroupMember(admin, groupId, userId, false);
-
-  const verifiedSize = await syncGroupHeadcount(admin, groupId, targetSize, {
-    fullyStaffed,
-    recruitingWhileOpen,
+  const { data, error: rpcError } = await admin.rpc("join_recruiting_group_member", {
+    p_group_id: groupId.trim(),
+    p_user_id: userId.trim(),
   });
 
-  if (verifiedSize < 1) {
-    throw new Error("加入群組失敗：寫入 group_members 後人數仍為 0。");
+  if (rpcError) {
+    console.error("[match-engine] join_recruiting_group_member RPC 失敗", rpcError);
+    throw rpcError;
   }
+
+  const parsed = parseJoinRecruitingGroupMemberRpcResult(data);
 
   const memberConfirmed = await userIsGroupMember(admin, groupId, userId);
   if (!memberConfirmed) {
     throw new Error("加入群組失敗：group_members 未找到剛寫入的成員。");
   }
 
-  return verifiedSize;
+  return parsed;
 }
 
 type JoinRecruitingGroupResult =
@@ -421,7 +417,7 @@ type JoinRecruitingGroupResult =
       group_match_processed?: boolean;
     };
 
-/** 階段一：嘗試加入正在招募中的現有群組 */
+/** 階段一：嘗試加入該樓盤「存活最久」的招募群組（Age-based Priority，LIMIT 1） */
 export async function tryJoinRecruitingGroup(params: {
   admin: AdminClient;
   user_id: string;
@@ -434,67 +430,60 @@ export async function tryJoinRecruitingGroup(params: {
   const { admin, user_id, ownResolvedIntentId, ownBudget, currentHabits, ownPropertyId, matchMode } =
     params;
 
-  let recruitingQuery = admin
-    .from("match_groups")
-    .select("group_id, status, current_size, target_size, property_id")
-    .in("status", ["recruiting", "pending_opt_in"]);
+  const MAX_JOIN_ATTEMPTS = 3;
 
-  if (ownPropertyId) {
-    recruitingQuery = recruitingQuery.eq("property_id", ownPropertyId);
-  } else {
-    recruitingQuery = recruitingQuery.is("property_id", null);
-  }
+  for (let attempt = 0; attempt < MAX_JOIN_ATTEMPTS; attempt += 1) {
+    let recruitingQuery = admin
+      .from("match_groups")
+      .select("group_id, status, current_size, target_size, property_id, created_at")
+      .eq("status", "recruiting");
 
-  recruitingQuery = recruitingQuery.order("created_at", { ascending: true });
+    if (ownPropertyId) {
+      recruitingQuery = recruitingQuery.eq("property_id", ownPropertyId);
+    } else {
+      recruitingQuery = recruitingQuery.is("property_id", null);
+    }
 
-  const { data: recruitingRows, error: recruitingErr } = await recruitingQuery;
+    const { data: recruitingRows, error: recruitingErr } = await recruitingQuery
+      .order("created_at", { ascending: true })
+      .limit(1);
 
-  if (recruitingErr) {
-    console.error("[match-engine] recruiting groups query", recruitingErr);
-    throw new Error(recruitingErr.message);
-  }
+    if (recruitingErr) {
+      console.error("[match-engine] recruiting groups query", recruitingErr);
+      throw new Error(recruitingErr.message);
+    }
 
-  const openGroups: Record<string, unknown>[] = [];
-  for (const raw of recruitingRows ?? []) {
-    const g = raw as Record<string, unknown>;
-    const groupId = typeof g.group_id === "string" ? g.group_id.trim() : "";
-    if (!groupId) continue;
+    const rawGroup = (recruitingRows ?? [])[0] as Record<string, unknown> | undefined;
+    if (!rawGroup) {
+      return { joined: false };
+    }
 
+    const groupId = typeof rawGroup.group_id === "string" ? rawGroup.group_id.trim() : "";
+    if (!groupId) {
+      return { joined: false };
+    }
+
+    const targetSize = Math.max(parseGroupSize(rawGroup.target_size), 2);
     const memberCount = await countGroupMembers(admin, groupId);
-    const target = Math.max(parseGroupSize(g.target_size), 2);
-    const storedCurrentSize = parseGroupSize(g.current_size);
 
     if (memberCount === 0) {
-      if (storedCurrentSize > 0) {
-        console.warn("[match-engine] skip match_group with stored size but no members", {
-          groupId,
-          storedCurrentSize,
-        });
-      }
+      console.warn("[match-engine] cancel ghost recruiting group with no members", { groupId });
+      await admin
+        .from("match_groups")
+        .update({ status: "cancelled", current_size: 0, expires_at: null })
+        .eq("group_id", groupId);
       continue;
     }
 
-    if (memberCount > 0 && memberCount < target) {
-      openGroups.push({ ...g, _live_member_count: memberCount });
+    if (memberCount >= targetSize) {
+      console.warn("[match-engine] reconcile stale recruiting group already full", {
+        groupId,
+        memberCount,
+        targetSize,
+      });
+      await syncGroupHeadcount(admin, groupId, targetSize, { fullyStaffed: true });
+      continue;
     }
-  }
-
-  if (openGroups.length === 0) {
-    return { joined: false };
-  }
-
-  for (const rawGroup of openGroups) {
-    const group = rawGroup as Record<string, unknown>;
-    const groupId = typeof group.group_id === "string" ? group.group_id.trim() : "";
-    if (!groupId) continue;
-
-    const currentSize =
-      typeof group._live_member_count === "number"
-        ? group._live_member_count
-        : await countGroupMembers(admin, groupId);
-    const targetSize = Math.max(parseGroupSize(group.target_size), 2);
-    const newSize = currentSize + 1;
-    const isFullyStaffed = newSize >= targetSize;
 
     const { data: memberRows, error: membersErr } = await admin
       .from("group_members")
@@ -503,7 +492,7 @@ export async function tryJoinRecruitingGroup(params: {
 
     if (membersErr) {
       console.error("[match-engine] recruiting group members", membersErr);
-      continue;
+      return { joined: false };
     }
 
     const memberUserIds = [
@@ -518,7 +507,7 @@ export async function tryJoinRecruitingGroup(params: {
       const liveSize = await countGroupMembers(admin, groupId);
       if (liveSize < 1 || !(await userIsGroupMember(admin, groupId, user_id))) {
         console.warn("[match-engine] skip ghost membership without live row", { groupId, user_id });
-        continue;
+        return { joined: false };
       }
       console.log("[match-engine] reconcile existing membership", { groupId, user_id });
       await updateMemberIntentsForProperty(
@@ -544,13 +533,13 @@ export async function tryJoinRecruitingGroup(params: {
       .filter((h): h is UserHabits => h != null);
 
     if (existingHabits.length !== memberUserIds.length) {
-      console.log("[match-engine] skip recruiting group, member missing habits", groupId);
-      continue;
+      console.log("[match-engine] oldest recruiting group skipped, member missing habits", groupId);
+      return { joined: false };
     }
 
     if (!canJoinGroup(currentHabits, existingHabits)) {
-      console.log("[match-engine] skip recruiting group, habit mesh failed", groupId);
-      continue;
+      console.log("[match-engine] oldest recruiting group skipped, habit mesh failed", groupId);
+      return { joined: false };
     }
 
     const { data: memberIntentRows, error: intentErr } = await admin
@@ -561,7 +550,7 @@ export async function tryJoinRecruitingGroup(params: {
 
     if (intentErr) {
       console.error("[match-engine] member intents for recruiting group", intentErr);
-      continue;
+      return { joined: false };
     }
 
     let budgetOk = true;
@@ -574,39 +563,39 @@ export async function tryJoinRecruitingGroup(params: {
       }
     }
     if (!budgetOk) {
-      console.log("[match-engine] skip recruiting group, budget mismatch", groupId);
-      continue;
+      console.log("[match-engine] oldest recruiting group skipped, budget mismatch", groupId);
+      return { joined: false };
     }
 
-    let verifiedSize: number;
+    let joinResult: Awaited<ReturnType<typeof addMemberToExistingGroup>>;
     try {
-      verifiedSize = await addMemberToExistingGroup({
+      joinResult = await addMemberToExistingGroup({
         admin,
         groupId,
         userId: user_id,
-        targetSize,
-        recruitingWhileOpen: targetSize > 2,
-        fullyStaffed: isFullyStaffed,
       });
     } catch (joinErr) {
-      if (joinErr instanceof Error && isUniqueViolation({ message: joinErr.message })) {
-        const reconciledSize = await countGroupMembers(admin, groupId);
-        if (reconciledSize < 1 || !(await userIsGroupMember(admin, groupId, user_id))) {
-          console.error("[match-engine] join reconcile failed", groupId, joinErr.message);
-          continue;
-        }
-        verifiedSize = reconciledSize;
-      } else {
-        console.error("[match-engine] insert recruiting group member", joinErr);
+      const message = joinErr instanceof Error ? joinErr.message : String(joinErr);
+      if (isUniqueViolation({ message }) || isGroupFullJoinError(message)) {
+        console.warn("[match-engine] join race on oldest recruiting group, retry", {
+          groupId,
+          attempt,
+          message,
+        });
         continue;
       }
+      console.error("[match-engine] insert recruiting group member", joinErr);
+      return { joined: false };
     }
 
     let groupMatchProcessed = false;
     const allUserIds = [...new Set([...memberUserIds, user_id])];
-    const intentStatus = resolveHousingIntentStatusForGroup(verifiedSize, targetSize);
+    const intentStatus = resolveHousingIntentStatusForGroup(
+      joinResult.currentSize,
+      joinResult.targetSize
+    );
 
-    if (isFullyStaffed) {
+    if (joinResult.fullyStaffed) {
       const rpcResult = await invokeProcessGroupMatchV2IfFull(admin, groupId);
       if (rpcResult.error) {
         console.warn(
@@ -624,8 +613,8 @@ export async function tryJoinRecruitingGroup(params: {
     return {
       joined: true,
       group_id: groupId,
-      current_size: verifiedSize,
-      target_size: targetSize,
+      current_size: joinResult.currentSize,
+      target_size: joinResult.targetSize,
       group_confirmed: false,
       property_id: ownPropertyId,
       match_mode: matchMode,
@@ -744,35 +733,20 @@ export async function executeIntentMatch(
     };
   }
 
-  const frozenUserIdsList = [...globallyFrozenUserIds];
-  const frozenFilter =
-    frozenUserIdsList.length > 0 ? `(${frozenUserIdsList.join(",")})` : null;
-
-  let candidatesQuery = admin
-    .from("housing_intents")
-    .select("*")
-    .eq("status", "waiting")
-    .neq("user_id", user_id);
-
-  if (frozenFilter) {
-    candidatesQuery = candidatesQuery.not("user_id", "in", frozenFilter);
+  let candidates: Record<string, unknown>[];
+  try {
+    candidates = await fetchWaitingMatchCandidates(admin, {
+      excludeUserId: user_id,
+      propertyId: ownPropertyId,
+      targetDistrict: ownPropertyId ? null : target_district,
+    });
+  } catch (e) {
+    return {
+      matched: false,
+      error: e instanceof Error ? e.message : "查詢候選意向失敗。",
+      status: 500,
+    };
   }
-
-  if (ownPropertyId) {
-    candidatesQuery = candidatesQuery.eq("target_property_id", ownPropertyId);
-  } else {
-    candidatesQuery = candidatesQuery
-      .eq("target_district", target_district)
-      .is("target_property_id", null);
-  }
-
-  const { data: candidateRows, error: candErr } = await candidatesQuery;
-
-  if (candErr) {
-    return { matched: false, error: candErr.message, status: 500 };
-  }
-
-  const candidates = Array.isArray(candidateRows) ? candidateRows : [];
 
   if (candidates.length === 0) {
     const created = await createMatchGroupWithMembers({

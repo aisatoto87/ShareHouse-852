@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
+import { getGlobalFreezeStatusAction } from "@/app/actions/intentActions";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -14,6 +15,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   isPropertyListingBlocked,
   PROPERTY_LISTING_BLOCKED_LABEL,
@@ -57,12 +59,49 @@ export default function HousingIntentButton({
   const [isIntentModalOpen, setIsIntentModalOpen] = useState(false);
   const [district, setDistrict] = useState(defaultDistrict);
   const [budgetInput, setBudgetInput] = useState(String(defaultBudget));
+  const [allowSpillover, setAllowSpillover] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [alreadyInQueue, setAlreadyInQueue] = useState(false);
   const [queueCheckLoading, setQueueCheckLoading] = useState(Boolean(propertyId?.trim()));
+  const [isGloballyFrozen, setIsGloballyFrozen] = useState(false);
+  const [freezeCheckLoading, setFreezeCheckLoading] = useState(true);
 
   const trimmedPropertyId = propertyId?.trim() ?? "";
   const listingBlocked = isPropertyListingBlocked(propertyListingStatus);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function checkGlobalFreeze() {
+      setFreezeCheckLoading(true);
+      try {
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+
+        if (cancelled) return;
+
+        if (!user) {
+          setIsGloballyFrozen(false);
+          return;
+        }
+
+        const freezeStatus = await getGlobalFreezeStatusAction();
+        if (cancelled) return;
+        setIsGloballyFrozen(freezeStatus.isFrozen);
+      } catch (e) {
+        console.warn("[HousingIntentButton] global freeze check", e);
+        if (!cancelled) setIsGloballyFrozen(false);
+      } finally {
+        if (!cancelled) setFreezeCheckLoading(false);
+      }
+    }
+
+    void checkGlobalFreeze();
+    return () => {
+      cancelled = true;
+    };
+  }, [supabase]);
 
   useEffect(() => {
     if (!trimmedPropertyId) {
@@ -155,6 +194,7 @@ export default function HousingIntentButton({
     if (!isIntentModalOpen) return;
     setDistrict(defaultDistrict.trim() || defaultDistrict);
     setBudgetInput(String(Math.max(0, Math.round(defaultBudget))));
+    setAllowSpillover(false);
   }, [isIntentModalOpen, defaultDistrict, defaultBudget]);
 
   useEffect(() => {
@@ -186,7 +226,7 @@ export default function HousingIntentButton({
       return;
     }
 
-    if (listingBlocked || !isProfileComplete || alreadyInQueue) return;
+    if (listingBlocked || !isProfileComplete || alreadyInQueue || isGloballyFrozen) return;
 
     setIsIntentModalOpen(true);
   }
@@ -226,9 +266,11 @@ export default function HousingIntentButton({
         target_district: string;
         max_budget: number;
         property_id?: string;
+        allow_spillover?: boolean;
       } = {
         target_district: trimmedDistrict,
         max_budget: budgetNum,
+        allow_spillover: allowSpillover,
       };
       if (propertyId?.trim()) {
         requestBody.property_id = propertyId.trim();
@@ -311,17 +353,21 @@ export default function HousingIntentButton({
     listingBlocked ||
     !isProfileComplete ||
     alreadyInQueue ||
+    isGloballyFrozen ||
+    freezeCheckLoading ||
     (Boolean(trimmedPropertyId) && queueCheckLoading);
 
   const buttonLabel = listingBlocked
     ? PROPERTY_LISTING_BLOCKED_LABEL
-    : alreadyInQueue
-      ? "已在排隊池中"
-      : queueCheckLoading && trimmedPropertyId
-        ? "檢查排隊狀態…"
-        : isProfileComplete
-          ? "✨ 加入心水排隊區"
-          : "⚠️ 請先完善個人資料與生活評分";
+    : isGloballyFrozen
+      ? "⏸️ 暫停排隊 (您已有處理中的配對)"
+      : alreadyInQueue
+        ? "已在排隊池中"
+        : freezeCheckLoading || (queueCheckLoading && trimmedPropertyId)
+          ? "檢查排隊狀態…"
+          : isProfileComplete
+            ? "✨ 加入心水排隊區"
+            : "⚠️ 請先完善個人資料與生活評分";
 
   return (
     <>
@@ -330,11 +376,13 @@ export default function HousingIntentButton({
         title={
           listingBlocked
             ? "此樓盤已預留或洽談中，暫停接受新申請"
-            : alreadyInQueue
-              ? "您已為此樓盤提交過租屋意向，請至「我的租屋意向」查看進度"
-              : !isProfileComplete
-                ? incompleteTooltip
-                : undefined
+            : isGloballyFrozen
+              ? "您已有進行中的配對，暫時無法新增排隊"
+              : alreadyInQueue
+                ? "您已為此樓盤提交過租屋意向，請至「我的租屋意向」查看進度"
+                : !isProfileComplete
+                  ? incompleteTooltip
+                  : undefined
         }
       >
         <Button
@@ -344,23 +392,26 @@ export default function HousingIntentButton({
           aria-label={
             listingBlocked
               ? PROPERTY_LISTING_BLOCKED_LABEL
-              : alreadyInQueue
-                ? "已在排隊池中"
-                : isProfileComplete
-                  ? "加入心水排隊區"
-                  : `請先完善個人資料與生活評分。${incompleteTooltip}`
+              : isGloballyFrozen
+                ? "暫停排隊 (您已有處理中的配對)"
+                : alreadyInQueue
+                  ? "已在排隊池中"
+                  : isProfileComplete
+                    ? "加入心水排隊區"
+                    : `請先完善個人資料與生活評分。${incompleteTooltip}`
           }
           onClick={() => void handlePrimaryClick()}
           className={cn(
             className,
-            (alreadyInQueue || listingBlocked) &&
-              "cursor-not-allowed border-zinc-300 bg-zinc-200 text-zinc-600 opacity-100 hover:bg-zinc-200 hover:text-zinc-600 disabled:opacity-100",
+            (isGloballyFrozen || alreadyInQueue || listingBlocked) &&
+              "cursor-not-allowed border-zinc-300 bg-gray-300 text-gray-500 opacity-100 hover:bg-gray-300 hover:text-gray-500 disabled:opacity-100",
             !isProfileComplete &&
               !alreadyInQueue &&
+              !isGloballyFrozen &&
               "cursor-not-allowed border-amber-500 bg-amber-500 text-white opacity-95 hover:bg-amber-500 hover:text-white disabled:opacity-95"
           )}
         >
-          {queueCheckLoading && trimmedPropertyId ? (
+          {(freezeCheckLoading || (queueCheckLoading && trimmedPropertyId)) ? (
             <>
               <Loader2 className="mr-2 size-4 animate-spin shrink-0" aria-hidden />
               {buttonLabel}
@@ -426,6 +477,21 @@ export default function HousingIntentButton({
                 />
                 <p className="text-xs text-zinc-500">已按本盤房間租金預填並略加緩衝，可自行調整。</p>
               </div>
+            </div>
+
+            <div className="border-t border-zinc-100 px-6 py-4">
+              <label className="flex cursor-pointer items-start gap-3">
+                <Checkbox
+                  checked={allowSpillover}
+                  onCheckedChange={(checked) => setAllowSpillover(Boolean(checked))}
+                  disabled={submitting}
+                  className="mt-0.5"
+                />
+                <span className="text-sm leading-relaxed text-zinc-700">
+                  若此單位配對需時較長，我願意接收同區、預算相近且室友契合度極高 (&gt;75%)
+                  的其他樓盤推薦。
+                </span>
+              </label>
             </div>
 
             <div className="flex flex-col-reverse gap-2 border-t border-zinc-100 px-6 py-4 sm:flex-row sm:justify-end">

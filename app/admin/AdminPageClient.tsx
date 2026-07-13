@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { Loader2, Lock, PlusCircle, RefreshCw, ShieldAlert } from "lucide-react";
 import { toast } from "sonner";
 import AdminCardActions from "@/components/admin/AdminCardActions";
+import StagnantGroupsPanel from "@/components/admin/StagnantGroupsPanel";
 import { UnreadCountBadge } from "@/components/chat/UnreadCountBadge";
 import PropertyCard from "@/components/PropertyCard";
 import SharedPropertyForm from "@/components/SharedPropertyForm";
@@ -557,6 +558,8 @@ export default function AdminPageClient() {
             </Link>
           </div>
         </div>
+
+        <StagnantGroupsPanel enabled={unlocked} />
 
         <section className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm sm:p-8">
           <h2 className="mb-4 flex items-center gap-2 text-lg font-semibold text-[#0f2540]">

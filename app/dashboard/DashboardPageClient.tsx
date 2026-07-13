@@ -35,7 +35,7 @@ import {
   inferSalutationMode,
   inferZhSuffix,
 } from "@/lib/profile-display-name";
-import { userHasLockingMatchGroup } from "@/lib/housing-intent-status";
+import { userHasGlobalFreezeBlockingIntent, userHasLockingMatchGroup } from "@/lib/housing-intent-status";
 import {
   isActiveMatchGroupStatus,
   isValidMatchGroupEntity,
@@ -559,7 +559,10 @@ export default function DashboardPageClient() {
   const [userHasLockingGroup, setUserHasLockingGroup] = useState(false);
   const expiredCleanupStartedRef = useRef(false);
 
-  const isGloballyFrozen = userHasLockingGroup;
+  const isGloballyFrozen = useMemo(
+    () => userHasGlobalFreezeBlockingIntent(intentRows),
+    [intentRows]
+  );
 
   const sortedIntentRows = useMemo(
     () => sortIntentsByPreferenceRank(intentRows),
@@ -1767,12 +1770,17 @@ export default function DashboardPageClient() {
                           <Card
                             className={cn(
                               "overflow-hidden border-zinc-200 shadow-sm transition-shadow hover:shadow-md",
-                              cardUi.isCardMuted && "opacity-60 grayscale",
+                              cardUi.isCardMuted && "pointer-events-none opacity-60 grayscale",
                               isIntentPaused &&
                                 "border-amber-200/90 bg-gradient-to-br from-amber-50/40 via-white to-zinc-50/80"
                             )}
                           >
                             <CardContent className="p-5">
+                              {cardUi.isCardMuted ? (
+                                <span className="mb-2 inline-block rounded bg-amber-100 px-2 py-1 text-xs text-amber-700">
+                                  ⏸️ 已全局凍結
+                                </span>
+                              ) : null}
                               <div className="flex flex-wrap items-start justify-between gap-3">
                                 <div className="min-w-0 flex-1 space-y-3">
                                   <Badge variant="secondary" className={cn(badge.className)}>
@@ -1792,52 +1800,55 @@ export default function DashboardPageClient() {
                                         >
                                           第 {row.preference_rank} 志願
                                         </Badge>
-                                        <div className="flex items-center gap-0.5">
-                                          <Button
-                                            type="button"
-                                            variant="outline"
-                                            size="icon"
-                                            className="h-8 w-8 shrink-0 border-zinc-200"
-                                            disabled={reorderDisabled || !canMoveUp}
-                                            aria-label="上移志願"
-                                            title={
-                                              isGloballyFrozen
-                                                ? "配對處理中，暫不可調整志願次序"
-                                                : "上移志願"
-                                            }
-                                            onClick={() => {
-                                              if (!neighborUp || !canMoveUp) return;
-                                              void handleSwapPreferenceRank(
-                                                row.intent_id,
-                                                neighborUp.intent_id
-                                              );
-                                            }}
+                                        {!isGloballyFrozen ? (
+                                          <div className="flex items-center gap-0.5">
+                                            <Button
+                                              type="button"
+                                              variant="outline"
+                                              size="icon"
+                                              className="h-8 w-8 shrink-0 border-zinc-200"
+                                              disabled={reorderDisabled || !canMoveUp}
+                                              aria-label="上移志願"
+                                              title="上移志願"
+                                              onClick={() => {
+                                                if (reorderDisabled || !neighborUp || !canMoveUp) return;
+                                                void handleSwapPreferenceRank(
+                                                  row.intent_id,
+                                                  neighborUp.intent_id
+                                                );
+                                              }}
+                                            >
+                                              <ChevronUp className="h-4 w-4" aria-hidden />
+                                            </Button>
+                                            <Button
+                                              type="button"
+                                              variant="outline"
+                                              size="icon"
+                                              className="h-8 w-8 shrink-0 border-zinc-200"
+                                              disabled={reorderDisabled || !canMoveDown}
+                                              aria-label="下移志願"
+                                              title="下移志願"
+                                              onClick={() => {
+                                                if (reorderDisabled || !neighborDown || !canMoveDown) return;
+                                                void handleSwapPreferenceRank(
+                                                  row.intent_id,
+                                                  neighborDown.intent_id
+                                                );
+                                              }}
+                                            >
+                                              <ChevronDown className="h-4 w-4" aria-hidden />
+                                            </Button>
+                                          </div>
+                                        ) : (
+                                          <span
+                                            className="inline-flex items-center gap-1 rounded-md border border-zinc-200 bg-zinc-100 px-2 py-1 text-xs text-zinc-500"
+                                            aria-hidden
                                           >
-                                            <ChevronUp className="h-4 w-4" aria-hidden />
-                                          </Button>
-                                          <Button
-                                            type="button"
-                                            variant="outline"
-                                            size="icon"
-                                            className="h-8 w-8 shrink-0 border-zinc-200"
-                                            disabled={reorderDisabled || !canMoveDown}
-                                            aria-label="下移志願"
-                                            title={
-                                              isGloballyFrozen
-                                                ? "配對處理中，暫不可調整志願次序"
-                                                : "下移志願"
-                                            }
-                                            onClick={() => {
-                                              if (!neighborDown || !canMoveDown) return;
-                                              void handleSwapPreferenceRank(
-                                                row.intent_id,
-                                                neighborDown.intent_id
-                                              );
-                                            }}
-                                          >
-                                            <ChevronDown className="h-4 w-4" aria-hidden />
-                                          </Button>
-                                        </div>
+                                            <ChevronUp className="h-3.5 w-3.5 opacity-40" />
+                                            <ChevronDown className="h-3.5 w-3.5 opacity-40" />
+                                            <span className="sr-only">配對處理中，暫不可調整志願次序</span>
+                                          </span>
+                                        )}
                                       </div>
                                     ) : null}
                                   </div>
