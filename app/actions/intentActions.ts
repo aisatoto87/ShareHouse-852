@@ -6,6 +6,12 @@ import {
   GLOBAL_FREEZE_BLOCKING_INTENT_STATUSES,
 } from "@/lib/housing-intent-status";
 import { teardownHousingIntent } from "@/lib/intent-teardown";
+import {
+  COMPATIBILITY_QUEUE_BLOCK_ERROR,
+  MATCH_THRESHOLD_PERCENT,
+  previewUserPropertyCompatibility,
+  profileRowToUserHabits,
+} from "@/lib/matchingAlgorithm";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import {
   createSupabaseServerClient,
@@ -153,7 +159,9 @@ export async function createHousingIntent(
   if (propertyId) {
     const { data: propertyRow, error: propertyError } = await supabase
       .from("properties")
-      .select("id, max_tenants")
+      .select(
+        "id, max_tenants, habit_cleanliness, habit_ac_temp, habit_guests, habit_noise"
+      )
       .eq("id", propertyId)
       .maybeSingle();
 
@@ -198,6 +206,53 @@ export async function createHousingIntent(
         error: "您已經在排隊隊伍中，不能重複申請同一個樓盤",
         status: 400,
       };
+    }
+
+    // SyncNest 硬攔截：INSERT 前強制重算用戶 vs 樓盤契合度
+    const { data: viewerProfile, error: viewerProfileError } = await supabase
+      .from("profiles")
+      .select("habit_cleanliness, habit_ac_temp, habit_guests, habit_noise")
+      .eq("id", user.id)
+      .maybeSingle();
+
+    if (viewerProfileError) {
+      console.error("[actions/createHousingIntent] profile habits lookup", viewerProfileError);
+      return {
+        success: false,
+        error: viewerProfileError.message || "查詢個人習慣失敗，請稍後再試。",
+        status: 500,
+      };
+    }
+
+    const userHabits = profileRowToUserHabits(
+      (viewerProfile as {
+        habit_cleanliness: unknown;
+        habit_ac_temp: unknown;
+        habit_guests: unknown;
+        habit_noise: unknown;
+      }) ?? {
+        habit_cleanliness: null,
+        habit_ac_temp: null,
+        habit_guests: null,
+        habit_noise: null,
+      }
+    );
+    const propertyHabits = profileRowToUserHabits(
+      propertyRow as {
+        habit_cleanliness: unknown;
+        habit_ac_temp: unknown;
+        habit_guests: unknown;
+        habit_noise: unknown;
+      }
+    );
+
+    const compatibilityScore =
+      userHabits && propertyHabits
+        ? previewUserPropertyCompatibility(userHabits, propertyHabits).similarity
+        : 0;
+
+    if (compatibilityScore < MATCH_THRESHOLD_PERCENT) {
+      throw new Error(COMPATIBILITY_QUEUE_BLOCK_ERROR);
     }
   }
 

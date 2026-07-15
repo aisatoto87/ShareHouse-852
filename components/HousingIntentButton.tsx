@@ -16,6 +16,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
+import { MATCH_THRESHOLD_PERCENT } from "@/lib/matchingAlgorithm";
 import {
   isPropertyListingBlocked,
   PROPERTY_LISTING_BLOCKED_LABEL,
@@ -25,6 +26,7 @@ import { cn } from "@/lib/utils";
 import type { PropertyListingStatus } from "@/types/property";
 
 const DEFAULT_PROFILE_SETUP_HREF = "/dashboard?tab=personal";
+const BELOW_COMPAT_LABEL = "契合度未達 72% 門檻，無法排隊";
 
 type HousingIntentButtonProps = {
   /** 預填目標區域（例如租盤次區域） */
@@ -35,6 +37,8 @@ type HousingIntentButtonProps = {
   propertyId?: string;
   /** 樓盤盤源狀態；held / rented 時禁止加入排隊 */
   propertyListingStatus?: PropertyListingStatus;
+  /** 當前用戶對該樓盤的 SyncNest 契合度（0–100）；低於 72 時鎖定排隊 */
+  compatibilityScore?: number | null;
   /** Server 端判定：display_name + phone + 四項生活習慣均已填寫 */
   isProfileComplete?: boolean;
   /** 資料未完成時導向的設定頁（預設 Dashboard 個人資料分頁） */
@@ -49,6 +53,7 @@ export default function HousingIntentButton({
   defaultBudget,
   propertyId,
   propertyListingStatus = "available",
+  compatibilityScore = null,
   isProfileComplete = true,
   profileSetupHref = DEFAULT_PROFILE_SETUP_HREF,
   profileIncompleteHint = "",
@@ -68,6 +73,10 @@ export default function HousingIntentButton({
 
   const trimmedPropertyId = propertyId?.trim() ?? "";
   const listingBlocked = isPropertyListingBlocked(propertyListingStatus);
+  const belowCompatibilityThreshold =
+    typeof compatibilityScore === "number" &&
+    Number.isFinite(compatibilityScore) &&
+    compatibilityScore < MATCH_THRESHOLD_PERCENT;
 
   useEffect(() => {
     let cancelled = false;
@@ -226,7 +235,15 @@ export default function HousingIntentButton({
       return;
     }
 
-    if (listingBlocked || !isProfileComplete || alreadyInQueue || isGloballyFrozen) return;
+    if (
+      listingBlocked ||
+      !isProfileComplete ||
+      alreadyInQueue ||
+      isGloballyFrozen ||
+      belowCompatibilityThreshold
+    ) {
+      return;
+    }
 
     setIsIntentModalOpen(true);
   }
@@ -234,7 +251,7 @@ export default function HousingIntentButton({
   async function handleConfirmIntent() {
     if (submitting) return;
 
-    if (!isProfileComplete) return;
+    if (!isProfileComplete || belowCompatibilityThreshold) return;
 
     const {
       data: { user },
@@ -354,6 +371,7 @@ export default function HousingIntentButton({
     !isProfileComplete ||
     alreadyInQueue ||
     isGloballyFrozen ||
+    belowCompatibilityThreshold ||
     freezeCheckLoading ||
     (Boolean(trimmedPropertyId) && queueCheckLoading);
 
@@ -363,11 +381,13 @@ export default function HousingIntentButton({
       ? "⏸️ 暫停排隊 (您已有處理中的配對)"
       : alreadyInQueue
         ? "已在排隊池中"
-        : freezeCheckLoading || (queueCheckLoading && trimmedPropertyId)
-          ? "檢查排隊狀態…"
-          : isProfileComplete
-            ? "✨ 加入心水排隊區"
-            : "⚠️ 請先完善個人資料與生活評分";
+        : belowCompatibilityThreshold
+          ? BELOW_COMPAT_LABEL
+          : freezeCheckLoading || (queueCheckLoading && trimmedPropertyId)
+            ? "檢查排隊狀態…"
+            : isProfileComplete
+              ? "✨ 加入心水排隊區"
+              : "⚠️ 請先完善個人資料與生活評分";
 
   return (
     <>
@@ -380,9 +400,11 @@ export default function HousingIntentButton({
               ? "您已有進行中的配對，暫時無法新增排隊"
               : alreadyInQueue
                 ? "您已為此樓盤提交過租屋意向，請至「我的租屋意向」查看進度"
-                : !isProfileComplete
-                  ? incompleteTooltip
-                  : undefined
+                : belowCompatibilityThreshold
+                  ? `目前契合度 ${Math.round(compatibilityScore as number)}%，未達 ${MATCH_THRESHOLD_PERCENT}% 排隊門檻`
+                  : !isProfileComplete
+                    ? incompleteTooltip
+                    : undefined
         }
       >
         <Button
@@ -396,18 +418,24 @@ export default function HousingIntentButton({
                 ? "暫停排隊 (您已有處理中的配對)"
                 : alreadyInQueue
                   ? "已在排隊池中"
-                  : isProfileComplete
-                    ? "加入心水排隊區"
-                    : `請先完善個人資料與生活評分。${incompleteTooltip}`
+                  : belowCompatibilityThreshold
+                    ? BELOW_COMPAT_LABEL
+                    : isProfileComplete
+                      ? "加入心水排隊區"
+                      : `請先完善個人資料與生活評分。${incompleteTooltip}`
           }
           onClick={() => void handlePrimaryClick()}
           className={cn(
             className,
-            (isGloballyFrozen || alreadyInQueue || listingBlocked) &&
+            (isGloballyFrozen ||
+              alreadyInQueue ||
+              listingBlocked ||
+              belowCompatibilityThreshold) &&
               "cursor-not-allowed border-zinc-300 bg-gray-300 text-gray-500 opacity-100 hover:bg-gray-300 hover:text-gray-500 disabled:opacity-100",
             !isProfileComplete &&
               !alreadyInQueue &&
               !isGloballyFrozen &&
+              !belowCompatibilityThreshold &&
               "cursor-not-allowed border-amber-500 bg-amber-500 text-white opacity-95 hover:bg-amber-500 hover:text-white disabled:opacity-95"
           )}
         >

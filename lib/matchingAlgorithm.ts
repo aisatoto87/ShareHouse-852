@@ -52,9 +52,12 @@ const WEIGHT_GUESTS = 1.0;
 const WEIGHT_NOISE = 1.5;
 
 const WEIGHTED_DISTANCE_SCALE = 20;
-const MATCH_THRESHOLD_PERCENT = 72;
+/** 加入心水排隊區：用戶 vs 樓盤 SyncNest 契合度最低門檻 */
+export const MATCH_THRESHOLD_PERCENT = 72;
 /** v4.0 雙人初配：SyncNest 習慣雷達最低契合分 */
 export const HABIT_RADAR_MATCH_MIN_PERCENT = 75;
+export const COMPATIBILITY_QUEUE_BLOCK_ERROR =
+  "SyncNest 契合度不足 72%，系統拒絕建立配對意向。";
 const VETO_DIFF_THRESHOLD = 3;
 /** 雙方 max_budget 較低者 / 較高者 須達此比例才算預算相容 */
 const BUDGET_COMPAT_MIN_RATIO = 0.75;
@@ -149,6 +152,18 @@ export function calculateHabitRadarSimilarity(userA: UserHabits, userB: UserHabi
   const result = calculateMatch(userA, userB);
   if (result.status === "REJECTED_VETO") return 0;
   return result.similarity;
+}
+
+/** 用戶 vs 樓盤習慣向量契合度預覽（與 calculateMatch / RPC 同源）。 */
+export function previewUserPropertyCompatibility(
+  user: UserHabits,
+  property: UserHabits
+): SyncMatchPreview {
+  const similarity = calculateHabitRadarSimilarity(user, property);
+  return {
+    similarity,
+    meetsThreshold: similarity >= MATCH_THRESHOLD_PERCENT,
+  };
 }
 
 /** v4.0 初配門檻：習慣雷達分數 >= minPercent（預設 75）且未觸發紅線 */

@@ -55,6 +55,13 @@ export async function POST(request: Request) {
       );
     }
 
+    if (message.includes("SyncNest 契合度不足")) {
+      return NextResponse.json(
+        { error: message, code: "compatibility_below_threshold" },
+        { status: 403 }
+      );
+    }
+
     return NextResponse.json({ error: message, matched: false }, { status: 500 });
   }
 }

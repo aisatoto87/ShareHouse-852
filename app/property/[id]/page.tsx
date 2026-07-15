@@ -14,6 +14,10 @@ import WishlistHeartButton from "@/components/WishlistHeartButton";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
+  previewUserPropertyCompatibility,
+  profileRowToUserHabits,
+} from "@/lib/matchingAlgorithm";
+import {
   checkProfileCompleteness,
   formatProfileIncompleteHint,
   profileSetupHref,
@@ -199,6 +203,7 @@ export default async function PropertyDetailPage({ params }: PageProps) {
   let isProfileComplete = true;
   let profileSetupLink = "/dashboard?tab=personal";
   let profileIncompleteHint = "";
+  let compatibilityScore: number | null = null;
 
   if (user) {
     const { data: viewerProfile } = await supabase
@@ -223,6 +228,20 @@ export default async function PropertyDetailPage({ params }: PageProps) {
         guests: habitScoreForRadar(viewerProfile.habit_guests),
         noise: habitScoreForRadar(viewerProfile.habit_noise),
       };
+
+      const userHabits = profileRowToUserHabits(viewerProfile);
+      const propertyHabits = profileRowToUserHabits({
+        habit_cleanliness: property.habit_cleanliness,
+        habit_ac_temp: property.habit_ac_temp,
+        habit_guests: property.habit_guests,
+        habit_noise: property.habit_noise,
+      });
+      if (userHabits && propertyHabits) {
+        compatibilityScore = previewUserPropertyCompatibility(
+          userHabits,
+          propertyHabits
+        ).similarity;
+      }
     }
   }
 
@@ -407,6 +426,7 @@ export default async function PropertyDetailPage({ params }: PageProps) {
                 propertyListingStatus={property.status ?? "available"}
                 defaultDistrict={intentDefaultDistrict}
                 defaultBudget={intentDefaultBudget}
+                compatibilityScore={compatibilityScore}
                 isProfileComplete={isProfileComplete}
                 profileSetupHref={profileSetupLink}
                 profileIncompleteHint={profileIncompleteHint}

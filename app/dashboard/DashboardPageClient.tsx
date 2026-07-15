@@ -1183,7 +1183,9 @@ export default function DashboardPageClient() {
               我的帳號
             </h1>
             <span className="ml-4 inline-flex items-center rounded-full bg-blue-50 px-3 py-1 text-sm font-medium text-blue-700 ring-1 ring-inset ring-blue-700/10">
-              {userRole === "admin" ? "🛡️ 管家" : userRole === "tenant" ? "👤 租客" : "🏠 業主/租客"}
+              {userRole === "tenant" && "🏠 租客"}
+              {userRole === "landlord" && "🏠 業主"}
+              {userRole === "admin" && "🛡️ 管家"}
             </span>
           </div>
           <div className="mt-4 flex flex-wrap items-center gap-4 border-b border-zinc-200 sm:gap-6">
