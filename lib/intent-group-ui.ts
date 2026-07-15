@@ -1,12 +1,12 @@
-/** 意向卡片可顯示群組進度／室友列表的 match_groups.status */
-export const ACTIVE_MATCH_GROUP_STATUSES = [
-  "pending_opt_in",
-  "recruiting",
-  "confirmed",
-  "matched",
-] as const;
+import {
+  LIVE_MATCH_GROUP_STATUSES,
+  type LiveMatchGroupStatus,
+} from "@/lib/match-group-status";
 
-export type ActiveMatchGroupStatus = (typeof ACTIVE_MATCH_GROUP_STATUSES)[number];
+/** 意向卡片可顯示群組進度／室友列表的 match_groups.status */
+export const ACTIVE_MATCH_GROUP_STATUSES = LIVE_MATCH_GROUP_STATUSES;
+
+export type ActiveMatchGroupStatus = LiveMatchGroupStatus;
 
 /** 這些 intent.status 必須有對應的 live match_group，否則視為幽靈狀態並降級（recruiting 僅屬 match_groups） */
 export const GROUP_BACKED_INTENT_STATUSES = [

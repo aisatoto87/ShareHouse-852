@@ -1,6 +1,10 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { resolveGroupTargetSize } from "@/lib/recruiting-fomo";
+import {
+  LIVE_MATCH_GROUP_STATUSES,
+  matchGroupStatusLabel,
+} from "@/lib/match-group-status";
 
 export type AdminGroupMember = {
   userId: string;
@@ -21,14 +25,7 @@ export type AdminGroupRow = {
   members: AdminGroupMember[];
 };
 
-const STATUS_LABELS: Record<string, string> = {
-  recruiting: "招募中",
-  pending_opt_in: "待確認加入",
-  confirmed: "已成團",
-  matched: "已配對",
-};
-
-const ADMIN_GROUP_STATUSES = ["recruiting", "pending_opt_in", "confirmed", "matched"] as const;
+const ADMIN_GROUP_STATUSES = LIVE_MATCH_GROUP_STATUSES;
 
 const PROFILE_FIELDS = "display_name, nickname, phone, wechat_id";
 
@@ -213,7 +210,7 @@ function mapRawGroupsToRows(
       return {
         groupId,
         status,
-        statusLabel: STATUS_LABELS[status] ?? status,
+        statusLabel: matchGroupStatusLabel(status),
         propertyId,
         propertyTitle: pickPropertyTitle(row.properties, propertyId),
         targetSize,

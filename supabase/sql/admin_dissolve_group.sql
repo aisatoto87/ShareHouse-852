@@ -28,6 +28,8 @@ BEGIN
   UPDATE match_groups
   SET status = 'cancelled'
   WHERE group_id = p_group_id;
+  -- 注意：'cancelled' 必須存在於 match_groups_status_check；
+  -- 若違反約束，請執行 supabase/sql/match_groups_status_check.sql
 
   DELETE FROM group_members
   WHERE group_id = p_group_id;
