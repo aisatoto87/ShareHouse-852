@@ -54,7 +54,9 @@ function PropertyCell({ group }: { group: AdminGroupRow }) {
           查看樓盤 ↗
         </Link>
       ) : null}
-      <p className="mt-1 font-mono text-[10px] text-zinc-400">{group.groupId.slice(0, 8)}…</p>
+      <p className="mt-1 font-mono text-[10px] text-zinc-400">
+        {(group.groupId ?? "").slice(0, 8)}…
+      </p>
     </td>
   );
 }
@@ -72,8 +74,10 @@ function StatusBadge({ group }: { group: AdminGroupRow }) {
   );
 }
 
-async function copyMemberPhones(members: AdminGroupMember[]) {
-  const phones = members.map((m) => m.phone).filter((p): p is string => Boolean(p));
+async function copyMemberPhones(members: AdminGroupMember[] | null | undefined) {
+  const phones = (members ?? [])
+    .map((m) => m?.phone)
+    .filter((p): p is string => Boolean(p));
   if (phones.length === 0) {
     toast.error("此群組成員尚未提供電話號碼");
     return;
@@ -99,13 +103,15 @@ export default function AdminGroupsClient({ groups, fetchError }: AdminGroupsCli
   const [copyingGroupId, setCopyingGroupId] = useState<string | null>(null);
   const [kickingMemberKey, setKickingMemberKey] = useState<string | null>(null);
 
+  const safeGroups = Array.isArray(groups) ? groups : [];
+
   const activeGroups = useMemo(
-    () => groups.filter((g) => ACTIVE_STATUSES.has(g.status)),
-    [groups]
+    () => safeGroups.filter((g) => ACTIVE_STATUSES.has(g?.status ?? "")),
+    [safeGroups]
   );
   const confirmedGroups = useMemo(
-    () => groups.filter((g) => CONFIRMED_STATUSES.has(g.status)),
-    [groups]
+    () => safeGroups.filter((g) => CONFIRMED_STATUSES.has(g?.status ?? "")),
+    [safeGroups]
   );
 
   function openAddDialog(group: AdminGroupRow) {
@@ -276,15 +282,15 @@ export default function AdminGroupsClient({ groups, fetchError }: AdminGroupsCli
                         )}
                       </td>
                       <td className="px-4 py-4 text-zinc-700">
-                        {group.members.length === 0 ? (
+                        {(group.members ?? []).length === 0 ? (
                           <span className="text-zinc-400">—</span>
                         ) : (
                           <ul className="space-y-1">
-                            {group.members.map((m) => (
+                            {(group.members ?? []).map((m) => (
                               <li key={m.userId}>
                                 <span className="font-medium">{m.displayName}</span>
                                 <span className="ml-1 font-mono text-[10px] text-zinc-400">
-                                  ({m.userId.slice(0, 8)}…)
+                                  ({m.userId?.slice(0, 8)}…)
                                 </span>
                               </li>
                             ))}
@@ -374,11 +380,11 @@ export default function AdminGroupsClient({ groups, fetchError }: AdminGroupsCli
                         <p className="mt-1 text-xs text-emerald-700">已滿員</p>
                       </td>
                       <td className="px-4 py-4 text-zinc-800">
-                        {group.members.length === 0 ? (
+                        {(group.members ?? []).length === 0 ? (
                           <span className="text-zinc-400">—</span>
                         ) : (
                           <ul className="space-y-2">
-                            {group.members.map((m) => {
+                            {(group.members ?? []).map((m) => {
                               const memberKey = `${group.groupId}:${m.userId}`;
                               const isKicking = kickingMemberKey === memberKey;
                               return (

@@ -1,7 +1,10 @@
 import { redirect } from "next/navigation";
 import AdminGroupsClient from "@/app/admin/groups/AdminGroupsClient";
 import { checkAdminAccessFromProfile } from "@/lib/admin-auth";
-import { fetchActiveAdminGroups } from "@/lib/admin-groups";
+import {
+  fetchActiveAdminGroups,
+  type AdminGroupRow,
+} from "@/lib/admin-groups";
 import { createSupabaseServerClient, getServerUser } from "@/lib/supabase/server";
 
 export const dynamic = "force-dynamic";
@@ -24,7 +27,18 @@ export default async function AdminGroupsPage() {
     redirect("/");
   }
 
-  const { groups, error } = await fetchActiveAdminGroups();
+  let groups: AdminGroupRow[] = [];
+  let error: string | null = null;
+
+  try {
+    const result = await fetchActiveAdminGroups();
+    groups = Array.isArray(result.groups) ? result.groups : [];
+    error = result.error ?? null;
+  } catch (err) {
+    error = err instanceof Error ? err.message : "讀取配對群組時發生未知錯誤。";
+    console.error("[admin/groups] page fetch exception", error);
+    groups = [];
+  }
 
   return (
     <>

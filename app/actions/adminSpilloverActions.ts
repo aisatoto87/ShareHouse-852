@@ -21,10 +21,16 @@ export async function getStagnantRecruitingGroupsAction(): Promise<GetStagnantRe
     return { success: false, error: "無權限執行此操作。" };
   }
 
-  const { groups, error } = await fetchStagnantRecruitingGroups();
-  if (error) {
-    return { success: false, error };
-  }
+  try {
+    const { groups, error } = await fetchStagnantRecruitingGroups();
+    if (error) {
+      return { success: false, error };
+    }
 
-  return { success: true, groups };
+    return { success: true, groups: Array.isArray(groups) ? groups : [] };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "讀取停滯群組失敗。";
+    console.error("[getStagnantRecruitingGroupsAction]", message);
+    return { success: false, error: message };
+  }
 }

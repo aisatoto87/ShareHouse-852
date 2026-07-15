@@ -34,7 +34,11 @@ export default function StagnantGroupsPanel({
         setGroups([]);
         return;
       }
-      setGroups(result.groups);
+      setGroups(Array.isArray(result.groups) ? result.groups : []);
+    } catch (err) {
+      console.error("[StagnantGroupsPanel] load", err);
+      toast.error(err instanceof Error ? err.message : "載入停滯群組失敗");
+      setGroups([]);
     } finally {
       setLoading(false);
     }
@@ -95,13 +99,13 @@ export default function StagnantGroupsPanel({
 
       {loading ? (
         <p className="text-sm text-zinc-500">正在載入停滯群組...</p>
-      ) : groups.length === 0 ? (
+      ) : (groups ?? []).length === 0 ? (
         <p className="rounded-xl border border-dashed border-amber-200 bg-white/70 px-4 py-8 text-center text-sm text-zinc-500">
           目前沒有超過 14 天仍在招募中的群組。
         </p>
       ) : (
         <div className="space-y-3">
-          {groups.map((group) => {
+          {(groups ?? []).map((group) => {
             const expanded = expandedGroupIds.has(group.groupId);
             return (
               <div
@@ -131,7 +135,10 @@ export default function StagnantGroupsPanel({
                       <span className="font-semibold text-[#0f2540]">{group.memberCount}</span>
                       <span className="text-zinc-400"> / {group.targetSize}</span>
                       <span className="mx-2 text-zinc-300">·</span>
-                      建立於 {new Date(group.createdAt).toLocaleDateString("zh-HK")}
+                      建立於{" "}
+                      {group.createdAt
+                        ? new Date(group.createdAt).toLocaleDateString("zh-HK")
+                        : "—"}
                     </p>
                     {group.propertyId ? (
                       <Link
@@ -155,11 +162,11 @@ export default function StagnantGroupsPanel({
 
                 {expanded ? (
                   <div className="border-t border-amber-100 bg-zinc-50/50 px-4 py-3">
-                    {group.members.length === 0 ? (
+                    {(group.members ?? []).length === 0 ? (
                       <p className="text-sm text-zinc-500">此群組尚無成員資料。</p>
                     ) : (
                       <ul className="space-y-3">
-                        {group.members.map((member) => (
+                        {(group.members ?? []).map((member) => (
                           <li
                             key={member.userId}
                             className="rounded-lg border border-zinc-200 bg-white px-3 py-3"
@@ -174,7 +181,7 @@ export default function StagnantGroupsPanel({
                                 </span>
                               ) : null}
                               <span className="font-mono text-[10px] text-zinc-400">
-                                {member.userId.slice(0, 8)}…
+                                {member.userId?.slice(0, 8)}…
                               </span>
                             </div>
                             <div className="mt-2 grid gap-1 text-xs text-zinc-600 sm:grid-cols-2">
