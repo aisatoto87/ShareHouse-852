@@ -44,7 +44,7 @@ ORDER BY row_count DESC;
 -- -----------------------------------------------------------------------------
 -- 2) 更新 CHECK 約束：補上 cancelled / expired（應用已在使用）
 --    允許清單與 lib/match-group-status.ts 的 MATCH_GROUP_STATUSES 一致：
---      recruiting | pending_opt_in | confirmed | matched | cancelled | expired
+--      pending_opt_in | confirmed | matched | cancelled | expired
 -- -----------------------------------------------------------------------------
 ALTER TABLE public.match_groups
   DROP CONSTRAINT IF EXISTS match_groups_status_check;
@@ -53,7 +53,6 @@ ALTER TABLE public.match_groups
   ADD CONSTRAINT match_groups_status_check
   CHECK (
     status IN (
-      'recruiting',
       'pending_opt_in',
       'confirmed',
       'matched',

@@ -152,7 +152,7 @@ export async function fetchStagnantRecruitingGroups(): Promise<{
       const { data, error } = await admin
         .from("match_groups")
         .select(select)
-        .eq("status", "recruiting")
+        .eq("status", "pending_opt_in")
         .lt("created_at", cutoffIso)
         .order("created_at", { ascending: true });
 

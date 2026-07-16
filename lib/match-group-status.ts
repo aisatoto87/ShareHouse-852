@@ -2,15 +2,14 @@
  * match_groups.status 合法值（須與 DB CHECK `match_groups_status_check` 一致）。
  *
  * 寫入對照：
- * - recruiting / pending_opt_in — 配對引擎建組／加人
+ * - pending_opt_in — 配對引擎建組／待確認
  * - confirmed / matched — 全員確認／成團
- * - cancelled — 解散群組（admin_dissolve_group）、幽靈群組清理
- * - expired — 用戶 reject opt-in 或群組逾時作廢
+ * - cancelled — 解散群組（admin_dissolve_group、連鎖解散 disband ≡ cancelled）
+ * - expired — 舊版 reject／逾時作廢（新路徑改走 cancelled）
  *
- * 注意：應用不會寫入 `disbanded` / `timeout`；解散請用 `cancelled`。
+ * 注意：架構升級階段一已移除 recruiting。
  */
 export const MATCH_GROUP_STATUSES = [
-  "recruiting",
   "pending_opt_in",
   "confirmed",
   "matched",
@@ -22,7 +21,6 @@ export type MatchGroupStatus = (typeof MATCH_GROUP_STATUSES)[number];
 
 /** 仍在進行中、應對 UI／撮合可見的群組狀態 */
 export const LIVE_MATCH_GROUP_STATUSES = [
-  "recruiting",
   "pending_opt_in",
   "confirmed",
   "matched",
@@ -37,7 +35,6 @@ export type TerminalMatchGroupStatus =
   (typeof TERMINAL_MATCH_GROUP_STATUSES)[number];
 
 const STATUS_LABELS: Record<MatchGroupStatus, string> = {
-  recruiting: "招募中",
   pending_opt_in: "待確認加入",
   confirmed: "已成團",
   matched: "已配對",

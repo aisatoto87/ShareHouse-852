@@ -3,7 +3,7 @@ export const INACTIVE_HOUSING_INTENT_STATUSES = ["expired", "cancelled"] as cons
 
 /**
  * 滿員／鎖定階段才觸發 Global Freeze（其他 waiting 意向暫停配對）。
- * matching 為意向池撮合中；recruiting 僅屬 match_groups.status，不可寫入 housing_intents。
+ * matching 為意向池撮合中。
  */
 export const GLOBAL_FROZEN_INTENT_STATUSES = [
   "pending_opt_in",
@@ -24,7 +24,6 @@ export const GLOBAL_FROZEN_GROUP_STATUSES = [
 export const GLOBAL_FREEZE_BLOCKING_INTENT_STATUSES = [
   "matching",
   "pending_opt_in",
-  "recruiting",
   "confirmed",
   "matched",
 ] as const;
@@ -70,7 +69,7 @@ export function userHasLockingMatchGroup(
 
 /**
  * 從意向列推斷 Global Freeze：僅看 match_group_status，不以 housing_intents.status 為準
- * （避免 recruiting 群組但意向仍為 matching / pending_opt_in 時誤凍結）。
+ * （避免群組與意向 status 不同步時誤凍結）。
  */
 export function isUserGloballyFrozenFromIntents(
   intents: ReadonlyArray<IntentWithOptionalGroupStatus>
@@ -89,7 +88,7 @@ export function isActiveHousingIntentStatus(status: unknown): boolean {
   );
 }
 
-/** housing_intents.status 合法值；recruiting 僅屬 match_groups，禁止寫入意向表 */
+/** housing_intents.status 合法值（與 housing_intents_status_check 一致） */
 export const HOUSING_INTENT_GROUP_SYNC_STATUSES = ["matching", "pending_opt_in"] as const;
 
 export type HousingIntentGroupSyncStatus =

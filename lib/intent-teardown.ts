@@ -99,9 +99,7 @@ async function reconcileGroupAfterMemberLeave(
     (status === "pending_opt_in" || status === "confirmed" || status === "matched") &&
     remainingCount < targetSize
   ) {
-    nextStatus = "recruiting";
-  } else if (status === "recruiting") {
-    nextStatus = "recruiting";
+    nextStatus = "pending_opt_in";
   }
 
   await admin
@@ -109,11 +107,11 @@ async function reconcileGroupAfterMemberLeave(
     .update({
       status: nextStatus,
       current_size: remainingCount,
-      expires_at: nextStatus === "recruiting" ? null : null,
+      expires_at: null,
     })
     .eq("group_id", groupId);
 
-  if (nextStatus === "recruiting" && remainingUserIds.length > 0) {
+  if (nextStatus === "pending_opt_in" && remainingUserIds.length > 0) {
     let intentQuery = admin
       .from("housing_intents")
       .update({ status: "matching" })
@@ -131,6 +129,247 @@ async function reconcileGroupAfterMemberLeave(
       console.error("[intent-teardown] revert remaining intents", groupId, intentUpdateErr);
     }
   }
+}
+
+export type DisbandGroupResult =
+  | {
+      ok: true;
+      groupId: string;
+      releasedUserIds: string[];
+      cancelledUserId: string | null;
+      liftedPausedCount: number;
+    }
+  | { ok: false; error: string };
+
+/**
+ * 連鎖解散協定（Cascading Teardown）：
+ * - match_groups → cancelled（語意等同任務規格之 disbanded）
+ * - triggerUserId（主動放棄／被踢）→ housing_intents.status = cancelled，清空 group_id
+ * - 其餘無辜成員 → waiting + 清空 group_id，並解除其他樓盤 paused（Deferred Freeze）
+ */
+export async function disbandGroupAndReleaseMembers(
+  admin: SupabaseClient,
+  groupId: string,
+  triggerUserId?: string
+): Promise<DisbandGroupResult> {
+  const trimmedGroupId = groupId.trim();
+  if (!trimmedGroupId || !isLikelyUuid(trimmedGroupId)) {
+    return { ok: false, error: "無效的 groupId。" };
+  }
+
+  const trimmedTrigger =
+    typeof triggerUserId === "string" && triggerUserId.trim()
+      ? triggerUserId.trim()
+      : null;
+  if (trimmedTrigger && !isLikelyUuid(trimmedTrigger)) {
+    return { ok: false, error: "無效的 triggerUserId。" };
+  }
+
+  const { data: groupRow, error: groupErr } = await admin
+    .from("match_groups")
+    .select("group_id, status, property_id")
+    .eq("group_id", trimmedGroupId)
+    .maybeSingle();
+
+  if (groupErr) {
+    console.error("[intent-teardown] disband fetch group", trimmedGroupId, groupErr);
+    return { ok: false, error: groupErr.message };
+  }
+
+  if (!groupRow) {
+    return { ok: false, error: "找不到配對群組。" };
+  }
+
+  const propertyId =
+    typeof (groupRow as { property_id?: unknown }).property_id === "string" &&
+    String((groupRow as { property_id: string }).property_id).trim()
+      ? String((groupRow as { property_id: string }).property_id).trim()
+      : null;
+
+  const { data: memberRows, error: membersErr } = await admin
+    .from("group_members")
+    .select("user_id")
+    .eq("group_id", trimmedGroupId);
+
+  if (membersErr) {
+    console.error("[intent-teardown] disband members", trimmedGroupId, membersErr);
+    return { ok: false, error: membersErr.message };
+  }
+
+  const memberUserIds = [
+    ...new Set(
+      (memberRows ?? [])
+        .map((r) => (r as { user_id?: unknown }).user_id)
+        .filter((id): id is string => typeof id === "string" && id.trim().length > 0)
+        .map((id) => id.trim())
+    ),
+  ];
+
+  const innocentUserIds = trimmedTrigger
+    ? memberUserIds.filter((id) => id !== trimmedTrigger)
+    : memberUserIds;
+
+  // 1) 群組標記解散（cancelled ≡ disbanded）
+  const { error: disbandGroupErr } = await admin
+    .from("match_groups")
+    .update({
+      status: "cancelled",
+      current_size: 0,
+      expires_at: null,
+    })
+    .eq("group_id", trimmedGroupId);
+
+  if (disbandGroupErr) {
+    console.error("[intent-teardown] disband group", trimmedGroupId, disbandGroupErr);
+    return { ok: false, error: disbandGroupErr.message };
+  }
+
+  // 2) 觸發者意向 → cancelled
+  if (trimmedTrigger) {
+    const { error: cancelByGroupErr } = await admin
+      .from("housing_intents")
+      .update({ status: "cancelled", group_id: null })
+      .eq("user_id", trimmedTrigger)
+      .eq("group_id", trimmedGroupId);
+
+    if (cancelByGroupErr) {
+      console.error("[intent-teardown] cancel trigger by group_id", cancelByGroupErr);
+      return { ok: false, error: cancelByGroupErr.message };
+    }
+
+    let cancelByPropertyQuery = admin
+      .from("housing_intents")
+      .update({ status: "cancelled", group_id: null })
+      .eq("user_id", trimmedTrigger)
+      .in("status", [
+        "waiting",
+        "matching",
+        "pending_opt_in",
+        "matched",
+        "confirmed",
+        "paused",
+      ]);
+
+    if (propertyId) {
+      cancelByPropertyQuery = cancelByPropertyQuery.eq(
+        "target_property_id",
+        propertyId
+      );
+    } else {
+      cancelByPropertyQuery = cancelByPropertyQuery.is("target_property_id", null);
+    }
+
+    const { error: cancelByPropertyErr } = await cancelByPropertyQuery;
+    if (cancelByPropertyErr) {
+      console.error(
+        "[intent-teardown] cancel trigger by property",
+        cancelByPropertyErr
+      );
+      return { ok: false, error: cancelByPropertyErr.message };
+    }
+  }
+
+  let liftedPausedCount = 0;
+
+  // 3) 無辜室友：本群組意向 → waiting，清空 group_id
+  if (innocentUserIds.length > 0) {
+    const { error: releaseByGroupErr } = await admin
+      .from("housing_intents")
+      .update({ status: "waiting", group_id: null })
+      .in("user_id", innocentUserIds)
+      .eq("group_id", trimmedGroupId)
+      .in("status", [
+        "matching",
+        "pending_opt_in",
+        "matched",
+        "confirmed",
+        "waiting",
+      ]);
+
+    if (releaseByGroupErr) {
+      console.error("[intent-teardown] release by group_id", releaseByGroupErr);
+      return { ok: false, error: releaseByGroupErr.message };
+    }
+
+    // 相容舊列：可能尚無 group_id，依樓盤還原
+    let releaseByPropertyQuery = admin
+      .from("housing_intents")
+      .update({ status: "waiting", group_id: null })
+      .in("user_id", innocentUserIds)
+      .in("status", ["matching", "pending_opt_in", "matched", "confirmed"]);
+
+    if (propertyId) {
+      releaseByPropertyQuery = releaseByPropertyQuery.eq(
+        "target_property_id",
+        propertyId
+      );
+    } else {
+      releaseByPropertyQuery = releaseByPropertyQuery.is("target_property_id", null);
+    }
+
+    const { error: releaseByPropertyErr } = await releaseByPropertyQuery;
+    if (releaseByPropertyErr) {
+      console.error("[intent-teardown] release by property", releaseByPropertyErr);
+      return { ok: false, error: releaseByPropertyErr.message };
+    }
+
+    // 4) 解除 Deferred Freeze：其他樓盤 paused → waiting
+    const { data: liftedRows, error: liftErr } = await admin
+      .from("housing_intents")
+      .update({ status: "waiting" })
+      .in("user_id", innocentUserIds)
+      .eq("status", "paused")
+      .select("intent_id");
+
+    if (liftErr) {
+      console.error("[intent-teardown] lift paused freeze", liftErr);
+      return { ok: false, error: liftErr.message };
+    }
+
+    liftedPausedCount = liftedRows?.length ?? 0;
+  }
+
+  // 5) 清空成員列
+  const { error: deleteMembersErr } = await admin
+    .from("group_members")
+    .delete()
+    .eq("group_id", trimmedGroupId);
+
+  if (deleteMembersErr) {
+    console.error("[intent-teardown] delete members", deleteMembersErr);
+    return { ok: false, error: deleteMembersErr.message };
+  }
+
+  // 6) 若樓盤曾被封盤，解除預留
+  if (propertyId) {
+    const { error: propertyErr } = await admin
+      .from("properties")
+      .update({ status: "available" })
+      .eq("id", propertyId)
+      .eq("status", "held");
+
+    if (propertyErr) {
+      console.warn("[intent-teardown] release held property", propertyErr.message);
+    }
+  }
+
+  // 7) 線下追蹤標記取消（若有）
+  const { error: dealErr } = await admin
+    .from("offline_deals")
+    .update({ status: "cancelled", updated_at: new Date().toISOString() })
+    .eq("group_id", trimmedGroupId);
+
+  if (dealErr) {
+    console.warn("[intent-teardown] offline_deals cancel", dealErr.message);
+  }
+
+  return {
+    ok: true,
+    groupId: trimmedGroupId,
+    releasedUserIds: innocentUserIds,
+    cancelledUserId: trimmedTrigger,
+    liftedPausedCount,
+  };
 }
 
 /**

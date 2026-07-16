@@ -3,7 +3,6 @@ export const BANNER_GROUP_STATUS_PRIORITY: Record<string, number> = {
   confirmed: 0,
   matched: 0,
   pending_opt_in: 1,
-  recruiting: 2,
 };
 
 export function compareBannerGroupPriority(statusA: unknown, statusB: unknown): number {
@@ -31,5 +30,5 @@ export function pickHighestPriorityBannerGroup<T extends { status?: unknown }>(
 export function shouldShowMatchingOptInBanner(group: { status?: unknown } | null): boolean {
   if (!group) return false;
   const status = typeof group.status === "string" ? group.status.trim().toLowerCase() : "";
-  return status === "pending_opt_in" || status === "recruiting";
+  return status === "pending_opt_in";
 }

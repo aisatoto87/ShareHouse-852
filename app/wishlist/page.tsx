@@ -4,7 +4,7 @@ import { Heart, Sparkles } from "lucide-react";
 import Navbar from "@/components/Navbar";
 import PropertyCard from "@/components/PropertyCard";
 import { mapRowToProperty } from "@/lib/property-mapper";
-import { fetchPropertyIdsRecruitingOneShort } from "@/lib/recruiting-fomo";
+import { fetchWaitingPoolStats } from "@/lib/waiting-pool";
 import { createSupabaseServerClient, getServerUser } from "@/lib/supabase/server";
 import type { Property } from "@/types/property";
 
@@ -91,7 +91,7 @@ export default async function WishlistPage() {
     }
   }
 
-  const recruitingOneShortIds = await fetchPropertyIdsRecruitingOneShort(
+  const waitingPoolStats = await fetchWaitingPoolStats(
     supabase,
     savedProperties.map((p) => p.id)
   );
@@ -126,14 +126,18 @@ export default async function WishlistPage() {
           </div>
         ) : (
           <div className="grid grid-cols-1 items-stretch gap-5 sm:grid-cols-2 lg:grid-cols-3">
-            {savedProperties.map((property) => (
+            {savedProperties.map((property) => {
+              const pool = waitingPoolStats.get(property.id);
+              return (
               <div key={property.id} className="h-full">
                 <PropertyCard
                   property={property}
-                  recruitingOneShort={recruitingOneShortIds.has(property.id)}
+                  waitingCount={pool?.waitingCount ?? 0}
+                  targetSize={pool?.targetSize ?? 2}
                 />
               </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </main>

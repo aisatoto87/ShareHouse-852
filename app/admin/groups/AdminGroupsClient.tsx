@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import { ClipboardCopy, Loader2, UserPlus } from "lucide-react";
 import { toast } from "sonner";
 import {
-  adminAddToGroupAction,
+  adminCreateVirtualMatchGroupAction,
   adminDissolveGroupAction,
   adminKickConfirmedMemberAction,
 } from "@/app/admin/groups/actions";
@@ -23,17 +23,17 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import type { AdminGroupMember, AdminGroupRow } from "@/lib/admin-groups";
 import { cn } from "@/lib/utils";
 
 const STATUS_BADGE: Record<string, string> = {
-  recruiting: "border-emerald-200 bg-emerald-50 text-emerald-800",
   pending_opt_in: "border-amber-200 bg-amber-50 text-amber-800",
   confirmed: "border-blue-200 bg-blue-50 text-blue-800",
   matched: "border-violet-200 bg-violet-50 text-violet-800",
 };
 
-const ACTIVE_STATUSES = new Set(["recruiting", "pending_opt_in"]);
+const ACTIVE_STATUSES = new Set(["pending_opt_in"]);
 const CONFIRMED_STATUSES = new Set(["confirmed", "matched"]);
 
 type AdminGroupsClientProps = {
@@ -95,9 +95,9 @@ export default function AdminGroupsClient({ groups, fetchError }: AdminGroupsCli
   const router = useRouter();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [dealModalOpen, setDealModalOpen] = useState(false);
-  const [activeGroup, setActiveGroup] = useState<AdminGroupRow | null>(null);
   const [dealGroup, setDealGroup] = useState<AdminGroupRow | null>(null);
-  const [userIdInput, setUserIdInput] = useState("");
+  const [propertyIdInput, setPropertyIdInput] = useState("");
+  const [userIdsInput, setUserIdsInput] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [dissolvingGroupId, setDissolvingGroupId] = useState<string | null>(null);
   const [copyingGroupId, setCopyingGroupId] = useState<string | null>(null);
@@ -114,9 +114,13 @@ export default function AdminGroupsClient({ groups, fetchError }: AdminGroupsCli
     [safeGroups]
   );
 
-  function openAddDialog(group: AdminGroupRow) {
-    setActiveGroup(group);
-    setUserIdInput("");
+  function openCreateDialog(prefillPropertyId?: string | null) {
+    setPropertyIdInput(
+      typeof prefillPropertyId === "string" && prefillPropertyId.trim()
+        ? prefillPropertyId.trim()
+        : ""
+    );
+    setUserIdsInput("");
     setDialogOpen(true);
   }
 
@@ -125,22 +129,48 @@ export default function AdminGroupsClient({ groups, fetchError }: AdminGroupsCli
     setDealModalOpen(true);
   }
 
-  async function handleSubmit() {
-    if (!activeGroup || submitting) return;
+  function parseUserIds(raw: string): string[] {
+    return [
+      ...new Set(
+        raw
+          .split(/[\s,;]+/)
+          .map((id) => id.trim())
+          .filter(Boolean)
+      ),
+    ];
+  }
+
+  async function handleCreateVirtualGroup() {
+    if (submitting) return;
+
+    const propertyId = propertyIdInput.trim();
+    const userIds = parseUserIds(userIdsInput);
+    if (!propertyId) {
+      toast.error("請提供樓盤 property_id。");
+      return;
+    }
+    if (userIds.length < 2) {
+      toast.error("請至少輸入 2 個仍在 waiting 的 user UUID。");
+      return;
+    }
 
     setSubmitting(true);
     try {
-      const result = await adminAddToGroupAction(activeGroup.groupId, userIdInput);
+      const result = await adminCreateVirtualMatchGroupAction(propertyId, userIds);
       if (!result.ok) {
         toast.error(result.error);
         return;
       }
-      toast.success("已成功將用戶加入群組");
+      toast.success(
+        `已建立虛擬成團（${result.currentSize} 人 → pending_opt_in）${
+          result.pausedCount > 0 ? `，並暫停其他樓盤意向 ${result.pausedCount} 筆` : ""
+        }`
+      );
       setDialogOpen(false);
       router.refresh();
     } catch (err) {
-      console.error("[AdminGroupsClient] add member", err);
-      toast.error(err instanceof Error ? err.message : "加入群組時發生未知錯誤");
+      console.error("[AdminGroupsClient] create virtual group", err);
+      toast.error(err instanceof Error ? err.message : "手動拉人成團時發生未知錯誤");
     } finally {
       setSubmitting(false);
     }
@@ -185,7 +215,7 @@ export default function AdminGroupsClient({ groups, fetchError }: AdminGroupsCli
     if (kickingMemberKey || dissolvingGroupId) return;
 
     const confirmed = window.confirm(
-      `確定要將「${member.displayName}」踢出群組嗎？群組將降級為招募中，樓盤預留亦會解除。`
+      "警告：踢除此成員將導致群組人數不足而強制解散，其餘成員將退回排隊池，是否繼續？"
     );
     if (!confirmed) return;
 
@@ -201,7 +231,7 @@ export default function AdminGroupsClient({ groups, fetchError }: AdminGroupsCli
         toast.error(result.error);
         return;
       }
-      toast.success("已踢除成員，群組已退回招募中");
+      toast.success("已踢除成員，群組已強制解散，其餘成員已退回排隊池");
       router.refresh();
     } catch (err) {
       console.error("[AdminGroupsClient] kick member", err);
@@ -247,11 +277,23 @@ export default function AdminGroupsClient({ groups, fetchError }: AdminGroupsCli
   return (
     <>
       <section className="space-y-3">
-        <h2 className="text-lg font-semibold text-[#0f2540]">進行中的配對群組</h2>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 className="text-lg font-semibold text-[#0f2540]">進行中的配對群組</h2>
+          <Button
+            type="button"
+            size="sm"
+            className="gap-1.5 bg-[#0f2540] text-white hover:bg-[#1a3a5c]"
+            disabled={submitting || dissolvingGroupId != null}
+            onClick={() => openCreateDialog()}
+          >
+            <UserPlus className="h-4 w-4" />
+            手動拉人成團
+          </Button>
+        </div>
         <div className="overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-sm">
           {activeGroups.length === 0 ? (
             <div className="p-10 text-center text-sm text-zinc-500">
-              目前沒有招募中或待確認的配對群組。
+              目前沒有待確認的配對群組。
             </div>
           ) : (
             <div className="overflow-x-auto">
@@ -299,17 +341,17 @@ export default function AdminGroupsClient({ groups, fetchError }: AdminGroupsCli
                       </td>
                       <td className="px-4 py-4 text-right">
                         <div className="flex flex-col items-end gap-2">
-                          {group.shortage > 0 ? (
+                          {group.propertyId ? (
                             <Button
                               type="button"
                               size="sm"
                               variant="outline"
                               className="gap-1.5"
                               disabled={dissolvingGroupId === group.groupId || submitting}
-                              onClick={() => openAddDialog(group)}
+                              onClick={() => openCreateDialog(group.propertyId)}
                             >
                               <UserPlus className="h-4 w-4" />
-                              手動加人
+                              同樓盤再成團
                             </Button>
                           ) : null}
                           <Button
@@ -500,25 +542,38 @@ export default function AdminGroupsClient({ groups, fetchError }: AdminGroupsCli
       </section>
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent className="sm:max-w-lg">
           <DialogHeader>
-            <DialogTitle>➕ 手動加人至群組</DialogTitle>
+            <DialogTitle>手動拉人成團</DialogTitle>
             <DialogDescription>
-              {activeGroup
-                ? `樓盤：${activeGroup.propertyTitle}（尚欠 ${activeGroup.shortage} 人）`
-                : "輸入要加入的 Supabase user UUID。"}
+              選定樓盤與至少 2 位仍在 waiting 的用戶，系統會直接呼叫{" "}
+              <code className="text-xs">create_virtual_match_group</code>，一步進入{" "}
+              <code className="text-xs">pending_opt_in</code>（不再經 recruiting）。
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-2 py-2">
-            <Label htmlFor="admin-add-user-id">User ID (UUID)</Label>
-            <Input
-              id="admin-add-user-id"
-              value={userIdInput}
-              onChange={(e) => setUserIdInput(e.target.value)}
-              placeholder="e.g. 550e8400-e29b-41d4-a716-446655440000"
-              className="font-mono text-xs"
-              disabled={submitting}
-            />
+          <div className="space-y-4 py-2">
+            <div className="space-y-2">
+              <Label htmlFor="admin-create-property-id">Property ID (UUID)</Label>
+              <Input
+                id="admin-create-property-id"
+                value={propertyIdInput}
+                onChange={(e) => setPropertyIdInput(e.target.value)}
+                placeholder="樓盤 UUID"
+                className="font-mono text-xs"
+                disabled={submitting}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="admin-create-user-ids">User IDs（至少 2 個，逗號或換行分隔）</Label>
+              <Textarea
+                id="admin-create-user-ids"
+                value={userIdsInput}
+                onChange={(e) => setUserIdsInput(e.target.value)}
+                placeholder={"uuid-a\nuuid-b\nuuid-c"}
+                className="min-h-[120px] font-mono text-xs"
+                disabled={submitting}
+              />
+            </div>
           </div>
           <DialogFooter className="gap-2 sm:gap-0">
             <Button
@@ -529,14 +584,18 @@ export default function AdminGroupsClient({ groups, fetchError }: AdminGroupsCli
             >
               取消
             </Button>
-            <Button type="button" onClick={() => void handleSubmit()} disabled={submitting}>
+            <Button
+              type="button"
+              onClick={() => void handleCreateVirtualGroup()}
+              disabled={submitting}
+            >
               {submitting ? (
                 <>
                   <Loader2 className="h-4 w-4 animate-spin" />
-                  處理中…
+                  成團中…
                 </>
               ) : (
-                "確認加入"
+                "確認成團"
               )}
             </Button>
           </DialogFooter>

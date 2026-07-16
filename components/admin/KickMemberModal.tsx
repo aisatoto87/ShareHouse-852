@@ -51,10 +51,10 @@ export default function KickMemberModal({
       return;
     }
 
-    if (group.members.length <= 1) {
-      toast.error("群組僅剩一人，請改用「解散群組」。");
-      return;
-    }
+    const confirmed = window.confirm(
+      "警告：踢除此成員將導致群組人數不足而強制解散，其餘成員將退回排隊池，是否繼續？"
+    );
+    if (!confirmed) return;
 
     setSubmitting(true);
     try {
@@ -71,7 +71,7 @@ export default function KickMemberModal({
       }
 
       toast.success(
-        `已踢出反悔成員，群組已退回招募中（${result.remainingMemberCount} / ${result.targetSize} 人）。`
+        `已踢出反悔成員並強制解散群組，其餘 ${result.remainingMemberCount} 位成員已退回排隊池。`
       );
       onOpenChange(false);
       onSuccess?.();
@@ -93,7 +93,7 @@ export default function KickMemberModal({
           <DialogTitle>❌ 睇樓失敗 — 選擇反悔成員</DialogTitle>
           <DialogDescription>
             {group
-              ? `請指出哪位成員反悔或退出。踢出後，其餘 ${Math.max(0, group.memberCount - 1)} 位室友將保留在群組內繼續招募替補。`
+              ? "警告：踢除任一成員將導致整團強制解散，其餘室友會退回排隊池並解除其他樓盤的暫停狀態。"
               : "選擇要踢出的成員。"}
           </DialogDescription>
         </DialogHeader>
@@ -125,7 +125,7 @@ export default function KickMemberModal({
           </Button>
           <Button
             type="button"
-            disabled={submitting || !selectedUserId || members.length <= 1}
+            disabled={submitting || !selectedUserId}
             className="gap-1.5 bg-red-600 text-white hover:bg-red-700"
             onClick={() => void handleConfirmKick()}
           >
@@ -137,7 +137,7 @@ export default function KickMemberModal({
             ) : (
               <>
                 <UserX className="size-4" aria-hidden />
-                確認踢出並重建招募
+                確認踢出並解散群組
               </>
             )}
           </Button>

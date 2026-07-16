@@ -48,7 +48,7 @@ export default async function AdminGroupsPage() {
             配對群組 — 上帝視角
           </h1>
           <p className="mt-2 text-sm text-zinc-500">
-            檢視招募中／待確認的群組，並可手動將用戶加入缺人的隊伍；已成團群組會列於下方供管家跟進。
+            檢視待確認／已成團的配對群組；可用「手動拉人成團」將 waiting 名單一步送入 pending_opt_in。
           </p>
         </div>
       </section>

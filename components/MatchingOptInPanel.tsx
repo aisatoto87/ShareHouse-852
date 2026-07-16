@@ -18,7 +18,7 @@ type MatchingOptInPanelProps = {
   className?: string;
 };
 
-type PanelMode = "pending_opt_in" | "recruiting" | "hidden";
+type PanelMode = "pending_opt_in" | "hidden";
 
 function parseGroupSize(value: unknown): number {
   const n = typeof value === "number" ? value : Number(value);
@@ -128,7 +128,7 @@ export default function MatchingOptInPanel({ viewerUserId, className }: Matching
         .from("match_groups")
         .select("group_id, expires_at, status, current_size, target_size")
         .in("group_id", groupIds)
-        .in("status", ["pending_opt_in", "recruiting", "confirmed", "matched"]);
+        .in("status", ["pending_opt_in", "confirmed", "matched"]);
 
       if (mgErr) {
         console.error("[MatchingOptInPanel] match_groups", mgErr);
@@ -146,9 +146,8 @@ export default function MatchingOptInPanel({ viewerUserId, className }: Matching
         return;
       }
 
-      const status = String(g.status ?? "");
       const gid = String(g.group_id);
-      const mode: PanelMode = status === "recruiting" ? "recruiting" : "pending_opt_in";
+      const mode: PanelMode = "pending_opt_in";
 
       const { count: memberCount, error: memberCountErr } = await supabase
         .from("group_members")
@@ -215,8 +214,6 @@ export default function MatchingOptInPanel({ viewerUserId, className }: Matching
     }
   }
 
-  const recruitingProgressPercent =
-    targetSize > 0 ? Math.min(100, Math.round((currentSize / targetSize) * 100)) : 0;
 
   function scheduleSettlementRefresh(message: string) {
     if (settlementRefreshScheduledRef.current) return;
@@ -249,7 +246,6 @@ export default function MatchingOptInPanel({ viewerUserId, className }: Matching
         ok?: boolean;
         error?: string;
         group_confirmed?: boolean;
-        group_recruiting?: boolean;
         awaiting_others?: boolean;
         group_status?: string;
       };
@@ -262,10 +258,6 @@ export default function MatchingOptInPanel({ viewerUserId, className }: Matching
       if (action === "accept") {
         if (json.group_confirmed === true && json.group_status === "confirmed") {
           scheduleSettlementRefresh("已確認！正刷新狀態...");
-          return;
-        }
-        if (json.group_recruiting === true && json.group_status === "recruiting") {
-          scheduleSettlementRefresh("全員同意！群組進入招募中，正刷新狀態...");
           return;
         }
         toast.success("已發送確認！");
@@ -315,77 +307,33 @@ export default function MatchingOptInPanel({ viewerUserId, className }: Matching
     return null;
   }
 
-  if (panelMode === "recruiting") {
-    return (
-      <Card
-        className={cn(
-          "overflow-hidden border-2 border-emerald-300/80 bg-gradient-to-br from-emerald-50 via-white to-teal-50/90 shadow-md",
-          className
-        )}
-      >
-        <CardContent className="space-y-5 p-5 sm:p-6">
-          <div className="space-y-2">
-            <h3 className="text-lg font-bold tracking-tight text-zinc-900 sm:text-xl">
-              🎉 招募中！您已初步結盟神仙室友！
-            </h3>
-            <p className="text-sm leading-relaxed text-zinc-600">
-              系統正在為您的團隊尋找下一位完美室友，請耐心等候...
-            </p>
-          </div>
-
-          {otherUserId ? (
-            <p className="text-sm text-zinc-700">
-              已結盟室友：<span className="font-semibold text-[#0f2540]">{otherLabel}</span>
-            </p>
-          ) : null}
-
-          <div className="space-y-2.5 rounded-xl border border-emerald-200/80 bg-white/70 p-4 shadow-sm">
-            <div className="flex items-center justify-between gap-3 text-sm">
-              <span className="font-semibold text-emerald-900">
-                進度：{currentSize} / {targetSize} 人
-              </span>
-              <span className="tabular-nums font-medium text-emerald-700">{recruitingProgressPercent}%</span>
-            </div>
-            <div
-              className="h-3 overflow-hidden rounded-full bg-emerald-100"
-              role="progressbar"
-              aria-valuenow={currentSize}
-              aria-valuemin={0}
-              aria-valuemax={targetSize}
-              aria-label={`招募進度 ${currentSize} / ${targetSize} 人`}
-            >
-              <div
-                className="h-full rounded-full bg-gradient-to-r from-emerald-500 via-emerald-600 to-teal-500 transition-all duration-500 ease-out"
-                style={{ width: `${recruitingProgressPercent}%` }}
-              />
-            </div>
-            <p className="text-xs text-zinc-500">
-              人數齊全後，系統將自動完成配對並通知您。
-            </p>
-          </div>
-        </CardContent>
-      </Card>
-    );
-  }
-
   return (
     <Card
       className={cn(
-        "overflow-hidden border-2 border-amber-300/80 bg-gradient-to-br from-amber-50 via-white to-orange-50/90 shadow-md",
+        "overflow-hidden border-2 border-red-400/90 bg-gradient-to-br from-red-50 via-amber-50 to-orange-50/90 shadow-lg ring-2 ring-red-200/50",
         className
       )}
     >
       <CardContent className="space-y-4 p-5 sm:p-6">
-        <h3 className="text-lg font-bold tracking-tight text-zinc-900 sm:text-xl">
-          {hasAgreed
-            ? "⏳ 等待其他室友確認"
-            : "🔥 震撼好消息！系統已為您鎖定神仙室友！"}
-        </h3>
+        <div className="flex items-start justify-between gap-2">
+          <h3 className="text-lg font-bold tracking-tight text-zinc-900 sm:text-xl">
+            {hasAgreed
+              ? "⏳ 等待其他室友確認"
+              : "🔥 配對成功！系統已為您鎖定神仙室友"}
+          </h3>
+          <span className="shrink-0 rounded-full bg-red-600 px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide text-white shadow-sm">
+            緊急
+          </span>
+        </div>
+
+        <p className="rounded-lg border border-red-300 bg-red-100/90 px-3 py-2.5 text-sm font-semibold leading-relaxed text-red-900">
+          配對成功！請於 24 小時內確認加入，否則將自動釋出名額。
+        </p>
 
         <p
           className={cn(
-            "text-base font-semibold tabular-nums",
-            countdownExpired ? "text-zinc-600" : "text-red-600"
+            "text-lg font-bold tabular-nums",
+            countdownExpired ? "text-zinc-600" : "text-red-700"
           )}
         >
           {countdownLine}
@@ -418,7 +366,7 @@ export default function MatchingOptInPanel({ viewerUserId, className }: Matching
                   處理中…
                 </>
               ) : (
-                "✅ 同意夾租"
+                "✅ 同意加入"
               )}
             </Button>
             <Button
@@ -434,7 +382,7 @@ export default function MatchingOptInPanel({ viewerUserId, className }: Matching
                   處理中…
                 </>
               ) : (
-                "❌ 殘忍拒絕"
+                "❌ 放棄"
               )}
             </Button>
           </div>

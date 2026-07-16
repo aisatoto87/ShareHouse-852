@@ -1,9 +1,10 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { mapRowToProperty } from "@/lib/property-mapper";
 import {
-  applyRecruitingOneShortToRows,
-  fetchAllPropertyIdsRecruitingOneShort,
-} from "@/lib/recruiting-fomo";
+  applyWaitingPoolStatsToSmartRows,
+  fetchWaitingPoolStats,
+  resolveGroupTargetSize,
+} from "@/lib/waiting-pool";
 import type { PropertyListingStatus, SmartMatchedPropertyRow } from "@/types/property";
 
 /** 樓盤已封盤，禁止新用戶加入排隊／申請 */
@@ -70,16 +71,18 @@ function isPropertyListingSunk(status?: PropertyListingStatus | null): boolean {
   return isPropertyListingBlocked(status);
 }
 
-/** 列表智能排序權重：1 = FOMO 置頂，2 = 一般可租，3 = 封盤沉底 */
+/** 列表智能排序權重：1 = 排隊活躍度高，2 = 一般可租，3 = 封盤沉底 */
 function getListingSortTier(row: SmartMatchedPropertyRow): number {
   const status = row.property.status ?? "available";
   if (isPropertyListingSunk(status)) return 3;
-  if (status === "available" && row.recruitingOneShort) return 1;
+  const waitingCount = row.waitingCount ?? 0;
+  const targetSize = resolveGroupTargetSize(row.targetSize);
+  if (status === "available" && waitingCount >= targetSize) return 1;
   return 2;
 }
 
 /**
- * 首頁／列表智能排序：差 1 人成團置頂，held / rented 沉底。
+ * 首頁／列表智能排序：排隊活躍度高置頂，held / rented 沉底。
  * 同層級內可選依契合度排序。
  */
 export function sortSmartMatchedPropertyRows(
@@ -110,45 +113,28 @@ function mapPropertyRowsToListingRows(
 }
 
 /**
- * 「全部租盤」完整目錄：全局 FOMO 樓盤置頂 → 其餘依 created_at 排序 → 智能 tier 排序。
- * 在分頁 slice 前呼叫，確保差 1 人樓盤不因 created_at 分頁而漏出首屏。
+ * 「全部租盤」完整目錄：依 created_at 排序後附加虛擬排隊池熱度，再做智能 tier 排序。
  */
 export async function buildAllModeListingCatalog(
   supabase: SupabaseClient
 ): Promise<SmartMatchedPropertyRow[]> {
-  const fomoIds = await fetchAllPropertyIdsRecruitingOneShort(supabase);
-  const fomoIdList = [...fomoIds];
+  const { data, error } = await supabase
+    .from("properties")
+    .select("*")
+    .order("created_at", { ascending: false });
 
-  const [fomoResult, allResult] = await Promise.all([
-    fomoIdList.length > 0
-      ? supabase.from("properties").select("*").in("id", fomoIdList)
-      : Promise.resolve({ data: [] as Record<string, unknown>[], error: null }),
-    supabase.from("properties").select("*").order("created_at", { ascending: false }),
-  ]);
-
-  if (allResult.error) {
-    throw allResult.error;
-  }
-  if (fomoResult.error) {
-    throw fomoResult.error;
+  if (error) {
+    throw error;
   }
 
-  const fomoRows = mapPropertyRowsToListingRows(
-    (fomoResult.data ?? []) as Record<string, unknown>[]
-  );
-  const fomoIdSet = new Set(fomoIdList);
-  const otherRows = mapPropertyRowsToListingRows(
-    ((allResult.data ?? []) as Record<string, unknown>[]).filter((row) => {
-      const id = typeof row.id === "string" ? row.id : "";
-      return id && !fomoIdSet.has(id);
-    })
-  );
-
-  const merged = [...fomoRows, ...otherRows];
+  const merged = mapPropertyRowsToListingRows((data ?? []) as Record<string, unknown>[]);
   const allIds = merged.map((r) => r.property.id);
-  const statusMap = await fetchPropertyStatuses(supabase, allIds);
+  const [statusMap, waitingStats] = await Promise.all([
+    fetchPropertyStatuses(supabase, allIds),
+    fetchWaitingPoolStats(supabase, allIds),
+  ]);
   const withStatus = applyPropertyStatusesToRows(merged, statusMap);
-  const withFomo = applyRecruitingOneShortToRows(withStatus, fomoIds);
+  const withPool = applyWaitingPoolStatsToSmartRows(withStatus, waitingStats);
 
-  return sortSmartMatchedPropertyRows(withFomo, false);
+  return sortSmartMatchedPropertyRows(withPool, false);
 }

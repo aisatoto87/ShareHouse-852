@@ -15,9 +15,9 @@ import { mapRowToProperty } from "@/lib/property-mapper";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import type { UserHabits } from "@/lib/matchingAlgorithm";
 import {
-  applyRecruitingOneShortToRows,
-  fetchPropertyIdsRecruitingOneShort,
-} from "@/lib/recruiting-fomo";
+  applyWaitingPoolStatsToSmartRows,
+  fetchWaitingPoolStats,
+} from "@/lib/waiting-pool";
 import {
   applyPropertyStatusesToRows,
   buildAllModeListingCatalog,
@@ -266,22 +266,22 @@ export default function ListingsClient() {
         }
 
         const fullIds = full.map((r) => r.property.id);
-        const [oneShortIds, statusMap] = await Promise.all([
-          fetchPropertyIdsRecruitingOneShort(supabase, fullIds),
+        const [waitingStats, statusMap] = await Promise.all([
+          fetchWaitingPoolStats(supabase, fullIds),
           fetchPropertyStatuses(supabase, fullIds),
         ]);
-        const fullWithFomo = sortSmartMatchedPropertyRows(
-          applyPropertyStatusesToRows(
-            applyRecruitingOneShortToRows(full, oneShortIds),
-            statusMap
+        const fullWithPool = sortSmartMatchedPropertyRows(
+          applyWaitingPoolStatsToSmartRows(
+            applyPropertyStatusesToRows(full, statusMap),
+            waitingStats
           ),
           false
         );
 
         if (isActive()) {
-          matchedFullCacheRef.current = fullWithFomo;
-          setMatchedRows(fullWithFomo.slice(0, LIMIT));
-          setHasMore(fullWithFomo.length > LIMIT);
+          matchedFullCacheRef.current = fullWithPool;
+          setMatchedRows(fullWithPool.slice(0, LIMIT));
+          setHasMore(fullWithPool.length > LIMIT);
         }
       } catch (error) {
         console.error("Fetch API Error:", error);

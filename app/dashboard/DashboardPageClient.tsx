@@ -7,6 +7,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import HabitDefenseSliders from "@/components/HabitDefenseSliders";
 import MatchedTeammates from "@/components/MatchedTeammates";
+import RoommateProfileList from "@/components/RoommateProfileList";
 import IncomingNudgeBanner from "@/components/IncomingNudgeBanner";
 import SentNudgeVerificationBanner from "@/components/SentNudgeVerificationBanner";
 import MatchingOptInPanel from "@/components/MatchingOptInPanel";
@@ -242,7 +243,6 @@ function intentStatusBadge(
     rawIntentStatus?: string | null;
     currentMemberCount?: number | null;
     targetSize?: number | null;
-    recruitingShortage?: number | null;
     isPropertyOffline?: boolean;
     viewerHasAgreed?: boolean | null;
   }
@@ -256,42 +256,6 @@ function intentStatusBadge(
   }
 
   const groupStatus = options?.groupStatus ?? null;
-  const normalizedStatus = status.trim().toLowerCase();
-  const rawIntentStatus = (options?.rawIntentStatus ?? "").trim().toLowerCase();
-  // 底層意向枚舉降級後可能被 resolveIntentCardUi 改寫為 waiting；以原始 row.status 為準判定 matching
-  const isMatchingIntent =
-    normalizedStatus === "matching" || rawIntentStatus === "matching";
-  const isWaitingIntent =
-    normalizedStatus === "waiting" || rawIntentStatus === "waiting";
-  const memberCount = options?.currentMemberCount;
-  const targetSize = options?.targetSize;
-  const inRecruitingGroupWithCounts =
-    Boolean(options?.groupId) &&
-    groupStatus === "recruiting" &&
-    memberCount != null &&
-    targetSize != null &&
-    targetSize > 0;
-
-  // 意向 status 為 matching / waiting，但群組已 recruiting：顯示已入團進度
-  if ((isMatchingIntent || isWaitingIntent) && inRecruitingGroupWithCounts) {
-    return {
-      className:
-        "max-w-full whitespace-normal rounded-lg border border-blue-400/80 bg-blue-500 px-3 py-1.5 text-left font-medium text-white shadow-sm",
-      label: `👥 已入團 (${memberCount}/${targetSize}) · 招募補位中`,
-    };
-  }
-
-  if (groupStatus === "recruiting") {
-    const shortage = options?.recruitingShortage;
-    return {
-      className:
-        "max-w-full whitespace-normal rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-left font-medium text-amber-900 shadow-sm",
-      label:
-        shortage != null && shortage > 0
-          ? `⏳ 正在招募室友 (差 ${shortage} 人)`
-          : "⏳ 正在招募室友",
-    };
-  }
   if (groupStatus === "pending_opt_in") {
     if (options?.viewerHasAgreed === true) {
       return {
@@ -325,8 +289,8 @@ function intentStatusBadge(
   if (status === "paused") {
     return {
       className:
-        "max-w-full whitespace-normal rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-left font-semibold text-amber-900 shadow-sm ring-1 ring-amber-200/80",
-      label: "⚠️ 配對已暫停",
+        "max-w-full whitespace-normal rounded-lg border border-zinc-300 bg-zinc-100 px-3 py-1.5 text-left font-semibold text-zinc-600 shadow-sm",
+      label: "⏸️ 排隊暫停中",
     };
   }
 
@@ -338,27 +302,6 @@ function intentStatusBadge(
         label: "🕒 意向配對中 (系統正為您尋找同區室友)",
       };
     case "matching":
-      if (inRecruitingGroupWithCounts) {
-        return {
-          className:
-            "max-w-full whitespace-normal rounded-lg border border-blue-400/80 bg-blue-500 px-3 py-1.5 text-left font-medium text-white shadow-sm",
-          label: `👥 已入團 (${memberCount}/${targetSize}) · 招募補位中`,
-        };
-      }
-      return {
-        className:
-          "max-w-full whitespace-normal rounded-lg border border-blue-200/70 bg-gradient-to-r from-slate-100 to-blue-50/90 px-3 py-1.5 text-left font-medium text-slate-800 shadow-sm",
-        label: "🕒 意向配對中",
-      };
-    case "recruiting":
-      // 非法意向枚舉殘留；招募進度一律看 match_groups.status
-      if (inRecruitingGroupWithCounts) {
-        return {
-          className:
-            "max-w-full whitespace-normal rounded-lg border border-blue-400/80 bg-blue-500 px-3 py-1.5 text-left font-medium text-white shadow-sm",
-          label: `👥 已入團 (${memberCount}/${targetSize}) · 招募補位中`,
-        };
-      }
       return {
         className:
           "max-w-full whitespace-normal rounded-lg border border-blue-200/70 bg-gradient-to-r from-slate-100 to-blue-50/90 px-3 py-1.5 text-left font-medium text-slate-800 shadow-sm",
@@ -764,7 +707,7 @@ export default function DashboardPageClient() {
       const hasAgreedByGroup = new Map<string, boolean>();
 
       // 優先用 SECURITY DEFINER RPC 取回 live 群組狀態，繞過 match_groups / group_members 的 RLS，
-      // 避免群組降級 (confirmed → recruiting) 後成員讀不到自己的群組而導致卡片 ghost 降級。
+      // 避免群組狀態變更後成員讀不到自己的群組而導致卡片 ghost 降級。
       let groups: MatchGroupSummary[] = [];
       let usedRpc = false;
       const { data: rpcGroups, error: rpcGroupsErr } = await supabase.rpc(
@@ -900,7 +843,6 @@ export default function DashboardPageClient() {
         ["confirmed", 0],
         ["matched", 0],
         ["pending_opt_in", 1],
-        ["recruiting", 2],
       ]);
 
       const enrichedRows = mappedRows.map((row) => {
@@ -1693,10 +1635,7 @@ export default function DashboardPageClient() {
                       const ui = resolveIntentCardUi(r.status, toIntentGroupEntity(r), {
                         isGloballyFrozen,
                       });
-                      return (
-                        ui.effectiveGroupStatus === "pending_opt_in" ||
-                        ui.effectiveGroupStatus === "recruiting"
-                      );
+                      return ui.effectiveGroupStatus === "pending_opt_in";
                     }) && userId ? (
                       <MatchingOptInPanel viewerUserId={userId} className="mb-6" />
                     ) : null}
@@ -1721,13 +1660,6 @@ export default function DashboardPageClient() {
                         typeof row.match_group_target_size === "number"
                           ? row.match_group_target_size
                           : null;
-                      const recruitingShortage =
-                        effectiveGroupStatus === "recruiting" &&
-                        currentSize != null &&
-                        targetSize != null &&
-                        targetSize > currentSize
-                          ? targetSize - currentSize
-                          : null;
                       const badge = intentStatusBadge(effectiveIntentStatus, {
                         isGloballyFrozen,
                         groupId: row.match_group_id,
@@ -1735,7 +1667,6 @@ export default function DashboardPageClient() {
                         rawIntentStatus: row.status,
                         currentMemberCount: currentSize ?? row.match_group_current_size,
                         targetSize: targetSize ?? row.match_group_target_size,
-                        recruitingShortage,
                         isPropertyOffline,
                         viewerHasAgreed:
                           effectiveGroupStatus === "pending_opt_in"
@@ -1773,8 +1704,7 @@ export default function DashboardPageClient() {
                             className={cn(
                               "overflow-hidden border-zinc-200 shadow-sm transition-shadow hover:shadow-md",
                               cardUi.isCardMuted && "pointer-events-none opacity-60 grayscale",
-                              isIntentPaused &&
-                                "border-amber-200/90 bg-gradient-to-br from-amber-50/40 via-white to-zinc-50/80"
+                              isIntentPaused && "opacity-50 grayscale"
                             )}
                           >
                             <CardContent className="p-5">
@@ -1904,14 +1834,14 @@ export default function DashboardPageClient() {
                                   )}
                                   {isIntentPaused ? (
                                     <div
-                                      className="rounded-xl border border-amber-200/90 bg-amber-50/90 px-4 py-3.5 text-sm leading-relaxed text-amber-950 shadow-sm"
+                                      className="rounded-xl border border-zinc-200 bg-zinc-50/90 px-4 py-3.5 text-sm leading-relaxed text-zinc-700 shadow-sm"
                                       role="status"
                                     >
-                                      <p className="font-semibold text-amber-900">
-                                        管家已取消此配對
+                                      <p className="font-semibold text-zinc-800">
+                                        ⏸️ 系統已為您鎖定另一組配對，此排隊暫停中。
                                       </p>
-                                      <p className="mt-1.5 text-amber-900/90">
-                                        可能是該樓盤已租出，或先前的配對未能達成共識。請取消此意向並重新選擇其他心水樓盤！
+                                      <p className="mt-1.5 text-zinc-600">
+                                        當前配對結束或取消後，此意向可再恢復排隊。若不再需要，亦可直接取消此意向。
                                       </p>
                                     </div>
                                   ) : null}
@@ -1919,13 +1849,22 @@ export default function DashboardPageClient() {
                                   !isPropertyOffline &&
                                   cardUi.showMatchedTeammates &&
                                   row.match_group_id ? (
-                                    <MatchedTeammates
-                                      viewerUserId={userId}
-                                      intentStatus={effectiveIntentStatus}
-                                      groupStatus={effectiveGroupStatus}
-                                      groupId={row.match_group_id}
-                                      targetPropertyId={row.target_property_id}
-                                    />
+                                    effectiveGroupStatus === "confirmed" ||
+                                    effectiveGroupStatus === "matched" ? (
+                                      <MatchedTeammates
+                                        viewerUserId={userId}
+                                        intentStatus={effectiveIntentStatus}
+                                        groupStatus={effectiveGroupStatus}
+                                        groupId={row.match_group_id}
+                                        targetPropertyId={row.target_property_id}
+                                      />
+                                    ) : (
+                                      <RoommateProfileList
+                                        viewerUserId={userId}
+                                        groupId={row.match_group_id}
+                                        intentStatus={effectiveIntentStatus}
+                                      />
+                                    )
                                   ) : null}
                                   {(effectiveGroupStatus === "confirmed" ||
                                     effectiveGroupStatus === "matched") &&

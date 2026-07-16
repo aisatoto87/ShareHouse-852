@@ -11,7 +11,7 @@ import RoommateReviewModal from "@/components/RoommateReviewModal";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { isActiveMatchGroupStatus } from "@/lib/intent-group-ui";
+import { isActiveMatchGroupStatus, shouldShowRoommateProfiles } from "@/lib/intent-group-ui";
 import {
   calculateHabitRadarSimilarity,
   profileRowToUserHabits,
@@ -143,7 +143,7 @@ function resolveTeammateDisplayName(profile: {
   if (display) return display;
   const nick = typeof profile?.nickname === "string" ? profile.nickname.trim() : "";
   if (nick) return nick;
-  return "室友";
+  return "神秘室友";
 }
 
 function avatarInitial(name: string): string {
@@ -403,14 +403,16 @@ export default function MatchedTeammates({
   const [reviewTarget, setReviewTarget] = useState<TeammateProfile | null>(null);
   const [nudgeTarget, setNudgeTarget] = useState<TeammateProfile | null>(null);
 
-  void intentStatus;
   const normalizedGroupStatus = isActiveMatchGroupStatus(groupStatus)
     ? groupStatus
     : null;
-  const shouldFetch = normalizedGroupStatus != null;
-  const canPlatformChat = normalizedGroupStatus === "confirmed";
+  const shouldFetch =
+    normalizedGroupStatus != null && shouldShowRoommateProfiles(intentStatus);
+  const canPlatformChat =
+    normalizedGroupStatus === "confirmed" || normalizedGroupStatus === "matched";
   const canNudge = normalizedGroupStatus != null;
-  const showGroupChatEntry = normalizedGroupStatus === "confirmed";
+  const showGroupChatEntry =
+    normalizedGroupStatus === "confirmed" || normalizedGroupStatus === "matched";
 
   const openGroupChat = useCallback(async () => {
     if (!resolvedGroupId || groupChatBootstrapping) return;
@@ -669,6 +671,7 @@ export default function MatchedTeammates({
     expectedGroupId,
     targetPropertyId,
     shouldFetch,
+    intentStatus,
   ]);
 
   if (!shouldFetch) return null;

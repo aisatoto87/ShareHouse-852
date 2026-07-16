@@ -6,6 +6,7 @@ import type { MouseEvent, ReactNode } from "react";
 import { MapPin, Maximize2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardFooter } from "@/components/ui/card";
+import WaitingPoolHeatBadge from "@/components/WaitingPoolHeatBadge";
 import WishlistHeartButton from "@/components/WishlistHeartButton";
 import { PROPERTY_LISTING_BLOCKED_LABEL } from "@/lib/property-listing";
 import { cn } from "@/lib/utils";
@@ -45,8 +46,10 @@ interface PropertyCardProps {
   property: Property;
   /** 後端 RPC 契合度 (0–100)；null 不顯示 Badge */
   similarityScore?: number | null;
-  /** 有 recruiting 群組且缺額為 1 時顯示 FOMO 標籤 */
-  recruitingOneShort?: boolean;
+  /** 虛擬排隊池：waiting 意向數 */
+  waitingCount?: number | null;
+  /** 成團目標人數 */
+  targetSize?: number | null;
   /** Admin 管家操作選單（僅 admin 頁傳入，渲染於圖片左上角） */
   adminMenu?: ReactNode;
 }
@@ -54,7 +57,8 @@ interface PropertyCardProps {
 export default function PropertyCard({
   property,
   similarityScore,
-  recruitingOneShort = false,
+  waitingCount = null,
+  targetSize = null,
   adminMenu,
 }: PropertyCardProps) {
   const { id, title, district, sub_district, price, size_sqft, imageUrl, tags } = property;
@@ -95,7 +99,12 @@ export default function PropertyCard({
   const isRented = listingStatus === "rented";
   const isListingBlocked = isHeld || isRented;
   const statusBadge = isListingBlocked ? STATUS_BADGE[listingStatus] : null;
-  const showFomoBadge = recruitingOneShort && !isListingBlocked;
+  const showWaitingPool =
+    !isListingBlocked &&
+    typeof waitingCount === "number" &&
+    Number.isFinite(waitingCount) &&
+    typeof targetSize === "number" &&
+    Number.isFinite(targetSize);
 
   return (
     <Card
@@ -144,23 +153,6 @@ export default function PropertyCard({
               )}
             >
               {statusBadge.label}
-            </span>
-          </div>
-        ) : null}
-
-        {showFomoBadge ? (
-          <div
-            className="pointer-events-none absolute left-1/2 top-3 z-20 max-w-[min(100%,calc(100%-5.5rem))] -translate-x-1/2 px-1"
-            aria-label="差 1 人即成團"
-          >
-            <span
-              className={cn(
-                "inline-flex items-center justify-center rounded-full px-2.5 py-1 text-[11px] font-bold leading-tight text-white shadow-lg",
-                "bg-gradient-to-r from-orange-500 to-red-500 ring-2 ring-white/40",
-                "animate-pulse motion-reduce:animate-none"
-              )}
-            >
-              🔥 差 1 人即成團！
             </span>
           </div>
         ) : null}
@@ -229,6 +221,14 @@ export default function PropertyCard({
               {size_sqft} 呎
             </span>
           </div>
+          {showWaitingPool ? (
+            <div className="mt-2">
+              <WaitingPoolHeatBadge
+                waitingCount={waitingCount as number}
+                targetSize={targetSize as number}
+              />
+            </div>
+          ) : null}
           <p className="mt-3 text-xl font-extrabold text-[#0f2540]">
             HK$ {formattedPrice}
             <span className="ml-1 text-sm font-normal text-zinc-400">/月</span>

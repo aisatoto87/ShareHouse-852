@@ -22,8 +22,8 @@ export function createSupabaseBrowserClient(): SupabaseClient {
   if (browserClient) return browserClient;
   const { url, anonKey } = getSupabaseEnv();
   browserClient = createBrowserClient(url, anonKey, {
-    // 強制每次 REST 查詢都繞過 HTTP / Next fetch 快取，避免首頁列表（如 FOMO「尚欠1人」、
-    // 樓盤 status）與儀表板群組狀態在群組降級後 F5 仍讀到滯後舊數據。
+    // 強制每次 REST 查詢都繞過 HTTP / Next fetch 快取，避免首頁列表（排隊池熱度、
+    // 樓盤 status）與儀表板群組狀態在狀態變更後 F5 仍讀到滯後舊數據。
     // 僅透過標準 RequestInit 的 cache 設定，切勿在 URL 拼接時間戳（會被 PostgREST 誤判為過濾器）。
     global: {
       fetch: (input, init) => fetch(input, { ...init, cache: "no-store" }),

@@ -3,12 +3,12 @@ export type SmartMatchedPropertyRow = {
   property: Property;
   similarity: number;
   /**
-   * 該樓盤「差 1 人即成團」：recruiting 群組缺額為 1，或 waiting 意向距目標人數差 1（批次查詢衍生）
-   * @see lib/recruiting-fomo.ts
+   * 該樓盤目前 status=waiting 的意向總數（虛擬排隊池熱度）
+   * @see lib/waiting-pool.ts
    */
-  recruitingOneShort?: boolean;
-  /** 最接近成團的 recruiting 群組缺額；僅在需要除「差 1 人」外顯示時使用 */
-  recruitingShortage?: number | null;
+  waitingCount?: number;
+  /** 成團目標人數（來自 max_tenants / room_count，至少 2） */
+  targetSize?: number;
 };
 
 /** `properties.status` — 盤源上架狀態 */

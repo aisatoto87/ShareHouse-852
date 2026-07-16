@@ -24,6 +24,9 @@ import {
 } from "@/lib/profile-completeness";
 import { createSupabaseServerClient, getServerUser } from "@/lib/supabase/server";
 import { mapRowToProperty } from "@/lib/property-mapper";
+import { fetchWaitingPoolStats } from "@/lib/waiting-pool";
+import WaitingPoolHeatBadge from "@/components/WaitingPoolHeatBadge";
+import { isPropertyListingBlocked } from "@/lib/property-listing";
 
 export const dynamic = "force-dynamic";
 
@@ -135,6 +138,12 @@ export default async function PropertyDetailPage({ params }: PageProps) {
 
   const property = mapRowToProperty(row as Record<string, unknown>);
   if (!property) notFound();
+
+  const waitingPoolMap = await fetchWaitingPoolStats(supabase, [property.id]);
+  const waitingPool = waitingPoolMap.get(property.id);
+  const waitingCount = waitingPool?.waitingCount ?? 0;
+  const poolTargetSize = waitingPool?.targetSize ?? 2;
+  const showWaitingPoolHeat = !isPropertyListingBlocked(property.status ?? "available");
 
   const rowRec = row as Record<string, unknown>;
   const ownerId =
@@ -304,6 +313,15 @@ export default async function PropertyDetailPage({ params }: PageProps) {
                   {property.size_sqft} 呎
                 </span>
               </div>
+              {showWaitingPoolHeat ? (
+                <div className="mt-3">
+                  <WaitingPoolHeatBadge
+                    waitingCount={waitingCount}
+                    targetSize={poolTargetSize}
+                    size="md"
+                  />
+                </div>
+              ) : null}
             </div>
             <div className="rounded-xl border border-zinc-200 bg-white px-4 py-3 shadow-sm">
               <p className="text-3xl font-extrabold tracking-tight text-[#0f2540] sm:text-4xl">
@@ -386,6 +404,16 @@ export default async function PropertyDetailPage({ params }: PageProps) {
             <div className="sticky top-24 rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm">
               <p className="text-sm text-zinc-500">透過管家媒合</p>
               <p className="mt-1 text-2xl font-bold text-[#0f2540]">HK$ {formattedPrice}/月</p>
+              {showWaitingPoolHeat ? (
+                <div className="mt-3">
+                  <WaitingPoolHeatBadge
+                    waitingCount={waitingCount}
+                    targetSize={poolTargetSize}
+                    size="md"
+                    className="w-full justify-center text-center"
+                  />
+                </div>
+              ) : null}
               {property.pricing_mode === "custom" && customRoomPrices.length > 0 && roomCount > 1 ? (
                 <div className="mt-2 flex flex-wrap gap-1.5">
                   {customRoomPrices.map((item, index) => (

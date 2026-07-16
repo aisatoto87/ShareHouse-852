@@ -1,11 +1,12 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { invokeProcessGroupMatchV2IfFull } from "@/lib/process-group-match-v2";
 import { checkAdminAccessFromProfile } from "@/lib/admin-auth";
+import { disbandGroupAndReleaseMembers } from "@/lib/intent-teardown";
 import { ensureOfflineDealForGroup } from "@/lib/offline-deals";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { createSupabaseServerClient, getServerUser } from "@/lib/supabase/server";
+import { invokeCreateVirtualMatchGroup } from "@/lib/virtual-matcher";
 import {
   ADMIN_OFFLINE_DEAL_STATUSES,
   type AdminOfflineDealStatus,
@@ -14,8 +15,8 @@ import {
 
 export type AdminGroupActionResult = { ok: true } | { ok: false; error: string };
 
-export type AdminAddToGroupResult =
-  | { ok: true; groupMatchProcessed?: boolean }
+export type AdminCreateVirtualMatchGroupResult =
+  | { ok: true; groupId: string; currentSize: number; pausedCount: number }
   | { ok: false; error: string };
 
 const UUID_RE =
@@ -40,42 +41,58 @@ async function requireAdminRpcClient(): Promise<
   return { ok: true, rpc: createSupabaseAdminClient() };
 }
 
-/** 呼叫 Supabase RPC `admin_add_to_group`（需 service role + admin 登入） */
-export async function adminAddToGroupAction(
-  groupId: string,
-  userId: string
-): Promise<AdminAddToGroupResult> {
-  const trimmedGroupId = groupId.trim();
-  const trimmedUserId = userId.trim();
+/**
+ * 管家手動拉人成團：直接呼叫 `create_virtual_match_group`，
+ * 選定名單一步進入 pending_opt_in（不再經 recruiting／admin_add_to_group）。
+ */
+export async function adminCreateVirtualMatchGroupAction(
+  propertyId: string,
+  userIds: string[]
+): Promise<AdminCreateVirtualMatchGroupResult> {
+  const trimmedPropertyId = typeof propertyId === "string" ? propertyId.trim() : "";
+  const uniqueUserIds = [
+    ...new Set(
+      (Array.isArray(userIds) ? userIds : [])
+        .map((id) => (typeof id === "string" ? id.trim() : ""))
+        .filter(Boolean)
+    ),
+  ];
 
-  if (!trimmedGroupId || !trimmedUserId) {
-    return { ok: false, error: "請提供 group_id 與 user_id。" };
+  if (!trimmedPropertyId || !UUID_RE.test(trimmedPropertyId)) {
+    return { ok: false, error: "請提供有效的 property_id。" };
+  }
+
+  if (uniqueUserIds.length < 2) {
+    return { ok: false, error: "請至少選取 2 位仍在 waiting 的用戶。" };
+  }
+
+  if (uniqueUserIds.some((id) => !UUID_RE.test(id))) {
+    return { ok: false, error: "user_id 格式無效。" };
   }
 
   const gate = await requireAdminRpcClient();
   if (!gate.ok) return gate;
 
   try {
-    const { error } = await gate.rpc.rpc("admin_add_to_group", {
-      p_group_id: trimmedGroupId,
-      p_user_id: trimmedUserId,
+    const created = await invokeCreateVirtualMatchGroup(gate.rpc, {
+      propertyId: trimmedPropertyId,
+      userIds: uniqueUserIds,
     });
 
-    if (error) {
-      console.error("[adminAddToGroupAction]", error.message);
-      return { ok: false, error: error.message || "加入群組失敗。" };
-    }
-
-    const rpcResult = await invokeProcessGroupMatchV2IfFull(gate.rpc, trimmedGroupId);
-    if (rpcResult.error) {
-      console.warn("[adminAddToGroupAction] process_group_match_v2 skipped", rpcResult.error);
-    }
-
     revalidatePath("/admin/groups");
-    return { ok: true, groupMatchProcessed: rpcResult.invoked || undefined };
+    revalidatePath("/dashboard", "page");
+    revalidatePath("/");
+
+    return {
+      ok: true,
+      groupId: created.group_id,
+      currentSize: created.current_size,
+      pausedCount: created.paused_count,
+    };
   } catch (e) {
     const message = e instanceof Error ? e.message : "伺服器錯誤";
-    return { ok: false, error: message };
+    console.error("[adminCreateVirtualMatchGroupAction]", message);
+    return { ok: false, error: message || "手動拉人成團失敗。" };
   }
 }
 
@@ -138,7 +155,7 @@ export async function adminDissolveGroupAction(
         .from("housing_intents")
         .update({ status: "paused" })
         .in("user_id", memberUserIds)
-        .in("status", ["matching", "recruiting", "pending_opt_in", "confirmed", "matched"]);
+        .in("status", ["matching", "pending_opt_in", "confirmed", "matched"]);
 
       if (propertyId) {
         intentQuery = intentQuery.eq("target_property_id", propertyId);
@@ -194,7 +211,7 @@ export async function adminDissolveGroupAction(
   }
 }
 
-/** 從已成團群組踢除成員，群組降級為 recruiting（RPC admin_kick_group_member） */
+/** 剔除成員：觸發連鎖解散（不再保留殘缺群組） */
 export async function adminKickGroupMemberAction(
   groupId: string,
   userId: string
@@ -214,14 +231,15 @@ export async function adminKickGroupMemberAction(
   if (!gate.ok) return gate;
 
   try {
-    const { error } = await gate.rpc.rpc("admin_kick_group_member", {
-      p_group_id: trimmedGroupId,
-      p_user_id: trimmedUserId,
-    });
+    const teardown = await disbandGroupAndReleaseMembers(
+      gate.rpc,
+      trimmedGroupId,
+      trimmedUserId
+    );
 
-    if (error) {
-      console.error("[adminKickGroupMemberAction]", error.message);
-      return { ok: false, error: error.message || "踢除成員失敗。" };
+    if (!teardown.ok) {
+      console.error("[adminKickGroupMemberAction]", teardown.error);
+      return { ok: false, error: teardown.error || "踢除成員失敗。" };
     }
 
     revalidatePath("/admin/groups");
@@ -236,8 +254,7 @@ export async function adminKickGroupMemberAction(
 }
 
 /**
- * Admin 從已成團群組踢除成員（Service Role 直寫，不依賴 RPC）。
- * 群組降級 recruiting、解鎖樓盤、重置剩餘成員同意狀態、刪除被踢者意向。
+ * Admin 剔除成員：整團連鎖解散，被踢者 cancelled，其餘成員退回 waiting 並解除 paused。
  */
 export async function adminKickConfirmedMemberAction(
   groupId: string,
@@ -265,200 +282,31 @@ export async function adminKickConfirmedMemberAction(
   if (!gate.ok) return gate;
 
   try {
-    const { data: groupRow, error: groupErr } = await gate.rpc
-      .from("match_groups")
-      .select("group_id, status, property_id, target_size")
-      .eq("group_id", trimmedGroupId)
-      .maybeSingle();
-
-    if (groupErr) {
-      console.error("[adminKickConfirmedMemberAction] group", groupErr.message);
-      return { ok: false, error: groupErr.message };
-    }
-
-    if (!groupRow) {
-      return { ok: false, error: "找不到配對群組。" };
-    }
-
-    const groupStatus =
-      typeof groupRow.status === "string" ? groupRow.status.trim().toLowerCase() : "";
-    if (groupStatus !== "confirmed" && groupStatus !== "matched") {
-      return { ok: false, error: "僅可從已成團群組踢除成員。" };
-    }
-
-    const resolvedPropertyId =
-      trimmedPropertyId ||
-      (typeof groupRow.property_id === "string" && groupRow.property_id.trim()
-        ? groupRow.property_id.trim()
-        : null);
-
-    const { data: memberRows, error: membersErr } = await gate.rpc
+    const { data: membership, error: memErr } = await gate.rpc
       .from("group_members")
       .select("user_id")
-      .eq("group_id", trimmedGroupId);
+      .eq("group_id", trimmedGroupId)
+      .eq("user_id", trimmedKickedUserId)
+      .maybeSingle();
 
-    if (membersErr) {
-      console.error("[adminKickConfirmedMemberAction] members", membersErr.message);
-      return { ok: false, error: membersErr.message };
+    if (memErr) {
+      console.error("[adminKickConfirmedMemberAction] membership", memErr.message);
+      return { ok: false, error: memErr.message };
     }
 
-    const memberIds = (memberRows ?? [])
-      .map((row) => {
-        const uid = (row as { user_id?: unknown }).user_id;
-        return typeof uid === "string" ? uid.trim() : "";
-      })
-      .filter(Boolean);
-
-    if (!memberIds.includes(trimmedKickedUserId)) {
+    if (!membership) {
       return { ok: false, error: "該用戶不是此群組成員。" };
     }
 
-    if (memberIds.length <= 1) {
-      return { ok: false, error: "群組僅剩一人，請改用解散群組。" };
-    }
+    const teardown = await disbandGroupAndReleaseMembers(
+      gate.rpc,
+      trimmedGroupId,
+      trimmedKickedUserId
+    );
 
-    const remainingMemberIds = memberIds.filter((id) => id !== trimmedKickedUserId);
-
-    if (!trimmedKickedUserId) {
-      throw new Error("[adminKickConfirmedMemberAction] kickedUserId 不可為空，已中止刪除以防誤刪整組成員。");
-    }
-
-    const { data: deletedMemberRows, error: deleteMemberErr } = await gate.rpc
-      .from("group_members")
-      .delete()
-      .eq("group_id", trimmedGroupId)
-      .eq("user_id", trimmedKickedUserId)
-      .select("user_id");
-
-    if (deleteMemberErr) {
-      console.error("[adminKickConfirmedMemberAction] delete member", deleteMemberErr.message);
-      return { ok: false, error: deleteMemberErr.message };
-    }
-
-    const deletedCount = deletedMemberRows?.length ?? 0;
-    if (deletedCount !== 1) {
-      console.error("[adminKickConfirmedMemberAction] delete member unexpected count", {
-        groupId: trimmedGroupId,
-        kickedUserId: trimmedKickedUserId,
-        deletedCount,
-        expectedRemaining: remainingMemberIds.length,
-      });
-      return {
-        ok: false,
-        error:
-          deletedCount === 0
-            ? "踢除成員失敗：找不到該成員記錄。"
-            : "踢除成員失敗：刪除筆數異常，已中止以避免誤刪其他成員。",
-      };
-    }
-
-    const { data: remainingMemberRows, error: remainingMembersErr } = await gate.rpc
-      .from("group_members")
-      .select("user_id")
-      .eq("group_id", trimmedGroupId);
-
-    if (remainingMembersErr) {
-      console.error(
-        "[adminKickConfirmedMemberAction] verify remaining members",
-        remainingMembersErr.message
-      );
-      return { ok: false, error: remainingMembersErr.message };
-    }
-
-    const verifiedRemainingMemberIds = (remainingMemberRows ?? [])
-      .map((row) => {
-        const uid = (row as { user_id?: unknown }).user_id;
-        return typeof uid === "string" ? uid.trim() : "";
-      })
-      .filter(Boolean);
-    const remainingMemberCount = verifiedRemainingMemberIds.length;
-
-    if (remainingMemberCount !== remainingMemberIds.length) {
-      console.error("[adminKickConfirmedMemberAction] remaining member count mismatch", {
-        groupId: trimmedGroupId,
-        kickedUserId: trimmedKickedUserId,
-        expected: remainingMemberIds.length,
-        actual: remainingMemberCount,
-      });
-      return { ok: false, error: "踢除成員後群組人數異常，已中止後續更新。" };
-    }
-
-    const { error: groupUpdateErr } = await gate.rpc
-      .from("match_groups")
-      .update({
-        status: "recruiting",
-        current_size: remainingMemberCount,
-        expires_at: null,
-      })
-      .eq("group_id", trimmedGroupId);
-
-    if (groupUpdateErr) {
-      console.error("[adminKickConfirmedMemberAction] group update", groupUpdateErr.message);
-      return { ok: false, error: groupUpdateErr.message };
-    }
-
-    const { error: resetAgreedErr } = await gate.rpc
-      .from("group_members")
-      .update({ has_agreed: null })
-      .eq("group_id", trimmedGroupId);
-
-    if (resetAgreedErr) {
-      console.error("[adminKickConfirmedMemberAction] reset agreed", resetAgreedErr.message);
-      return { ok: false, error: resetAgreedErr.message };
-    }
-
-    if (resolvedPropertyId) {
-      const { error: propertyErr } = await gate.rpc
-        .from("properties")
-        .update({ status: "available" })
-        .eq("id", resolvedPropertyId);
-
-      if (propertyErr) {
-        console.error("[adminKickConfirmedMemberAction] release property", propertyErr.message);
-        return { ok: false, error: propertyErr.message };
-      }
-    }
-
-    let deleteIntentQuery = gate.rpc
-      .from("housing_intents")
-      .delete()
-      .eq("user_id", trimmedKickedUserId);
-
-    if (resolvedPropertyId) {
-      deleteIntentQuery = deleteIntentQuery.eq("target_property_id", resolvedPropertyId);
-    } else {
-      deleteIntentQuery = deleteIntentQuery.is("target_property_id", null);
-    }
-
-    const { error: deleteIntentErr } = await deleteIntentQuery;
-    if (deleteIntentErr) {
-      console.error("[adminKickConfirmedMemberAction] delete intent", deleteIntentErr.message);
-      return { ok: false, error: deleteIntentErr.message };
-    }
-
-    if (remainingMemberIds.length > 0) {
-      let remainingIntentQuery = gate.rpc
-        .from("housing_intents")
-        // 群組降級後，留守成員回到意向池等待滾雪球補位；
-        // 'matching' 為 housing_intents_status_check 合法枚舉，切勿寫入群組狀態 'recruiting'。
-        .update({ status: "matching" })
-        .in("user_id", remainingMemberIds)
-        .in("status", ["waiting", "matching", "matched", "confirmed"]);
-
-      if (resolvedPropertyId) {
-        remainingIntentQuery = remainingIntentQuery.eq("target_property_id", resolvedPropertyId);
-      } else {
-        remainingIntentQuery = remainingIntentQuery.is("target_property_id", null);
-      }
-
-      const { error: remainingIntentErr } = await remainingIntentQuery;
-      if (remainingIntentErr) {
-        console.error(
-          "[adminKickConfirmedMemberAction] remaining intents",
-          remainingIntentErr.message
-        );
-        return { ok: false, error: remainingIntentErr.message };
-      }
+    if (!teardown.ok) {
+      console.error("[adminKickConfirmedMemberAction]", teardown.error);
+      return { ok: false, error: teardown.error };
     }
 
     revalidatePath("/", "page");
@@ -624,19 +472,15 @@ export type AdminKickAndRebuildPayload = {
 };
 
 export type AdminKickAndRebuildResult =
-  | { ok: true; remainingMemberCount: number; targetSize: number }
+  | { ok: true; remainingMemberCount: number; targetSize: number; disbanded: true }
   | { ok: false; error: string };
 
-/** Admin：睇樓失敗 — 踢出反悔成員並將群組重建為招募中 */
+/** Admin：剔除反悔成員 — 觸發連鎖解散（不再降級保留群組） */
 export async function adminKickAndRebuildAction(
   payload: AdminKickAndRebuildPayload
 ): Promise<AdminKickAndRebuildResult> {
   const trimmedGroupId = payload.groupId.trim();
   const trimmedKickedUserId = payload.kickedUserId.trim();
-  const propertyId =
-    typeof payload.propertyId === "string" && payload.propertyId.trim()
-      ? payload.propertyId.trim()
-      : null;
 
   if (!trimmedGroupId || !trimmedKickedUserId) {
     return { ok: false, error: "請提供 group_id 與 kicked_user_id。" };
@@ -649,28 +493,27 @@ export async function adminKickAndRebuildAction(
   const gate = await requireAdminRpcClient();
   if (!gate.ok) return gate;
 
-  const { data: groupRow, error: groupErr } = await gate.rpc
-    .from("match_groups")
-    .select("group_id, status, property_id, target_size")
+  const { data: membership, error: memErr } = await gate.rpc
+    .from("group_members")
+    .select("user_id")
     .eq("group_id", trimmedGroupId)
+    .eq("user_id", trimmedKickedUserId)
     .maybeSingle();
 
-  if (groupErr) {
-    console.error("[adminKickAndRebuildAction] group", groupErr.message);
-    return { ok: false, error: groupErr.message };
+  if (memErr) {
+    console.error("[adminKickAndRebuildAction] membership", memErr.message);
+    return { ok: false, error: memErr.message };
   }
 
-  const groupStatus =
-    typeof groupRow?.status === "string" ? groupRow.status.trim().toLowerCase() : "";
-  if (groupStatus !== "confirmed" && groupStatus !== "matched") {
-    return { ok: false, error: "僅可對已成團群組執行踢出重建流程。" };
+  if (!membership) {
+    return { ok: false, error: "該用戶不是此群組成員。" };
   }
 
-  const resolvedPropertyId =
-    propertyId ??
-    (typeof groupRow?.property_id === "string" && groupRow.property_id.trim()
-      ? groupRow.property_id.trim()
-      : null);
+  const { data: groupRow } = await gate.rpc
+    .from("match_groups")
+    .select("target_size")
+    .eq("group_id", trimmedGroupId)
+    .maybeSingle();
 
   const targetSizeRaw = groupRow?.target_size;
   const targetSize =
@@ -678,141 +521,26 @@ export async function adminKickAndRebuildAction(
       ? Math.round(targetSizeRaw)
       : 2;
 
-  const { data: memberRows, error: membersErr } = await gate.rpc
-    .from("group_members")
-    .select("user_id")
-    .eq("group_id", trimmedGroupId);
+  const teardown = await disbandGroupAndReleaseMembers(
+    gate.rpc,
+    trimmedGroupId,
+    trimmedKickedUserId
+  );
 
-  if (membersErr) {
-    console.error("[adminKickAndRebuildAction] members", membersErr.message);
-    return { ok: false, error: membersErr.message };
+  if (!teardown.ok) {
+    console.error("[adminKickAndRebuildAction]", teardown.error);
+    return { ok: false, error: teardown.error };
   }
 
-  const memberIds = (memberRows ?? [])
-    .map((row) => {
-      const uid = (row as { user_id?: unknown }).user_id;
-      return typeof uid === "string" ? uid.trim() : "";
-    })
-    .filter(Boolean);
-
-  if (!memberIds.includes(trimmedKickedUserId)) {
-    return { ok: false, error: "該用戶不是此群組成員。" };
-  }
-
-  if (memberIds.length <= 1) {
-    return { ok: false, error: "群組僅剩一人，請改用解散群組。" };
-  }
-
-  const remainingMemberIds = memberIds.filter((id) => id !== trimmedKickedUserId);
-  const remainingMemberCount = remainingMemberIds.length;
-
-  const { error: deleteErr } = await gate.rpc
-    .from("group_members")
-    .delete()
-    .eq("group_id", trimmedGroupId)
-    .eq("user_id", trimmedKickedUserId);
-
-  if (deleteErr) {
-    console.error("[adminKickAndRebuildAction] delete member", deleteErr.message);
-    return { ok: false, error: deleteErr.message };
-  }
-
-  const { error: groupUpdateErr } = await gate.rpc
-    .from("match_groups")
-    .update({
-      status: "recruiting",
-      current_size: remainingMemberCount,
-      expires_at: null,
-    })
-    .eq("group_id", trimmedGroupId);
-
-  if (groupUpdateErr) {
-    console.error("[adminKickAndRebuildAction] group update", groupUpdateErr.message);
-    return { ok: false, error: groupUpdateErr.message };
-  }
-
-  const { error: resetAgreedErr } = await gate.rpc
-    .from("group_members")
-    .update({ has_agreed: null })
-    .eq("group_id", trimmedGroupId);
-
-  if (resetAgreedErr) {
-    console.error("[adminKickAndRebuildAction] reset agreed", resetAgreedErr.message);
-    return { ok: false, error: resetAgreedErr.message };
-  }
-
-  if (resolvedPropertyId) {
-    const { error: propertyErr } = await gate.rpc
-      .from("properties")
-      .update({ status: "available" })
-      .eq("id", resolvedPropertyId);
-
-    if (propertyErr) {
-      console.error("[adminKickAndRebuildAction] release property", propertyErr.message);
-      return { ok: false, error: propertyErr.message };
-    }
-  }
-
-  let kickedIntentQuery = gate.rpc
-    .from("housing_intents")
-    .update({ status: "waiting" })
-    .eq("user_id", trimmedKickedUserId)
-    .in("status", ["matching", "recruiting", "pending_opt_in", "confirmed", "matched"]);
-
-  if (resolvedPropertyId) {
-    kickedIntentQuery = kickedIntentQuery.eq("target_property_id", resolvedPropertyId);
-  } else {
-    kickedIntentQuery = kickedIntentQuery.is("target_property_id", null);
-  }
-
-  const { error: kickedIntentErr } = await kickedIntentQuery;
-  if (kickedIntentErr) {
-    console.error("[adminKickAndRebuildAction] kicked intent", kickedIntentErr.message);
-    return { ok: false, error: kickedIntentErr.message };
-  }
-
-  if (remainingMemberIds.length > 0) {
-    let remainingIntentQuery = gate.rpc
-      .from("housing_intents")
-      // 群組降級後，留守成員回到意向池等待滾雪球補位；
-      // 'matching' 為 housing_intents_status_check 合法枚舉，切勿寫入群組狀態 'recruiting'。
-      .update({ status: "matching" })
-      .in("user_id", remainingMemberIds)
-      .in("status", ["waiting", "matching", "matched", "confirmed"]);
-
-    if (resolvedPropertyId) {
-      remainingIntentQuery = remainingIntentQuery.eq("target_property_id", resolvedPropertyId);
-    } else {
-      remainingIntentQuery = remainingIntentQuery.is("target_property_id", null);
-    }
-
-    const { error: remainingIntentErr } = await remainingIntentQuery;
-    if (remainingIntentErr) {
-      console.error("[adminKickAndRebuildAction] remaining intents", remainingIntentErr.message);
-      return { ok: false, error: remainingIntentErr.message };
-    }
-  }
-
-  await ensureOfflineDealForGroup(gate.rpc, trimmedGroupId);
-
-  const dealPatch: Record<string, unknown> = {
-    status: "cancelled",
-    updated_at: new Date().toISOString(),
-  };
   if (payload.adminNotes !== undefined) {
     const notes = payload.adminNotes;
-    dealPatch.admin_notes =
-      typeof notes === "string" && notes.trim() ? notes.trim() : null;
-  }
-
-  const { error: dealErr } = await gate.rpc
-    .from("offline_deals")
-    .update(dealPatch)
-    .eq("group_id", trimmedGroupId);
-
-  if (dealErr) {
-    console.error("[adminKickAndRebuildAction] offline_deals", dealErr.message);
-    return { ok: false, error: dealErr.message };
+    await gate.rpc
+      .from("offline_deals")
+      .update({
+        admin_notes: typeof notes === "string" && notes.trim() ? notes.trim() : null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("group_id", trimmedGroupId);
   }
 
   revalidatePath("/", "page");
@@ -821,5 +549,10 @@ export async function adminKickAndRebuildAction(
   revalidatePath("/messages");
   revalidatePath("/admin/inbox");
 
-  return { ok: true, remainingMemberCount, targetSize };
+  return {
+    ok: true,
+    remainingMemberCount: teardown.releasedUserIds.length,
+    targetSize,
+    disbanded: true,
+  };
 }

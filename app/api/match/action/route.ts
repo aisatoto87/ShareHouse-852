@@ -1,5 +1,6 @@
 import { revalidatePath } from "next/cache";
 import { NextResponse } from "next/server";
+import { disbandGroupAndReleaseMembers } from "@/lib/intent-teardown";
 import { ensureOfflineDealForGroup } from "@/lib/offline-deals";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { createSupabaseServerClient, getServerUser } from "@/lib/supabase/server";
@@ -75,35 +76,58 @@ function revalidateAfterGroupConfirm(propertyId: string | null): void {
   }
 }
 
-async function updateMemberIntentsForGroup(
+/**
+ * 成團成功後：永久註銷成員在其他樓盤的 paused / waiting 意向。
+ * 本樓盤主意向已改為 confirmed，不會被此查詢命中。
+ */
+async function cancelOtherIntentsOnGroupSuccess(
   admin: ReturnType<typeof createSupabaseAdminClient>,
-  userIds: string[],
-  status: "matching" | "pending_opt_in" | "matched" | "waiting" | "confirmed",
-  propertyId: string | null
-): Promise<void> {
-  if (userIds.length === 0) return;
+  memberUserIds: string[]
+): Promise<number> {
+  if (memberUserIds.length === 0) return 0;
 
-  const fromStatuses =
-    status === "waiting"
-      ? ["matching", "pending_opt_in", "matched", "confirmed"]
-      : ["matching", "pending_opt_in", "waiting"];
-
-  let query = admin
+  const withReason = await admin
     .from("housing_intents")
-    .update({ status })
-    .in("user_id", userIds)
-    .in("status", fromStatuses);
+    .update({
+      status: "cancelled",
+      group_id: null,
+      cancel_reason: "auto_cancelled_by_success",
+    })
+    .in("user_id", memberUserIds)
+    .in("status", ["paused", "waiting"])
+    .select("intent_id");
 
-  if (propertyId) {
-    query = query.eq("target_property_id", propertyId);
-  } else {
-    query = query.is("target_property_id", null);
+  if (!withReason.error) {
+    return withReason.data?.length ?? 0;
   }
 
-  const { error } = await query;
-  if (error) {
-    throw new Error(error.message);
+  const message = withReason.error.message?.toLowerCase() ?? "";
+  const missingCancelReason =
+    message.includes("cancel_reason") ||
+    message.includes("schema cache") ||
+    message.includes("column");
+
+  if (!missingCancelReason) {
+    throw new Error(withReason.error.message);
   }
+
+  console.warn(
+    "[api/match/action] cancel_reason column unavailable; cancelling without reason",
+    withReason.error.message
+  );
+
+  const fallback = await admin
+    .from("housing_intents")
+    .update({ status: "cancelled", group_id: null })
+    .in("user_id", memberUserIds)
+    .in("status", ["paused", "waiting"])
+    .select("intent_id");
+
+  if (fallback.error) {
+    throw new Error(fallback.error.message);
+  }
+
+  return fallback.data?.length ?? 0;
 }
 
 export async function POST(request: Request) {
@@ -186,17 +210,6 @@ export async function POST(request: Request) {
       });
     }
 
-    if (action === "accept" && initialGroupStatus === "recruiting") {
-      revalidatePath("/dashboard", "page");
-      return NextResponse.json({
-        ok: true,
-        action: "accept",
-        awaiting_others: true,
-        group_status: "recruiting",
-        already_recruiting: true,
-      });
-    }
-
     if (action === "accept" && initialGroupStatus !== "pending_opt_in") {
       return NextResponse.json(
         { error: "此群組已不在待確認狀態。", status: initialGroupStatus },
@@ -228,28 +241,20 @@ export async function POST(request: Request) {
     ];
 
     if (action === "reject") {
-      const { error: rejectGroupErr } = await admin
-        .from("match_groups")
-        .update({ status: "expired", expires_at: null })
-        .eq("group_id", groupId);
-
-      if (rejectGroupErr) {
-        console.error("[api/match/action] reject group", rejectGroupErr);
-        return NextResponse.json({ error: rejectGroupErr.message }, { status: 500 });
-      }
-
-      try {
-        await updateMemberIntentsForGroup(admin, memberUserIds, "waiting", propertyId);
-      } catch (e) {
-        console.error("[api/match/action] reject intents", e);
-        return NextResponse.json(
-          { error: e instanceof Error ? e.message : "更新意向狀態失敗。" },
-          { status: 500 }
-        );
+      const teardown = await disbandGroupAndReleaseMembers(admin, groupId, user.id);
+      if (!teardown.ok) {
+        console.error("[api/match/action] reject teardown", teardown.error);
+        return NextResponse.json({ error: teardown.error }, { status: 500 });
       }
 
       revalidatePath("/dashboard", "page");
-      return NextResponse.json({ ok: true, action: "reject" });
+      return NextResponse.json({
+        ok: true,
+        action: "reject",
+        group_status: "cancelled",
+        released_count: teardown.releasedUserIds.length,
+        lifted_paused_count: teardown.liftedPausedCount,
+      });
     }
 
     const { data: selfMember, error: selfMemberErr } = await admin
@@ -368,6 +373,30 @@ export async function POST(request: Request) {
             fallbackCount: fallbackIntents?.length ?? 0,
           });
         }
+
+        let cancelledOtherCount = 0;
+        try {
+          cancelledOtherCount = await cancelOtherIntentsOnGroupSuccess(
+            admin,
+            memberUserIds
+          );
+        } catch (e) {
+          console.error("[api/match/action] cancel other intents on success", e);
+          return NextResponse.json(
+            {
+              error:
+                e instanceof Error
+                  ? e.message
+                  : "成團後清理其他樓盤意向失敗。",
+            },
+            { status: 500 }
+          );
+        }
+
+        console.log("[api/match/action] success path intent cleanup", {
+          groupId,
+          cancelledOtherCount,
+        });
       }
 
       const holdPropertyId = await resolveHoldPropertyId(admin, propertyId, memberUserIds);
@@ -409,58 +438,6 @@ export async function POST(request: Request) {
         target_size: targetSize,
         property_held: propertyHeld,
         hold_property_id: holdPropertyId,
-      });
-    }
-
-    // 現有成員全員同意但未滿員 → recruiting
-    if (allCurrentMembersAgreed && memberCount < targetSize) {
-      const { data: recruitingRow, error: recruitingGroupErr } = await admin
-        .from("match_groups")
-        .update({
-          status: "recruiting",
-          current_size: memberCount,
-          expires_at: null,
-        })
-        .eq("group_id", groupId)
-        .eq("status", "pending_opt_in")
-        .select("status")
-        .maybeSingle();
-
-      if (recruitingGroupErr) {
-        console.error("[api/match/action] recruiting group", recruitingGroupErr);
-        return NextResponse.json({ error: recruitingGroupErr.message }, { status: 500 });
-      }
-
-      const recruitingStatus = String(
-        (recruitingRow as { status?: unknown } | null)?.status ?? ""
-      );
-      if (recruitingStatus !== "recruiting") {
-        return NextResponse.json(
-          { error: "群組結算失敗，狀態未能轉為 recruiting。", group_status: recruitingStatus },
-          { status: 500 }
-        );
-      }
-
-      try {
-        await updateMemberIntentsForGroup(admin, memberUserIds, "matching", propertyId);
-      } catch (e) {
-        console.error("[api/match/action] recruiting intents", e);
-        return NextResponse.json(
-          { error: e instanceof Error ? e.message : "更新意向狀態失敗。" },
-          { status: 500 }
-        );
-      }
-
-      revalidatePath("/dashboard", "page");
-
-      return NextResponse.json({
-        ok: true,
-        action: "accept",
-        group_recruiting: true,
-        group_status: "recruiting",
-        agreed_count: agreedCount,
-        current_size: memberCount,
-        target_size: targetSize,
       });
     }
 
