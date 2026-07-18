@@ -9,6 +9,11 @@ export type SmartMatchedPropertyRow = {
   waitingCount?: number;
   /** 成團目標人數（來自 max_tenants / room_count，至少 2） */
   targetSize?: number;
+  /**
+   * 動態鎖定：有 match_groups 處於 pending_opt_in / confirmed / matched
+   * @see lib/property-listing.ts
+   */
+  is_locked_by_group?: boolean;
 };
 
 /** `properties.status` — 盤源上架狀態 */
@@ -19,6 +24,10 @@ export interface Property {
   title: string;
   /** 盤源狀態；預設 available */
   status?: PropertyListingStatus;
+  /**
+   * 虛擬欄位：成團確認中鎖定（非 DB 欄位，由列表查詢附加）
+   */
+  is_locked_by_group?: boolean;
   district: "港島" | "九龍" | "新界";
   sub_district: string;
   price: number;

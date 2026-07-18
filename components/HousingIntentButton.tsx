@@ -16,9 +16,11 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
-import { MATCH_THRESHOLD_PERCENT } from "@/lib/matchingAlgorithm";
+import { MATCH_THRESHOLD_PERCENT, INVALID_HABITS_QUEUE_BLOCK_CODE } from "@/lib/matchingAlgorithm";
 import {
   isPropertyListingBlocked,
+  isPropertyLockedByGroup,
+  PROPERTY_GROUP_LOCKED_LABEL,
   PROPERTY_LISTING_BLOCKED_LABEL,
 } from "@/lib/property-listing";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
@@ -37,6 +39,8 @@ type HousingIntentButtonProps = {
   propertyId?: string;
   /** 樓盤盤源狀態；held / rented 時禁止加入排隊 */
   propertyListingStatus?: PropertyListingStatus;
+  /** 成團確認中動態鎖定（match_groups pending_opt_in / confirmed / matched） */
+  isLockedByGroup?: boolean;
   /** 當前用戶對該樓盤的 SyncNest 契合度（0–100）；低於 72 時鎖定排隊 */
   compatibilityScore?: number | null;
   /** Server 端判定：display_name + phone + 四項生活習慣均已填寫 */
@@ -53,6 +57,7 @@ export default function HousingIntentButton({
   defaultBudget,
   propertyId,
   propertyListingStatus = "available",
+  isLockedByGroup = false,
   compatibilityScore = null,
   isProfileComplete = true,
   profileSetupHref = DEFAULT_PROFILE_SETUP_HREF,
@@ -73,6 +78,7 @@ export default function HousingIntentButton({
 
   const trimmedPropertyId = propertyId?.trim() ?? "";
   const listingBlocked = isPropertyListingBlocked(propertyListingStatus);
+  const groupLocked = isPropertyLockedByGroup(isLockedByGroup);
   const belowCompatibilityThreshold =
     typeof compatibilityScore === "number" &&
     Number.isFinite(compatibilityScore) &&
@@ -237,6 +243,7 @@ export default function HousingIntentButton({
 
     if (
       listingBlocked ||
+      groupLocked ||
       !isProfileComplete ||
       alreadyInQueue ||
       isGloballyFrozen ||
@@ -303,6 +310,8 @@ export default function HousingIntentButton({
         intent_id?: string | null;
         preference_rank?: number;
         error?: string;
+        code?: string;
+        redirect_to?: string;
         match_warning?: string | null;
         match?: { matched?: boolean; message?: string };
       };
@@ -312,6 +321,33 @@ export default function HousingIntentButton({
 
       if (!response.ok && !savedIntentId) {
         console.error("[housing_intents] API", response.status, json);
+
+        if (json.code === INVALID_HABITS_QUEUE_BLOCK_CODE) {
+          toast.error(
+            json.error ||
+              "您的室友配對數據不足或存在異常，為確保配對品質，請先前往『個人簡介』修改您的生活習慣評分。"
+          );
+          setIsIntentModalOpen(false);
+          router.push(json.redirect_to || "/dashboard?tab=profile");
+          return;
+        }
+
+        if (json.code === "already_in_queue") {
+          toast.error(json.error || "您已在該樓盤的排隊池中");
+          setAlreadyInQueue(true);
+          setIsIntentModalOpen(false);
+          return;
+        }
+
+        if (json.code === "requeue_cooldown") {
+          toast.error(
+            json.error ||
+              "您已取消該樓盤的排隊，為維護配對品質，請於 24 小時後再重新嘗試。"
+          );
+          setIsIntentModalOpen(false);
+          return;
+        }
+
         toast.error(json.error || "提交失敗，請稍後再試。");
         if (response.status === 401) {
           setIsIntentModalOpen(false);
@@ -368,6 +404,7 @@ export default function HousingIntentButton({
 
   const buttonDisabled =
     listingBlocked ||
+    groupLocked ||
     !isProfileComplete ||
     alreadyInQueue ||
     isGloballyFrozen ||
@@ -377,17 +414,19 @@ export default function HousingIntentButton({
 
   const buttonLabel = listingBlocked
     ? PROPERTY_LISTING_BLOCKED_LABEL
-    : isGloballyFrozen
-      ? "⏸️ 暫停排隊 (您已有處理中的配對)"
-      : alreadyInQueue
-        ? "已在排隊池中"
-        : belowCompatibilityThreshold
-          ? BELOW_COMPAT_LABEL
-          : freezeCheckLoading || (queueCheckLoading && trimmedPropertyId)
-            ? "檢查排隊狀態…"
-            : isProfileComplete
-              ? "✨ 加入心水排隊區"
-              : "⚠️ 請先完善個人資料與生活評分";
+    : groupLocked
+      ? PROPERTY_GROUP_LOCKED_LABEL
+      : isGloballyFrozen
+        ? "⏸️ 暫停排隊 (您已有處理中的配對)"
+        : alreadyInQueue
+          ? "已在排隊池中"
+          : belowCompatibilityThreshold
+            ? BELOW_COMPAT_LABEL
+            : freezeCheckLoading || (queueCheckLoading && trimmedPropertyId)
+              ? "檢查排隊狀態…"
+              : isProfileComplete
+                ? "✨ 加入心水排隊區"
+                : "⚠️ 請先完善個人資料與生活評分";
 
   return (
     <>
@@ -396,15 +435,17 @@ export default function HousingIntentButton({
         title={
           listingBlocked
             ? "此樓盤已預留或洽談中，暫停接受新申請"
-            : isGloballyFrozen
-              ? "您已有進行中的配對，暫時無法新增排隊"
-              : alreadyInQueue
-                ? "您已為此樓盤提交過租屋意向，請至「我的租屋意向」查看進度"
-                : belowCompatibilityThreshold
-                  ? `目前契合度 ${Math.round(compatibilityScore as number)}%，未達 ${MATCH_THRESHOLD_PERCENT}% 排隊門檻`
-                  : !isProfileComplete
-                    ? incompleteTooltip
-                    : undefined
+            : groupLocked
+              ? "此樓盤正進行成團確認，暫時暫停新排隊"
+              : isGloballyFrozen
+                ? "您已有進行中的配對，暫時無法新增排隊"
+                : alreadyInQueue
+                  ? "您已為此樓盤提交過租屋意向，請至「我的租屋意向」查看進度"
+                  : belowCompatibilityThreshold
+                    ? `目前契合度 ${Math.round(compatibilityScore as number)}%，未達 ${MATCH_THRESHOLD_PERCENT}% 排隊門檻`
+                    : !isProfileComplete
+                      ? incompleteTooltip
+                      : undefined
         }
       >
         <Button
@@ -414,15 +455,17 @@ export default function HousingIntentButton({
           aria-label={
             listingBlocked
               ? PROPERTY_LISTING_BLOCKED_LABEL
-              : isGloballyFrozen
-                ? "暫停排隊 (您已有處理中的配對)"
-                : alreadyInQueue
-                  ? "已在排隊池中"
-                  : belowCompatibilityThreshold
-                    ? BELOW_COMPAT_LABEL
-                    : isProfileComplete
-                      ? "加入心水排隊區"
-                      : `請先完善個人資料與生活評分。${incompleteTooltip}`
+              : groupLocked
+                ? PROPERTY_GROUP_LOCKED_LABEL
+                : isGloballyFrozen
+                  ? "暫停排隊 (您已有處理中的配對)"
+                  : alreadyInQueue
+                    ? "已在排隊池中"
+                    : belowCompatibilityThreshold
+                      ? BELOW_COMPAT_LABEL
+                      : isProfileComplete
+                        ? "加入心水排隊區"
+                        : `請先完善個人資料與生活評分。${incompleteTooltip}`
           }
           onClick={() => void handlePrimaryClick()}
           className={cn(
@@ -430,11 +473,13 @@ export default function HousingIntentButton({
             (isGloballyFrozen ||
               alreadyInQueue ||
               listingBlocked ||
+              groupLocked ||
               belowCompatibilityThreshold) &&
               "cursor-not-allowed border-zinc-300 bg-gray-300 text-gray-500 opacity-100 hover:bg-gray-300 hover:text-gray-500 disabled:opacity-100",
             !isProfileComplete &&
               !alreadyInQueue &&
               !isGloballyFrozen &&
+              !groupLocked &&
               !belowCompatibilityThreshold &&
               "cursor-not-allowed border-amber-500 bg-amber-500 text-white opacity-95 hover:bg-amber-500 hover:text-white disabled:opacity-95"
           )}
@@ -516,8 +561,9 @@ export default function HousingIntentButton({
                   className="mt-0.5"
                 />
                 <span className="text-sm leading-relaxed text-zinc-700">
-                  若此單位配對需時較長，我願意接收同區、預算相近且室友契合度極高 (&gt;75%)
-                  的其他樓盤推薦。
+                  若此單位配對需時較長，我願意接收同區、預算相近且室友契合度極高 (&gt;=
+                  {MATCH_THRESHOLD_PERCENT}
+                  %) 的其他樓盤推薦。
                 </span>
               </label>
             </div>

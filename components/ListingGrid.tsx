@@ -42,10 +42,14 @@ export default function ListingGrid({
         </div>
       ) : (
         <div className="grid grid-cols-1 items-stretch gap-5 sm:grid-cols-2 lg:grid-cols-3">
-          {displayedRows.map(({ property, similarity, waitingCount, targetSize }) => (
+          {displayedRows.map(({ property, similarity, waitingCount, targetSize, is_locked_by_group }) => (
             <div key={property.id} className="h-full">
               <PropertyCard
-                property={property}
+                property={{
+                  ...property,
+                  is_locked_by_group:
+                    is_locked_by_group === true || property.is_locked_by_group === true,
+                }}
                 similarityScore={showSimilarityBadge ? similarity : null}
                 waitingCount={waitingCount ?? 0}
                 targetSize={targetSize ?? 2}

@@ -1,13 +1,14 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { executeIntentMatch } from "@/lib/match-engine";
 import {
   GLOBAL_FREEZE_BLOCKING_INTENT_STATUSES,
 } from "@/lib/housing-intent-status";
 import { teardownHousingIntent } from "@/lib/intent-teardown";
 import {
   COMPATIBILITY_QUEUE_BLOCK_ERROR,
+  INVALID_HABITS_QUEUE_BLOCK_CODE,
+  INVALID_HABITS_QUEUE_BLOCK_ERROR,
   MATCH_THRESHOLD_PERCENT,
   previewUserPropertyCompatibility,
   profileRowToUserHabits,
@@ -17,6 +18,11 @@ import {
   createSupabaseServerClient,
   getServerUser,
 } from "@/lib/supabase/server";
+import { parseStrictSyncNestHabits } from "@/lib/syncnest-habit-validation";
+import {
+  runVirtualMatchEngine,
+  type VirtualMatchEngineResult,
+} from "@/lib/virtual-matcher";
 
 type CancelIntentResult = { success: true } | { success: false; error: string };
 
@@ -31,6 +37,25 @@ export type CreateHousingIntentInput = {
   allow_spillover?: boolean;
 };
 
+export type CreateHousingIntentMatchResult =
+  | {
+      matched: true;
+      join_mode: "new_group";
+      group_id: string;
+      current_size: number;
+      target_size: number;
+      match_mode: "property_first";
+      property_id: string;
+      message: string;
+      intent_ids?: string[];
+    }
+  | {
+      matched: false;
+      message: string;
+      match_mode: "property_first" | "district_blind";
+      reason?: string;
+    };
+
 export type CreateHousingIntentResult =
   | {
       success: true;
@@ -38,14 +63,48 @@ export type CreateHousingIntentResult =
       preference_rank: number;
       target_property_id: string | null;
       target_headcount: number;
-      match: Awaited<ReturnType<typeof executeIntentMatch>> | null;
+      match: CreateHousingIntentMatchResult | null;
       match_warning: string | null;
     }
-  | { success: false; error: string; status?: number };
+  | {
+      success: false;
+      error: string;
+      status?: number;
+      code?:
+        | typeof INVALID_HABITS_QUEUE_BLOCK_CODE
+        | "compatibility_below_threshold"
+        | "already_in_queue"
+        | "requeue_cooldown";
+      redirect_to?: string;
+    };
 
 const DEFAULT_TARGET_HEADCOUNT = 2;
 const GLOBAL_FREEZE_CREATE_ERROR =
   "Global Freeze: 用戶已處於配對流程中，無法新增排隊";
+
+/** 同樓盤視為「已在排隊池」的活躍狀態（禁止重複寫入） */
+const ACTIVE_PROPERTY_INTENT_STATUSES = [
+  "waiting",
+  "matching",
+  "pending_opt_in",
+  "confirmed",
+  "matched",
+  "paused",
+] as const;
+
+/** 可失效覆寫（UPDATE → waiting）的狀態 */
+const REACTIVATABLE_INTENT_STATUSES = [
+  "cancelled",
+  "expired",
+  "disbanded",
+] as const;
+
+const ALREADY_IN_PROPERTY_QUEUE_ERROR = "您已在該樓盤的排隊池中";
+const REQUEUE_COOLDOWN_ERROR =
+  "您已取消該樓盤的排隊，為維護配對品質，請於 24 小時後再重新嘗試。";
+
+/** 開發環境免冷卻，正式環境 24 小時 */
+const REQUEUE_COOLDOWN_HOURS = process.env.NODE_ENV === "development" ? 0 : 24;
 
 function isLikelyUuid(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
@@ -57,6 +116,15 @@ function resolveMaxTenants(raw: unknown): number {
   const n = typeof raw === "number" ? raw : Number(raw);
   if (Number.isFinite(n) && n >= 2) return Math.round(n);
   return DEFAULT_TARGET_HEADCOUNT;
+}
+
+function isWithinRequeueCooldown(updatedAtIso: string | null | undefined): boolean {
+  if (REQUEUE_COOLDOWN_HOURS <= 0) return false;
+  if (typeof updatedAtIso !== "string" || updatedAtIso.trim() === "") return false;
+  const updatedMs = Date.parse(updatedAtIso);
+  if (!Number.isFinite(updatedMs)) return false;
+  const elapsedMs = Date.now() - updatedMs;
+  return elapsedMs < REQUEUE_COOLDOWN_HOURS * 60 * 60 * 1000;
 }
 
 /**
@@ -139,8 +207,7 @@ export async function createHousingIntent(
     .from("housing_intents")
     .select("*", { count: "exact", head: true })
     .eq("user_id", user.id)
-    .neq("status", "expired")
-    .neq("status", "cancelled");
+    .not("status", "in", '("cancelled","expired","disbanded")');
 
   if (activeCountError) {
     console.error("[actions/createHousingIntent] active intent count", activeCountError);
@@ -153,8 +220,48 @@ export async function createHousingIntent(
 
   const preferenceRank = (activeCount ?? 0) + 1;
 
+  // 排隊前防呆：習慣四維必須完整且落在 1–5（對應 habit_v1–v4）
+  const { data: viewerProfile, error: viewerProfileError } = await supabase
+    .from("profiles")
+    .select("habit_cleanliness, habit_ac_temp, habit_guests, habit_noise")
+    .eq("id", user.id)
+    .maybeSingle();
+
+  if (viewerProfileError) {
+    console.error("[actions/createHousingIntent] profile habits lookup", viewerProfileError);
+    return {
+      success: false,
+      error: viewerProfileError.message || "查詢個人習慣失敗，請稍後再試。",
+      status: 500,
+    };
+  }
+
+  const userHabits = parseStrictSyncNestHabits(
+    (viewerProfile as {
+      habit_cleanliness: unknown;
+      habit_ac_temp: unknown;
+      habit_guests: unknown;
+      habit_noise: unknown;
+    }) ?? null
+  );
+
+  if (!userHabits) {
+    return {
+      success: false,
+      error: INVALID_HABITS_QUEUE_BLOCK_ERROR,
+      status: 422,
+      code: INVALID_HABITS_QUEUE_BLOCK_CODE,
+      redirect_to: "/dashboard?tab=profile",
+    };
+  }
+
   let targetPropertyId: string | null = null;
   let targetHeadcount = DEFAULT_TARGET_HEADCOUNT;
+  let existingIntentForProperty: {
+    intent_id: string;
+    status: string;
+    updated_at: string | null;
+  } | null = null;
 
   if (propertyId) {
     const { data: propertyRow, error: propertyError } = await supabase
@@ -183,60 +290,94 @@ export async function createHousingIntent(
       (propertyRow as { max_tenants?: unknown }).max_tenants
     );
 
-    const { count: duplicateCount, error: duplicateError } = await supabase
+    // 預檢查：同 user + property 是否已有紀錄（避免重複 INSERT → unique / 500）
+    const { data: existingRows, error: existingError } = await supabase
       .from("housing_intents")
-      .select("*", { count: "exact", head: true })
+      .select("intent_id, status, updated_at, created_at")
       .eq("user_id", user.id)
       .eq("target_property_id", propertyId)
-      .neq("status", "expired")
-      .neq("status", "cancelled");
+      .order("updated_at", { ascending: false, nullsFirst: false })
+      .order("created_at", { ascending: false })
+      .limit(5);
 
-    if (duplicateError) {
-      console.error("[actions/createHousingIntent] duplicate property check", duplicateError);
+    if (existingError) {
+      console.error("[actions/createHousingIntent] existing property intent", existingError);
       return {
         success: false,
-        error: duplicateError.message || "查詢意向狀態失敗，請稍後再試。",
+        error: existingError.message || "查詢意向狀態失敗，請稍後再試。",
         status: 500,
       };
     }
 
-    if ((duplicateCount ?? 0) > 0) {
+    const rows = (existingRows ?? []) as Array<{
+      intent_id?: unknown;
+      status?: unknown;
+      updated_at?: unknown;
+      created_at?: unknown;
+    }>;
+
+    const activeExisting = rows.find((r) => {
+      const status = typeof r.status === "string" ? r.status.trim() : "";
+      return ACTIVE_PROPERTY_INTENT_STATUSES.includes(
+        status as (typeof ACTIVE_PROPERTY_INTENT_STATUSES)[number]
+      );
+    });
+
+    if (activeExisting) {
       return {
         success: false,
-        error: "您已經在排隊隊伍中，不能重複申請同一個樓盤",
-        status: 400,
+        error: ALREADY_IN_PROPERTY_QUEUE_ERROR,
+        status: 409,
+        code: "already_in_queue",
       };
     }
 
-    // SyncNest 硬攔截：INSERT 前強制重算用戶 vs 樓盤契合度
-    const { data: viewerProfile, error: viewerProfileError } = await supabase
-      .from("profiles")
-      .select("habit_cleanliness, habit_ac_temp, habit_guests, habit_noise")
-      .eq("id", user.id)
-      .maybeSingle();
+    const reactivatable = rows.find((r) => {
+      const status = typeof r.status === "string" ? r.status.trim() : "";
+      return REACTIVATABLE_INTENT_STATUSES.includes(
+        status as (typeof REACTIVATABLE_INTENT_STATUSES)[number]
+      );
+    });
 
-    if (viewerProfileError) {
-      console.error("[actions/createHousingIntent] profile habits lookup", viewerProfileError);
-      return {
-        success: false,
-        error: viewerProfileError.message || "查詢個人習慣失敗，請稍後再試。",
-        status: 500,
-      };
-    }
+    if (reactivatable) {
+      const intentId =
+        typeof reactivatable.intent_id === "string"
+          ? reactivatable.intent_id.trim()
+          : "";
+      const status =
+        typeof reactivatable.status === "string" ? reactivatable.status.trim() : "";
+      const updatedAt =
+        typeof reactivatable.updated_at === "string" && reactivatable.updated_at.trim() !== ""
+          ? reactivatable.updated_at
+          : typeof reactivatable.created_at === "string"
+            ? reactivatable.created_at
+            : null;
 
-    const userHabits = profileRowToUserHabits(
-      (viewerProfile as {
-        habit_cleanliness: unknown;
-        habit_ac_temp: unknown;
-        habit_guests: unknown;
-        habit_noise: unknown;
-      }) ?? {
-        habit_cleanliness: null,
-        habit_ac_temp: null,
-        habit_guests: null,
-        habit_noise: null,
+      if (!intentId) {
+        return {
+          success: false,
+          error: "既有意向資料異常，請稍後再試。",
+          status: 500,
+        };
       }
-    );
+
+      if (isWithinRequeueCooldown(updatedAt)) {
+        return {
+          success: false,
+          error: REQUEUE_COOLDOWN_ERROR,
+          status: 429,
+          code: "requeue_cooldown",
+        };
+      }
+
+      existingIntentForProperty = {
+        intent_id: intentId,
+        status,
+        updated_at: updatedAt,
+      };
+    }
+
+    // SyncNest 硬攔截：寫入前強制重算用戶 vs 樓盤契合度（>= 72）
     const propertyHabits = profileRowToUserHabits(
       propertyRow as {
         habit_cleanliness: unknown;
@@ -246,79 +387,146 @@ export async function createHousingIntent(
       }
     );
 
-    const compatibilityScore =
-      userHabits && propertyHabits
-        ? previewUserPropertyCompatibility(userHabits, propertyHabits).similarity
-        : 0;
+    const compatibilityScore = propertyHabits
+      ? previewUserPropertyCompatibility(userHabits, propertyHabits).similarity
+      : 0;
 
     if (compatibilityScore < MATCH_THRESHOLD_PERCENT) {
-      throw new Error(COMPATIBILITY_QUEUE_BLOCK_ERROR);
+      return {
+        success: false,
+        error: COMPATIBILITY_QUEUE_BLOCK_ERROR,
+        status: 403,
+        code: "compatibility_below_threshold",
+      };
     }
   }
 
   const allowSpillover = input.allow_spillover === true;
+  const nowIso = new Date().toISOString();
 
-  const { data: inserted, error: insertError } = await supabase
-    .from("housing_intents")
-    .insert({
-      user_id: user.id,
-      target_district: targetDistrict,
-      max_budget: maxBudget,
-      target_property_id: targetPropertyId,
-      target_headcount: targetHeadcount,
-      preference_rank: preferenceRank,
-      allow_spillover: allowSpillover,
-    })
-    .select("intent_id, preference_rank")
-    .single();
+  let intentId = "";
+  let insertedRank = preferenceRank;
 
-  if (insertError) {
-    console.error("[actions/createHousingIntent] insert", insertError);
-    return {
-      success: false,
-      error: insertError.message || "提交失敗，請稍後再試。",
-      status: 500,
-    };
+  if (existingIntentForProperty) {
+    // 失效覆寫：不可 INSERT，改 UPDATE 重置為 waiting
+    const { data: updated, error: updateError } = await supabase
+      .from("housing_intents")
+      .update({
+        status: "waiting",
+        target_district: targetDistrict,
+        max_budget: maxBudget,
+        target_headcount: targetHeadcount,
+        preference_rank: preferenceRank,
+        allow_spillover: allowSpillover,
+        group_id: null,
+        updated_at: nowIso,
+      })
+      .eq("intent_id", existingIntentForProperty.intent_id)
+      .eq("user_id", user.id)
+      .select("intent_id, preference_rank")
+      .single();
+
+    if (updateError) {
+      console.error("[actions/createHousingIntent] reactivate update", updateError);
+      return {
+        success: false,
+        error: updateError.message || "重新排隊失敗，請稍後再試。",
+        status: 500,
+      };
+    }
+
+    const row = updated as { intent_id?: string; preference_rank?: number } | null;
+    intentId = typeof row?.intent_id === "string" ? row.intent_id.trim() : existingIntentForProperty.intent_id;
+    insertedRank =
+      typeof row?.preference_rank === "number" && Number.isFinite(row.preference_rank)
+        ? row.preference_rank
+        : preferenceRank;
+  } else {
+    const { data: inserted, error: insertError } = await supabase
+      .from("housing_intents")
+      .insert({
+        user_id: user.id,
+        target_district: targetDistrict,
+        max_budget: maxBudget,
+        target_property_id: targetPropertyId,
+        target_headcount: targetHeadcount,
+        preference_rank: preferenceRank,
+        allow_spillover: allowSpillover,
+      })
+      .select("intent_id, preference_rank")
+      .single();
+
+    if (insertError) {
+      console.error("[actions/createHousingIntent] insert", insertError);
+      // 競態下仍可能撞到 unique：回傳明確錯誤而非裸 500
+      const msg = insertError.message || "提交失敗，請稍後再試。";
+      const isDuplicate =
+        insertError.code === "23505" ||
+        msg.toLowerCase().includes("duplicate") ||
+        msg.toLowerCase().includes("unique");
+      return {
+        success: false,
+        error: isDuplicate ? ALREADY_IN_PROPERTY_QUEUE_ERROR : msg,
+        status: isDuplicate ? 409 : 500,
+        code: isDuplicate ? "already_in_queue" : undefined,
+      };
+    }
+
+    const row = inserted as { intent_id?: string; preference_rank?: number } | null;
+    intentId = typeof row?.intent_id === "string" ? row.intent_id.trim() : "";
+    insertedRank =
+      typeof row?.preference_rank === "number" && Number.isFinite(row.preference_rank)
+        ? row.preference_rank
+        : preferenceRank;
   }
 
-  const row = inserted as { intent_id?: string; preference_rank?: number } | null;
-  const intentId = typeof row?.intent_id === "string" ? row.intent_id.trim() : "";
-  const insertedRank =
-    typeof row?.preference_rank === "number" && Number.isFinite(row.preference_rank)
-      ? row.preference_rank
-      : preferenceRank;
-
-  let matchResult: Awaited<ReturnType<typeof executeIntentMatch>> | null = null;
+  let matchResult: CreateHousingIntentMatchResult | null = null;
   let matchWarning: string | null = null;
 
-  if (intentId) {
+  // 樓盤優先：意向寫入 waiting 後立刻觸發虛擬成團掃描（人數達標 + 契合度門檻）
+  if (intentId && targetPropertyId) {
     try {
       const admin = createSupabaseAdminClient();
-      matchResult = await executeIntentMatch(admin, {
-        intent_id: intentId,
-        target_district: targetDistrict,
-        user_id: user.id,
-      });
+      const virtualResult: VirtualMatchEngineResult = await runVirtualMatchEngine(
+        targetPropertyId,
+        admin
+      );
 
-      if (matchResult && "error" in matchResult && matchResult.error) {
-        console.warn("[actions/createHousingIntent] match engine warning (intent saved)", matchResult);
-        matchWarning = matchResult.error;
+      if (virtualResult.matched) {
+        matchResult = {
+          matched: true,
+          join_mode: "new_group",
+          group_id: virtualResult.group_id,
+          current_size: virtualResult.current_size,
+          target_size: virtualResult.target_size,
+          match_mode: "property_first",
+          property_id: virtualResult.property_id,
+          message: virtualResult.message,
+        };
+      } else {
         matchResult = {
           matched: false,
-          message: matchResult.error,
-          match_mode: propertyId ? "property_first" : "district_blind",
+          message: virtualResult.message,
+          match_mode: "property_first",
+          reason: virtualResult.reason,
         };
       }
     } catch (e) {
       const message = e instanceof Error ? e.message : "配對引擎暫時不可用";
-      console.error("[actions/createHousingIntent] match engine exception (intent saved)", e);
+      console.error("[actions/createHousingIntent] virtual match engine exception (intent saved)", e);
       matchWarning = message;
       matchResult = {
         matched: false,
         message,
-        match_mode: propertyId ? "property_first" : "district_blind",
+        match_mode: "property_first",
       };
     }
+  } else if (intentId) {
+    matchResult = {
+      matched: false,
+      message: "已加入區域排隊（無指定樓盤，略過虛擬成團掃描）。",
+      match_mode: "district_blind",
+    };
   }
 
   revalidatePath("/dashboard");
@@ -335,7 +543,7 @@ export async function createHousingIntent(
 }
 
 /**
- * 取消租屋意向：確保只能刪除自己的意向，並完整清理群組殘留後刪除 housing_intents。
+ * 取消租屋意向：確保只能取消自己的意向，並完整清理群組殘留後軟取消 housing_intents。
  */
 export async function cancelHousingIntentAction(
   intentId: string

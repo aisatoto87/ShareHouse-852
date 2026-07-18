@@ -19,8 +19,10 @@ import {
   fetchWaitingPoolStats,
 } from "@/lib/waiting-pool";
 import {
+  applyGroupLocksToSmartRows,
   applyPropertyStatusesToRows,
   buildAllModeListingCatalog,
+  fetchPropertiesLockedByGroup,
   fetchPropertyStatuses,
   sortSmartMatchedPropertyRows,
 } from "@/lib/property-listing";
@@ -266,14 +268,18 @@ export default function ListingsClient() {
         }
 
         const fullIds = full.map((r) => r.property.id);
-        const [waitingStats, statusMap] = await Promise.all([
+        const [waitingStats, statusMap, lockedIds] = await Promise.all([
           fetchWaitingPoolStats(supabase, fullIds),
           fetchPropertyStatuses(supabase, fullIds),
+          fetchPropertiesLockedByGroup(supabase, fullIds),
         ]);
         const fullWithPool = sortSmartMatchedPropertyRows(
-          applyWaitingPoolStatsToSmartRows(
-            applyPropertyStatusesToRows(full, statusMap),
-            waitingStats
+          applyGroupLocksToSmartRows(
+            applyWaitingPoolStatsToSmartRows(
+              applyPropertyStatusesToRows(full, statusMap),
+              waitingStats
+            ),
+            lockedIds
           ),
           false
         );

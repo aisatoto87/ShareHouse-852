@@ -1,6 +1,14 @@
 /**
- * SyncNest 核心配對演算法：加權曼哈頓距離、衛生/噪音紅線一票否決、單位級檢測。
+ * SyncNest 核心配對演算法：加權曼哈頓距離、衛生/噪音紅線一票否決、單位級／團級 Clique 檢測。
  */
+
+/** 任務規格別名：v1 衛生、v2 冷氣、v3 訪客、v4 噪音 */
+export interface VibeMetrics {
+  v1: number; // 衛生 habit_cleanliness
+  v2: number; // 冷氣／作息 habit_ac_temp
+  v3: number; // 訪客／社交 habit_guests
+  v4: number; // 噪音 habit_noise
+}
 
 export type UserHabits = {
   habit_cleanliness: number;
@@ -8,6 +16,8 @@ export type UserHabits = {
   habit_guests: number;
   habit_noise: number;
 };
+
+export type SyncNestVibeInput = VibeMetrics | UserHabits | null | undefined;
 
 export function profileRowToUserHabits(row: {
   habit_cleanliness: unknown;
@@ -35,6 +45,70 @@ export function profileRowToUserHabits(row: {
   return { habit_cleanliness, habit_ac_temp, habit_guests, habit_noise };
 }
 
+function isVibeMetricsShape(value: object): value is VibeMetrics {
+  return "v1" in value && "v2" in value && "v3" in value && "v4" in value;
+}
+
+function isUserHabitsShape(value: object): value is UserHabits {
+  return (
+    "habit_cleanliness" in value &&
+    "habit_ac_temp" in value &&
+    "habit_guests" in value &&
+    "habit_noise" in value
+  );
+}
+
+/** 將任意輸入正規化為完整有限數字向量；NULL／Undefined／NaN → null */
+export function normalizeVibeMetrics(input: SyncNestVibeInput): VibeMetrics | null {
+  if (input == null || typeof input !== "object") return null;
+
+  let raw: { v1: unknown; v2: unknown; v3: unknown; v4: unknown };
+  if (isVibeMetricsShape(input)) {
+    raw = { v1: input.v1, v2: input.v2, v3: input.v3, v4: input.v4 };
+  } else if (isUserHabitsShape(input)) {
+    raw = {
+      v1: input.habit_cleanliness,
+      v2: input.habit_ac_temp,
+      v3: input.habit_guests,
+      v4: input.habit_noise,
+    };
+  } else {
+    return null;
+  }
+
+  if (Object.values(raw).some((v) => v === null || v === undefined)) {
+    return null;
+  }
+
+  const v1 = Number(raw.v1);
+  const v2 = Number(raw.v2);
+  const v3 = Number(raw.v3);
+  const v4 = Number(raw.v4);
+  if (![v1, v2, v3, v4].every((n) => Number.isFinite(n))) {
+    return null;
+  }
+
+  return { v1, v2, v3, v4 };
+}
+
+export function vibeMetricsToUserHabits(vibe: VibeMetrics): UserHabits {
+  return {
+    habit_cleanliness: vibe.v1,
+    habit_ac_temp: vibe.v2,
+    habit_guests: vibe.v3,
+    habit_noise: vibe.v4,
+  };
+}
+
+export function userHabitsToVibeMetrics(habits: UserHabits): VibeMetrics {
+  return {
+    v1: habits.habit_cleanliness,
+    v2: habits.habit_ac_temp,
+    v3: habits.habit_guests,
+    v4: habits.habit_noise,
+  };
+}
+
 export type MatchResult =
   | { similarity: number; status: "MATCHED" }
   | { similarity: number; status: "REJECTED_THRESHOLD" }
@@ -52,24 +126,44 @@ const WEIGHT_GUESTS = 1.0;
 const WEIGHT_NOISE = 1.5;
 
 const WEIGHTED_DISTANCE_SCALE = 20;
-/** 加入心水排隊區：用戶 vs 樓盤 SyncNest 契合度最低門檻 */
+/** SyncNest 全域配對合格門檻：相似度必須 >= 此值 */
 export const MATCH_THRESHOLD_PERCENT = 72;
-/** v4.0 雙人初配：SyncNest 習慣雷達最低契合分 */
-export const HABIT_RADAR_MATCH_MIN_PERCENT = 75;
+/** @deprecated 請改用 MATCH_THRESHOLD_PERCENT；保留別名以免舊呼叫點漂移 */
+export const HABIT_RADAR_MATCH_MIN_PERCENT = MATCH_THRESHOLD_PERCENT;
 export const COMPATIBILITY_QUEUE_BLOCK_ERROR =
   "SyncNest 契合度不足 72%，系統拒絕建立配對意向。";
-const VETO_DIFF_THRESHOLD = 3;
+/** 習慣問卷缺失／異常時阻擋排隊 */
+export const INVALID_HABITS_QUEUE_BLOCK_ERROR =
+  "您的室友配對數據不足或存在異常，為確保配對品質，請先前往『個人簡介』修改您的生活習慣評分。";
+export const INVALID_HABITS_QUEUE_BLOCK_CODE = "invalid_habit_profile" as const;
+/** 衛生／噪音絕對差 >= 此值 → 一票否決 */
+export const SYNCNEST_VETO_DIFF_THRESHOLD = 3;
+const VETO_DIFF_THRESHOLD = SYNCNEST_VETO_DIFF_THRESHOLD;
 /** 雙方 max_budget 較低者 / 較高者 須達此比例才算預算相容 */
 const BUDGET_COMPAT_MIN_RATIO = 0.75;
 
 /**
  * 兩位使用者習慣向量之比對：紅線否決 → 加權曼哈頓距離 → 相似度與門檻判定。
+ * 接受 VibeMetrics / UserHabits；資料不完整時視為否決。
  */
-export function calculateMatch(userA: UserHabits, userB: UserHabits): MatchResult {
-  const diffCleanliness = Math.abs(userA.habit_cleanliness - userB.habit_cleanliness);
-  const diffAcTemp = Math.abs(userA.habit_ac_temp - userB.habit_ac_temp);
-  const diffGuests = Math.abs(userA.habit_guests - userB.habit_guests);
-  const diffNoise = Math.abs(userA.habit_noise - userB.habit_noise);
+export function calculateMatch(
+  userA: SyncNestVibeInput,
+  userB: SyncNestVibeInput
+): MatchResult {
+  const a = normalizeVibeMetrics(userA);
+  const b = normalizeVibeMetrics(userB);
+  if (!a || !b) {
+    return {
+      similarity: 0,
+      status: "REJECTED_VETO",
+      reason: "習慣資料缺失或損毀",
+    };
+  }
+
+  const diffCleanliness = Math.abs(a.v1 - b.v1);
+  const diffAcTemp = Math.abs(a.v2 - b.v2);
+  const diffGuests = Math.abs(a.v3 - b.v3);
+  const diffNoise = Math.abs(a.v4 - b.v4);
 
   if (diffCleanliness >= VETO_DIFF_THRESHOLD || diffNoise >= VETO_DIFF_THRESHOLD) {
     return {
@@ -123,32 +217,51 @@ function averageUserHabits(tenants: UserHabits[]): UserHabits {
 /**
  * 新租客 vs 單位內既有租客：逐一紅線檢測（防禦地雷三），通過後與四維平均值再比對。
  */
-export function calculateUnitMatch(newTenant: UserHabits, existingTenants: UserHabits[]): MatchResult {
+export function calculateUnitMatch(
+  newTenant: SyncNestVibeInput,
+  existingTenants: Array<SyncNestVibeInput>
+): MatchResult {
+  const normalizedNew = normalizeVibeMetrics(newTenant);
+  if (!normalizedNew) {
+    return {
+      similarity: 0,
+      status: "REJECTED_VETO",
+      reason: "習慣資料缺失或損毀",
+    };
+  }
+
+  const normalizedExisting: UserHabits[] = [];
   for (const tenant of existingTenants) {
-    const pairResult = calculateMatch(newTenant, tenant);
+    const vibe = normalizeVibeMetrics(tenant);
+    if (!vibe) {
+      return {
+        similarity: 0,
+        status: "REJECTED_VETO",
+        reason: "既有成員習慣資料缺失或損毀",
+      };
+    }
+    const pairResult = calculateMatch(normalizedNew, vibe);
     if (pairResult.status === "REJECTED_VETO") {
       return pairResult;
     }
+    normalizedExisting.push(vibeMetricsToUserHabits(vibe));
   }
 
-  if (existingTenants.length === 0) {
-    return calculateMatch(newTenant, newTenant);
+  if (normalizedExisting.length === 0) {
+    return calculateMatch(normalizedNew, normalizedNew);
   }
 
-  const unitAverage = averageUserHabits(existingTenants);
-  return calculateMatch(newTenant, unitAverage);
+  const unitAverage = averageUserHabits(normalizedExisting);
+  return calculateMatch(normalizedNew, unitAverage);
 }
 
 /**
- * 🧠 SyncNest v3.0 核心匹配引擎：N 對 N 網狀校驗與一票否決 (徹底取代舊有 average 算法)
- * @param newMember 嘗試加入的新成員 (UserHabits)
- * @param existingMembers 群組內現有的成員名單 (UserHabits Array)
- * @returns boolean (是否允許加入)
- */
-/**
  * SyncNest 習慣雷達：兩人四維向量相似度（0–100），含紅線否決。
  */
-export function calculateHabitRadarSimilarity(userA: UserHabits, userB: UserHabits): number {
+export function calculateHabitRadarSimilarity(
+  userA: SyncNestVibeInput,
+  userB: SyncNestVibeInput
+): number {
   const result = calculateMatch(userA, userB);
   if (result.status === "REJECTED_VETO") return 0;
   return result.similarity;
@@ -156,8 +269,8 @@ export function calculateHabitRadarSimilarity(userA: UserHabits, userB: UserHabi
 
 /** 用戶 vs 樓盤習慣向量契合度預覽（與 calculateMatch / RPC 同源）。 */
 export function previewUserPropertyCompatibility(
-  user: UserHabits,
-  property: UserHabits
+  user: SyncNestVibeInput,
+  property: SyncNestVibeInput
 ): SyncMatchPreview {
   const similarity = calculateHabitRadarSimilarity(user, property);
   return {
@@ -166,11 +279,11 @@ export function previewUserPropertyCompatibility(
   };
 }
 
-/** v4.0 初配門檻：習慣雷達分數 >= minPercent（預設 75）且未觸發紅線 */
+/** v4.0 初配門檻：習慣雷達分數 >= minPercent（預設 MATCH_THRESHOLD_PERCENT）且未觸發紅線 */
 export function meetsHabitRadarThreshold(
-  userA: UserHabits,
-  userB: UserHabits,
-  minPercent: number = HABIT_RADAR_MATCH_MIN_PERCENT
+  userA: SyncNestVibeInput,
+  userB: SyncNestVibeInput,
+  minPercent: number = MATCH_THRESHOLD_PERCENT
 ): boolean {
   const score = calculateHabitRadarSimilarity(userA, userB);
   return score >= minPercent;
@@ -197,28 +310,68 @@ export function resolveTargetHeadcount(intent: Record<string, unknown>): number 
   return 2;
 }
 
-export function canJoinGroup(newMember: UserHabits, existingMembers: UserHabits[]): boolean {
-  // 如果群組仲未有人，第一個人當然可以自動加入
-  if (existingMembers.length === 0) return true;
+/**
+ * 驗證新成員是否能加入既有群組（Clique Formation／一票否決制）。
+ * - 新成員或任一既有成員資料缺失／損毀 → false
+ * - 空群組 → true
+ * - 必須通過每一位既有成員：衛生/噪音 ABS >= 3 否決，且相似度 >= 72
+ */
+export function canJoinGroup(
+  newMemberVibe: SyncNestVibeInput,
+  existingMembersVibes: Array<SyncNestVibeInput> | null | undefined
+): boolean {
+  const newMember = normalizeVibeMetrics(newMemberVibe);
+  if (!newMember) {
+    return false;
+  }
 
-  // N 對 N 網狀校驗迴圈：必須同群組內【每一個人】獨立單挑
-  for (const member of existingMembers) {
-    const matchResult = calculateMatch(newMember, member);
+  if (!existingMembersVibes || existingMembersVibes.length === 0) {
+    return true;
+  }
 
-    // 只要有任何一次單挑失敗（觸發紅線），即刻一票否決！
-    if (matchResult.status === "REJECTED_VETO") {
-      console.log(`[配對大腦] 🔴 一票否決！原因：${matchResult.reason}`);
-      return false; 
+  return existingMembersVibes.every((member) => {
+    const existing = normalizeVibeMetrics(member);
+    if (!existing) {
+      return false;
     }
-    
-    // 只要有任何一次單挑相似度唔夠，都係一票否決！（這就是 v3.0 廢除 average 的關鍵）
-    if (matchResult.status === "REJECTED_THRESHOLD") {
-      console.log(`[配對大腦] 🟡 匹配失敗！與其中一位成員分數低於門檻。`);
+
+    // 1. 核心紅線（衛生 v1、噪音 v4）
+    if (
+      Math.abs(newMember.v1 - existing.v1) >= VETO_DIFF_THRESHOLD ||
+      Math.abs(newMember.v4 - existing.v4) >= VETO_DIFF_THRESHOLD
+    ) {
+      return false;
+    }
+
+    // 2. 加權曼哈頓距離（最大尺度 20）
+    const distance =
+      WEIGHT_CLEANLINESS * Math.abs(newMember.v1 - existing.v1) +
+      WEIGHT_AC_TEMP * Math.abs(newMember.v2 - existing.v2) +
+      WEIGHT_GUESTS * Math.abs(newMember.v3 - existing.v3) +
+      WEIGHT_NOISE * Math.abs(newMember.v4 - existing.v4);
+
+    // 3. 相似度門檻（與 calculateMatch / SQL ROUND 對齊）
+    const similarity = Math.round((1 - distance / WEIGHTED_DISTANCE_SCALE) * 100);
+    return similarity >= MATCH_THRESHOLD_PERCENT;
+  });
+}
+
+/**
+ * 團級 Clique：組合內任意兩人皆須通過 canJoinGroup／pairwise SyncNest 校驗。
+ */
+export function isValidClique(
+  memberVibes: Array<SyncNestVibeInput> | null | undefined
+): boolean {
+  if (!memberVibes || memberVibes.length === 0) return false;
+  if (memberVibes.length === 1) {
+    return normalizeVibeMetrics(memberVibes[0]) != null;
+  }
+
+  for (let i = 0; i < memberVibes.length; i++) {
+    const rest = memberVibes.filter((_, idx) => idx !== i);
+    if (!canJoinGroup(memberVibes[i], rest)) {
       return false;
     }
   }
-
-  // 如果順利打贏晒所有人無被否決，代表完美契合！
-  console.log(`[配對大腦] 🟢 完美契合！成功通過群組網狀校驗！`);
   return true;
 }

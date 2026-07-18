@@ -394,7 +394,7 @@ export async function disbandGroupAndReleaseMembers(
 }
 
 /**
- * 取消意向：清理 group_members 殘留、回退群組狀態，再刪除 housing_intents。
+ * 取消意向：清理 group_members 殘留、回退群組狀態，再軟取消 housing_intents（status=cancelled）。
  */
 export async function teardownHousingIntent(
   admin: SupabaseClient,
@@ -471,18 +471,24 @@ export async function teardownHousingIntent(
     console.warn("[intent-teardown] reconcile_ghost_match_groups unavailable", ghostErr.message);
   }
 
-  const deleteQuery = admin
+  // 軟取消：保留列以支援同樓盤重新排隊冷卻（不可硬刪，否則無法讀 updated_at）
+  const nowIso = new Date().toISOString();
+  const softCancelQuery = admin
     .from("housing_intents")
-    .delete()
+    .update({
+      status: "cancelled",
+      group_id: null,
+      updated_at: nowIso,
+    })
     .eq("user_id", userId);
 
-  const { error: deleteErr } = await (intent.intent_id
-    ? deleteQuery.eq("intent_id", intent.intent_id)
-    : deleteQuery.eq("intent_id", intentId));
+  const { error: cancelErr } = await (intent.intent_id
+    ? softCancelQuery.eq("intent_id", intent.intent_id)
+    : softCancelQuery.eq("intent_id", intentId));
 
-  if (deleteErr) {
-    console.error("[intent-teardown] delete intent", deleteErr);
-    return { ok: false, error: deleteErr.message, status: 500 };
+  if (cancelErr) {
+    console.error("[intent-teardown] soft-cancel intent", cancelErr);
+    return { ok: false, error: cancelErr.message, status: 500 };
   }
 
   return { ok: true };

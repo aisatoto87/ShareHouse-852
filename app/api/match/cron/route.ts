@@ -1,10 +1,7 @@
 import { NextResponse } from "next/server";
 import { disbandGroupAndReleaseMembers } from "@/lib/intent-teardown";
 import { resolveGroupTargetSize } from "@/lib/recruiting-fomo";
-import {
-  findPerfectMatchCombination,
-  invokeCreateVirtualMatchGroup,
-} from "@/lib/virtual-matcher";
+import { runVirtualMatchEngine } from "@/lib/virtual-matcher";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
 export const runtime = "nodejs";
@@ -28,6 +25,12 @@ type PropertyScanResult =
   | {
       property_id: string;
       status: "no_combination";
+      waiting_count: number;
+      target_size: number;
+    }
+  | {
+      property_id: string;
+      status: "below_headcount";
       waiting_count: number;
       target_size: number;
     }
@@ -202,51 +205,37 @@ async function runVirtualMatchCron(): Promise<{
 
   for (const candidate of candidates) {
     try {
-      const userIds = await findPerfectMatchCombination(
-        candidate.property_id,
-        candidate.target_size,
-        admin
-      );
+      const scan = await runVirtualMatchEngine(candidate.property_id, admin);
 
-      if (!userIds) {
+      if (scan.matched) {
+        matched += 1;
         results.push({
-          property_id: candidate.property_id,
-          status: "no_combination",
-          waiting_count: candidate.waiting_count,
-          target_size: candidate.target_size,
+          property_id: scan.property_id,
+          status: "matched",
+          group_id: scan.group_id,
+          user_ids: scan.user_ids,
+          current_size: scan.current_size,
+          paused_count: scan.paused_count,
         });
         continue;
       }
 
-      try {
-        const created = await invokeCreateVirtualMatchGroup(admin, {
-          propertyId: candidate.property_id,
-          userIds,
-        });
-        matched += 1;
+      if (scan.reason === "below_headcount") {
         results.push({
           property_id: candidate.property_id,
-          status: "matched",
-          group_id: created.group_id,
-          user_ids: userIds,
-          current_size: created.current_size,
-          paused_count: created.paused_count,
+          status: "below_headcount",
+          waiting_count: scan.waiting_count ?? candidate.waiting_count,
+          target_size: scan.target_size ?? candidate.target_size,
         });
-      } catch (rpcError) {
-        console.error(
-          "[api/match/cron] create_virtual_match_group failed",
-          candidate.property_id,
-          rpcError
-        );
-        results.push({
-          property_id: candidate.property_id,
-          status: "error",
-          message:
-            rpcError instanceof Error
-              ? rpcError.message
-              : "create_virtual_match_group RPC 失敗",
-        });
+        continue;
       }
+
+      results.push({
+        property_id: candidate.property_id,
+        status: "no_combination",
+        waiting_count: scan.waiting_count ?? candidate.waiting_count,
+        target_size: scan.target_size ?? candidate.target_size,
+      });
     } catch (scanError) {
       console.error(
         "[api/match/cron] property scan failed",

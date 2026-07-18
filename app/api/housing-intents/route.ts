@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createHousingIntent } from "@/app/actions/intentActions";
+import { INVALID_HABITS_QUEUE_BLOCK_CODE } from "@/lib/matchingAlgorithm";
 
 type CreateIntentPayload = {
   target_district?: unknown;
@@ -30,7 +31,11 @@ export async function POST(request: Request) {
 
     if (!result.success) {
       return NextResponse.json(
-        { error: result.error },
+        {
+          error: result.error,
+          code: result.code,
+          redirect_to: result.redirect_to,
+        },
         { status: result.status ?? 500 }
       );
     }
@@ -59,6 +64,34 @@ export async function POST(request: Request) {
       return NextResponse.json(
         { error: message, code: "compatibility_below_threshold" },
         { status: 403 }
+      );
+    }
+
+    if (
+      message.includes("室友配對數據不足") ||
+      message.includes(INVALID_HABITS_QUEUE_BLOCK_CODE)
+    ) {
+      return NextResponse.json(
+        {
+          error: message,
+          code: INVALID_HABITS_QUEUE_BLOCK_CODE,
+          redirect_to: "/dashboard?tab=profile",
+        },
+        { status: 422 }
+      );
+    }
+
+    if (message.includes("已在該樓盤的排隊池")) {
+      return NextResponse.json(
+        { error: message, code: "already_in_queue" },
+        { status: 409 }
+      );
+    }
+
+    if (message.includes("24 小時後再重新嘗試")) {
+      return NextResponse.json(
+        { error: message, code: "requeue_cooldown" },
+        { status: 429 }
       );
     }
 

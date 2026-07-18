@@ -1,10 +1,12 @@
 import { GLOBAL_FREEZE_BLOCKING_INTENT_STATUSES } from "@/lib/housing-intent-status";
 import {
   calculateHabitRadarSimilarity,
+  isValidClique,
   MATCH_THRESHOLD_PERCENT,
   profileRowToUserHabits,
   type UserHabits,
 } from "@/lib/matchingAlgorithm";
+import { resolveGroupTargetSize } from "@/lib/waiting-pool";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import type { createSupabaseAdminClient as CreateSupabaseAdminClientType } from "@/lib/supabase/admin";
 
@@ -40,7 +42,7 @@ export function generateCombinations<T>(items: readonly T[], k: number): T[][] {
   return result;
 }
 
-/** 組合內所有成員兩兩 SyncNest 契合度均 >= 門檻；回傳平均 pairwise 分數 */
+/** 組合內所有成員兩兩 SyncNest 契合度均 >= 門檻（Clique／一票否決）；回傳平均 pairwise 分數 */
 export function validateCombinationCompatibility(
   userIds: readonly string[],
   habitsByUserId: ReadonlyMap<string, UserHabits>,
@@ -50,28 +52,36 @@ export function validateCombinationCompatibility(
     return { valid: false };
   }
 
-  if (userIds.length === 1) {
-    const habits = habitsByUserId.get(userIds[0]!);
-    return habits ? { valid: true, averageScore: 100 } : { valid: false };
+  const vibes: UserHabits[] = [];
+  for (const uid of userIds) {
+    const habits = habitsByUserId.get(uid);
+    if (!habits) return { valid: false };
+    vibes.push(habits);
+  }
+
+  // 預設門檻：完整 Clique Formation（含 NULL／紅線防呆）
+  if (minPercent === MATCH_THRESHOLD_PERCENT) {
+    if (!isValidClique(vibes)) {
+      return { valid: false };
+    }
+  } else {
+    for (let i = 0; i < vibes.length; i++) {
+      for (let j = i + 1; j < vibes.length; j++) {
+        const score = calculateHabitRadarSimilarity(vibes[i], vibes[j]);
+        if (score < minPercent) return { valid: false };
+      }
+    }
+  }
+
+  if (vibes.length === 1) {
+    return { valid: true, averageScore: 100 };
   }
 
   let totalScore = 0;
   let pairCount = 0;
-
-  for (let i = 0; i < userIds.length; i++) {
-    for (let j = i + 1; j < userIds.length; j++) {
-      const habitsA = habitsByUserId.get(userIds[i]!);
-      const habitsB = habitsByUserId.get(userIds[j]!);
-      if (!habitsA || !habitsB) {
-        return { valid: false };
-      }
-
-      const score = calculateHabitRadarSimilarity(habitsA, habitsB);
-      if (score < minPercent) {
-        return { valid: false };
-      }
-
-      totalScore += score;
+  for (let i = 0; i < vibes.length; i++) {
+    for (let j = i + 1; j < vibes.length; j++) {
+      totalScore += calculateHabitRadarSimilarity(vibes[i], vibes[j]);
       pairCount += 1;
     }
   }
@@ -171,7 +181,7 @@ export async function fetchAvailableWaitingUserIdsForProperty(
 
 /**
  * 階段二：動態虛擬成團演算法（Pure Computation）。
- * 從 waiting 池找出 targetSize 人組合，組內任意兩人 SyncNest 契合度均 >= 72。
+ * 從 waiting 池找出 targetSize 人組合，組內任意兩人 SyncNest 契合度均 >= MATCH_THRESHOLD_PERCENT。
  * 不寫入 match_groups / group_members。
  */
 export async function findPerfectMatchCombination(
@@ -297,4 +307,125 @@ export async function invokeCreateVirtualMatchGroup(
   const parsed = parseCreateVirtualMatchGroupRpcResult(data);
   console.log("[virtual-matcher] create_virtual_match_group RPC 成功", parsed);
   return parsed;
+}
+
+export type VirtualMatchEngineResult =
+  | {
+      matched: true;
+      property_id: string;
+      group_id: string;
+      user_ids: string[];
+      current_size: number;
+      target_size: number;
+      paused_count: number;
+      message: string;
+    }
+  | {
+      matched: false;
+      property_id: string;
+      reason: "invalid_property" | "property_not_found" | "below_headcount" | "no_combination";
+      waiting_count?: number;
+      target_size?: number;
+      message: string;
+    };
+
+/**
+ * 針對單一樓盤立刻掃描 waiting 池：人數達標且組內兩兩契合度 >= MATCH_THRESHOLD_PERCENT
+ * 時，呼叫 create_virtual_match_group 自動成團。
+ * 供新建／重啟意向後同步觸發，以及 cron 掃描複用。
+ */
+export async function runVirtualMatchEngine(
+  propertyId: string,
+  admin: AdminClient = createSupabaseAdminClient()
+): Promise<VirtualMatchEngineResult> {
+  const trimmedPropertyId = typeof propertyId === "string" ? propertyId.trim() : "";
+  if (!isLikelyUuid(trimmedPropertyId)) {
+    return {
+      matched: false,
+      property_id: trimmedPropertyId,
+      reason: "invalid_property",
+      message: "property_id 須為有效 UUID。",
+    };
+  }
+
+  const { data: propertyRow, error: propertyError } = await admin
+    .from("properties")
+    .select("id, max_tenants, room_count")
+    .eq("id", trimmedPropertyId)
+    .maybeSingle();
+
+  if (propertyError) {
+    throw new Error(propertyError.message);
+  }
+
+  if (!propertyRow) {
+    return {
+      matched: false,
+      property_id: trimmedPropertyId,
+      reason: "property_not_found",
+      message: "找不到指定樓盤。",
+    };
+  }
+
+  const r = propertyRow as {
+    max_tenants?: unknown;
+    room_count?: unknown;
+  };
+  const rawTarget =
+    typeof r.max_tenants === "number" && r.max_tenants >= 2
+      ? r.max_tenants
+      : typeof r.room_count === "number" && r.room_count >= 2
+        ? r.room_count
+        : 2;
+  const targetSize = resolveGroupTargetSize(rawTarget);
+
+  const waitingUserIds = await fetchAvailableWaitingUserIdsForProperty(
+    admin,
+    trimmedPropertyId
+  );
+  const waitingCount = waitingUserIds.length;
+
+  if (waitingCount < targetSize) {
+    return {
+      matched: false,
+      property_id: trimmedPropertyId,
+      reason: "below_headcount",
+      waiting_count: waitingCount,
+      target_size: targetSize,
+      message: `排隊人數尚未達標（${waitingCount}/${targetSize}）。`,
+    };
+  }
+
+  const userIds = await findPerfectMatchCombination(
+    trimmedPropertyId,
+    targetSize,
+    admin
+  );
+
+  if (!userIds) {
+    return {
+      matched: false,
+      property_id: trimmedPropertyId,
+      reason: "no_combination",
+      waiting_count: waitingCount,
+      target_size: targetSize,
+      message: `人數已達標，但尚無兩兩契合度 >= ${MATCH_THRESHOLD_PERCENT}% 的組合。`,
+    };
+  }
+
+  const created = await invokeCreateVirtualMatchGroup(admin, {
+    propertyId: trimmedPropertyId,
+    userIds,
+  });
+
+  return {
+    matched: true,
+    property_id: trimmedPropertyId,
+    group_id: created.group_id,
+    user_ids: userIds,
+    current_size: created.current_size,
+    target_size: targetSize,
+    paused_count: created.paused_count,
+    message: "系統已為你找到高度契合的神仙室友，已自動組建群組！",
+  };
 }

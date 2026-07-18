@@ -1,4 +1,4 @@
-import { profileRowToUserHabits } from "@/lib/matchingAlgorithm";
+import { parseStrictSyncNestHabits } from "@/lib/syncnest-habit-validation";
 
 export type ProfileCompletenessResult = {
   isComplete: boolean;
@@ -25,10 +25,10 @@ export function hasRequiredPhone(profile: Record<string, unknown> | null): boole
   return nonEmptyString(profile.phone);
 }
 
-/** SyncNest 必填：四項生活習慣均為有效數字（不可 null） */
+/** SyncNest 必填：四項生活習慣均為 1–5 整數（不可 null／越界） */
 export function hasSyncNestHabitScores(profile: Record<string, unknown> | null): boolean {
   if (!profile) return false;
-  return profileRowToUserHabits({
+  return parseStrictSyncNestHabits({
     habit_cleanliness: profile.habit_cleanliness,
     habit_ac_temp: profile.habit_ac_temp,
     habit_guests: profile.habit_guests,

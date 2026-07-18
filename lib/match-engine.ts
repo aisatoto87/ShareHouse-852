@@ -1,7 +1,7 @@
 import {
   budgetsCompatible,
   calculateHabitRadarSimilarity,
-  canJoinGroup,
+  MATCH_THRESHOLD_PERCENT,
   meetsHabitRadarThreshold,
   parseMaxBudget,
   profileRowToUserHabits,
@@ -9,8 +9,15 @@ import {
   type UserHabits,
 } from "@/lib/matchingAlgorithm";
 export {
+  canJoinGroup,
+  isValidClique,
+  normalizeVibeMetrics,
+  type VibeMetrics,
+} from "@/lib/matchingAlgorithm";
+export {
   findPerfectMatchCombination,
   invokeCreateVirtualMatchGroup,
+  runVirtualMatchEngine,
 } from "@/lib/virtual-matcher";
 import { fetchGloballyFrozenUserIds, fetchWaitingMatchCandidates } from "@/lib/global-freeze";
 import { resolveHousingIntentStatusForGroup } from "@/lib/housing-intent-status";
@@ -678,8 +685,8 @@ export async function executeIntentMatch(
     matched: false,
     reason: "no_algorithm_match",
     message: ownPropertyId
-      ? "同盤有意向的用戶，但未通過預算或習慣雷達（≥75 分）校驗。"
-      : "同區有意向的用戶，但未通過預算或習慣雷達（≥75 分）校驗。",
+      ? `同盤有意向的用戶，但未通過預算或習慣雷達（≥${MATCH_THRESHOLD_PERCENT} 分）校驗。`
+      : `同區有意向的用戶，但未通過預算或習慣雷達（≥${MATCH_THRESHOLD_PERCENT} 分）校驗。`,
     match_mode: matchMode,
   };
 }

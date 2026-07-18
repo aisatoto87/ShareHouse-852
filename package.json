@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint . --ext .js,.jsx,.ts,.tsx"
+    "lint": "eslint . --ext .js,.jsx,.ts,.tsx",
+    "check:invalid-profiles": "npx --yes tsx scripts/check-invalid-profiles.ts"
   },
   "keywords": [],
   "author": "",

@@ -126,6 +126,55 @@ BEGIN
       v_target_size;
   END IF;
 
+  -- -------------------------------------------------------------------------
+  -- SyncNest Clique Formation：兩兩校驗（與 lib/matchingAlgorithm.ts 一致）
+  --   - 習慣 NULL → 拒絕
+  --   - ABS(衛生) >= 3 或 ABS(噪音) >= 3 → 一票否決
+  --   - ROUND((1 - weighted_distance/20)*100) < 72 → 拒絕
+  -- 優先呼叫 syncnest_clique_is_valid；若尚未部署則 fallback 內聯邏輯。
+  -- -------------------------------------------------------------------------
+  IF to_regprocedure('public.syncnest_clique_is_valid(uuid[])') IS NOT NULL THEN
+    IF NOT public.syncnest_clique_is_valid(v_distinct_ids) THEN
+      RAISE EXCEPTION
+        'create_virtual_match_group: SyncNest clique check failed (veto ABS>=3 or similarity < 72)';
+    END IF;
+  ELSIF EXISTS (
+    SELECT 1
+    FROM unnest(v_distinct_ids) AS a(uid)
+    CROSS JOIN unnest(v_distinct_ids) AS b(uid)
+    LEFT JOIN profiles pa ON pa.id = a.uid
+    LEFT JOIN profiles pb ON pb.id = b.uid
+    WHERE a.uid < b.uid
+      AND (
+        pa.id IS NULL
+        OR pb.id IS NULL
+        OR pa.habit_cleanliness IS NULL
+        OR pa.habit_ac_temp IS NULL
+        OR pa.habit_guests IS NULL
+        OR pa.habit_noise IS NULL
+        OR pb.habit_cleanliness IS NULL
+        OR pb.habit_ac_temp IS NULL
+        OR pb.habit_guests IS NULL
+        OR pb.habit_noise IS NULL
+        OR ABS(pa.habit_cleanliness::numeric - pb.habit_cleanliness::numeric) >= 3
+        OR ABS(pa.habit_noise::numeric - pb.habit_noise::numeric) >= 3
+        OR ROUND(
+          (
+            1.0
+            - (
+                1.5 * ABS(pa.habit_cleanliness::numeric - pb.habit_cleanliness::numeric)
+                + 1.0 * ABS(pa.habit_ac_temp::numeric - pb.habit_ac_temp::numeric)
+                + 1.0 * ABS(pa.habit_guests::numeric - pb.habit_guests::numeric)
+                + 1.5 * ABS(pa.habit_noise::numeric - pb.habit_noise::numeric)
+              ) / 20.0
+          ) * 100.0
+        )::integer < 72
+      )
+  ) THEN
+    RAISE EXCEPTION
+      'create_virtual_match_group: SyncNest clique check failed (veto ABS>=3 or similarity < 72)';
+  END IF;
+
   -- 1) 建立群組（滿員虛擬成團 → 直接 pending_opt_in + 24h）
   INSERT INTO match_groups (
     status,

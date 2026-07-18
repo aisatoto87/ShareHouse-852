@@ -690,6 +690,7 @@ export default function DashboardPageClient() {
           "intent_id, status, preference_rank, target_district, max_budget, created_at, target_property_id, properties!target_property_id(id, title)"
         )
         .eq("user_id", userId)
+        .not("status", "in", '("cancelled","expired","disbanded")')
         .order("created_at", { ascending: false });
 
       if (error) {
@@ -929,6 +930,53 @@ export default function DashboardPageClient() {
         console.warn("[dashboard] cleanup_expired_groups", e);
       }
     })();
+  }, [userId, supabase, router, loadHousingIntents]);
+
+  // Realtime：監聽本人 housing_intents 狀態變更（例如管家建組 → pending_opt_in）
+  useEffect(() => {
+    if (!userId) return;
+
+    let active = true;
+    const channelTopic = `housing-intents:${userId}:${crypto.randomUUID()}`;
+
+    const channel = supabase
+      .channel(channelTopic)
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "housing_intents",
+          filter: `user_id=eq.${userId}`,
+        },
+        (payload) => {
+          if (!active) return;
+
+          const nextStatus =
+            payload.new && typeof payload.new === "object"
+              ? String((payload.new as { status?: unknown }).status ?? "").trim()
+              : "";
+          const prevStatus =
+            payload.old && typeof payload.old === "object"
+              ? String((payload.old as { status?: unknown }).status ?? "").trim()
+              : "";
+
+          if (nextStatus === "pending_opt_in" && prevStatus !== "pending_opt_in") {
+            toast.success("🎉 管家已為您找到合適的室友，請盡速確認！");
+          }
+
+          // 熱更新意向卡片（含 pending_opt_in → 同意／拒絕 UI）
+          void loadHousingIntents();
+          router.refresh();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      active = false;
+      void channel.unsubscribe();
+      void supabase.removeChannel(channel);
+    };
   }, [userId, supabase, router, loadHousingIntents]);
 
   const handleSwapPreferenceRank = async (intentIdA: string, intentIdB: string) => {

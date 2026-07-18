@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardFooter } from "@/components/ui/card";
 import WaitingPoolHeatBadge from "@/components/WaitingPoolHeatBadge";
 import WishlistHeartButton from "@/components/WishlistHeartButton";
-import { PROPERTY_LISTING_BLOCKED_LABEL } from "@/lib/property-listing";
+import { PROPERTY_GROUP_LOCKED_LABEL, PROPERTY_LISTING_BLOCKED_LABEL } from "@/lib/property-listing";
 import { cn } from "@/lib/utils";
 import type { Property, PropertyListingStatus } from "@/types/property";
 
@@ -98,9 +98,11 @@ export default function PropertyCard({
   const isHeld = listingStatus === "held";
   const isRented = listingStatus === "rented";
   const isListingBlocked = isHeld || isRented;
+  const isLockedByGroup = property.is_locked_by_group === true;
   const statusBadge = isListingBlocked ? STATUS_BADGE[listingStatus] : null;
   const showWaitingPool =
     !isListingBlocked &&
+    !isLockedByGroup &&
     typeof waitingCount === "number" &&
     Number.isFinite(waitingCount) &&
     typeof targetSize === "number" &&
@@ -112,7 +114,8 @@ export default function PropertyCard({
         "group flex h-full flex-col rounded-2xl border border-zinc-200 bg-white shadow-sm transition-shadow duration-300 hover:shadow-lg",
         adminMenu ? "overflow-visible" : "overflow-hidden",
         isHeld && "grayscale opacity-75",
-        isRented && "brightness-50"
+        isRented && "brightness-50",
+        isLockedByGroup && !isListingBlocked && "opacity-70"
       )}
     >
       <div
@@ -263,6 +266,16 @@ export default function PropertyCard({
           >
             {PROPERTY_LISTING_BLOCKED_LABEL}
           </Link>
+        ) : isLockedByGroup ? (
+          <button
+            type="button"
+            disabled
+            aria-disabled="true"
+            aria-label={PROPERTY_GROUP_LOCKED_LABEL}
+            className="inline-flex h-10 w-full cursor-not-allowed items-center justify-center gap-2 rounded-xl bg-zinc-400 px-4 text-sm font-medium text-white opacity-90"
+          >
+            {PROPERTY_GROUP_LOCKED_LABEL}
+          </button>
         ) : (
           <Link
             href={detailHref}

@@ -26,7 +26,11 @@ import { createSupabaseServerClient, getServerUser } from "@/lib/supabase/server
 import { mapRowToProperty } from "@/lib/property-mapper";
 import { fetchWaitingPoolStats } from "@/lib/waiting-pool";
 import WaitingPoolHeatBadge from "@/components/WaitingPoolHeatBadge";
-import { isPropertyListingBlocked } from "@/lib/property-listing";
+import {
+  fetchPropertyLockedByGroup,
+  isPropertyListingBlocked,
+  isPropertyLockedByGroup,
+} from "@/lib/property-listing";
 
 export const dynamic = "force-dynamic";
 
@@ -143,7 +147,10 @@ export default async function PropertyDetailPage({ params }: PageProps) {
   const waitingPool = waitingPoolMap.get(property.id);
   const waitingCount = waitingPool?.waitingCount ?? 0;
   const poolTargetSize = waitingPool?.targetSize ?? 2;
-  const showWaitingPoolHeat = !isPropertyListingBlocked(property.status ?? "available");
+  const isLockedByGroup = await fetchPropertyLockedByGroup(supabase, property.id);
+  const showWaitingPoolHeat =
+    !isPropertyListingBlocked(property.status ?? "available") &&
+    !isPropertyLockedByGroup(isLockedByGroup);
 
   const rowRec = row as Record<string, unknown>;
   const ownerId =
@@ -452,6 +459,7 @@ export default async function PropertyDetailPage({ params }: PageProps) {
               <HousingIntentButton
                 propertyId={property.id}
                 propertyListingStatus={property.status ?? "available"}
+                isLockedByGroup={isLockedByGroup}
                 defaultDistrict={intentDefaultDistrict}
                 defaultBudget={intentDefaultBudget}
                 compatibilityScore={compatibilityScore}
