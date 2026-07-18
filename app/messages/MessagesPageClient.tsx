@@ -227,10 +227,10 @@ function TenantChatPanel({
 
   const handleSend = useCallback(async () => {
     const text = draft.trim();
-    if (!text || sending) return;
+    if (!text || sending || room.status === "closed") return;
     const ok = await sendMessage(text, userId);
     if (ok) setDraft("");
-  }, [draft, sendMessage, sending, userId]);
+  }, [draft, room.status, sendMessage, sending, userId]);
 
   const onKeyDown = (event: { key: string; shiftKey: boolean; preventDefault: () => void }) => {
     if (event.key === "Enter" && !event.shiftKey) {
@@ -238,6 +238,8 @@ function TenantChatPanel({
       void handleSend();
     }
   };
+
+  const isClosed = room.status === "closed";
 
   return (
     <div className="flex h-full min-h-0 flex-1 flex-col bg-[#f4f6f8]">
@@ -346,29 +348,35 @@ function TenantChatPanel({
       ) : null}
 
       <footer className="border-t border-zinc-200 bg-white px-4 py-3 sm:px-6">
-        <div className="flex items-center gap-2">
-          <Input
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={onKeyDown}
-            placeholder="輸入訊息…"
-            disabled={sending || openingPeerChat}
-            className="h-11 flex-1 rounded-xl border-zinc-200 bg-zinc-50"
-          />
-          <Button
-            type="button"
-            onClick={() => void handleSend()}
-            disabled={sending || !draft.trim() || openingPeerChat}
-            className="h-11 rounded-xl bg-[#0f2540] px-4 hover:bg-[#1a3a5c]"
-          >
-            {sending ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <Send className="h-4 w-4" />
-            )}
-            <span className="sr-only">發送</span>
-          </Button>
-        </div>
+        {isClosed ? (
+          <p className="rounded-xl bg-zinc-100 px-3 py-2 text-center text-xs text-zinc-500">
+            此聊天室已結束，無法再傳送訊息。
+          </p>
+        ) : (
+          <div className="flex items-center gap-2">
+            <Input
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              onKeyDown={onKeyDown}
+              placeholder="輸入訊息…"
+              disabled={sending || openingPeerChat}
+              className="h-11 flex-1 rounded-xl border-zinc-200 bg-zinc-50"
+            />
+            <Button
+              type="button"
+              onClick={() => void handleSend()}
+              disabled={sending || !draft.trim() || openingPeerChat}
+              className="h-11 rounded-xl bg-[#0f2540] px-4 hover:bg-[#1a3a5c]"
+            >
+              {sending ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Send className="h-4 w-4" />
+              )}
+              <span className="sr-only">發送</span>
+            </Button>
+          </div>
+        )}
       </footer>
 
       <ChatReportModal

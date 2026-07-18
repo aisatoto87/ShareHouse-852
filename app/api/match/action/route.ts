@@ -1,5 +1,6 @@
 import { revalidatePath } from "next/cache";
 import { NextResponse } from "next/server";
+import { insertGroupConfirmedWelcomeMessage } from "@/lib/group-chat-welcome";
 import { disbandGroupAndReleaseMembers } from "@/lib/intent-teardown";
 import { ensureOfflineDealForGroup } from "@/lib/offline-deals";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
@@ -333,6 +334,26 @@ export async function POST(request: Request) {
       if (confirmedGroupErr) {
         console.error("[api/match/action] Group Update Error:", confirmedGroupErr);
         return NextResponse.json({ error: confirmedGroupErr.message }, { status: 500 });
+      }
+
+      try {
+        const welcome = await insertGroupConfirmedWelcomeMessage(admin, groupId);
+        if (!welcome.ok) {
+          console.warn("[api/match/action] welcome message skipped", {
+            groupId,
+            reason: welcome.reason,
+          });
+        } else {
+          console.log("[api/match/action] welcome message inserted", {
+            groupId,
+            roomId: welcome.roomId,
+          });
+        }
+      } catch (welcomeErr) {
+        console.warn(
+          "[api/match/action] welcome message failed",
+          welcomeErr instanceof Error ? welcomeErr.message : welcomeErr
+        );
       }
 
       if (memberUserIds.length > 0) {

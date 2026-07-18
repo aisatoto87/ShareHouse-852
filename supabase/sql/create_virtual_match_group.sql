@@ -8,6 +8,7 @@
 --   );
 --
 -- 同一事務內完成：
+--   0) （跨盤）將尚未掛在目標樓盤的 waiting 意向改掛至 p_property_id
 --   1) INSERT match_groups (status = pending_opt_in)
 --   2) INSERT group_members
 --   3) UPDATE 本樓盤 housing_intents → pending_opt_in（寫入 group_id）
@@ -71,25 +72,45 @@ BEGIN
   END IF;
 
   -- -------------------------------------------------------------------------
-  -- 併發防禦：先鎖本樓盤相關意向列，再驗證全員仍為 waiting
-  -- （避免兩次 cron／admin 同時對同一批 waiting 用戶 INSERT match_groups）
+  -- 併發防禦：鎖住候選人所有 waiting 意向（含跨盤來源）
   -- -------------------------------------------------------------------------
   PERFORM 1
   FROM housing_intents hi
   WHERE hi.user_id = ANY (v_distinct_ids)
-    AND hi.target_property_id = p_property_id
+    AND hi.status = 'waiting'
   FOR UPDATE OF hi;
 
+  -- Global Freeze 二次防禦：任何人已有 matching / pending_opt_in / confirmed / matched 則中止
   IF EXISTS (
     SELECT 1
     FROM housing_intents hi
     WHERE hi.user_id = ANY (v_distinct_ids)
-      AND hi.target_property_id = p_property_id
-      AND hi.status IS DISTINCT FROM 'waiting'
+      AND hi.status IN ('matching', 'pending_opt_in', 'confirmed', 'matched')
   ) THEN
-    RAISE EXCEPTION
-      'Concurrency Conflict: One or more users are no longer in waiting status.';
+    RAISE EXCEPTION 'create_virtual_match_group: 候選人已處於 Global Freeze 狀態';
   END IF;
+
+  -- -------------------------------------------------------------------------
+  -- 跨盤支援：尚未掛在目標樓盤的 waiting 用戶，改掛一筆意向至 p_property_id
+  -- （若該用戶已在目標樓盤有 waiting，則跳過，避免重複）
+  -- -------------------------------------------------------------------------
+  UPDATE housing_intents hi
+  SET target_property_id = p_property_id
+  WHERE hi.intent_id IN (
+    SELECT DISTINCT ON (src.user_id) src.intent_id
+    FROM housing_intents src
+    WHERE src.user_id = ANY (v_distinct_ids)
+      AND src.status = 'waiting'
+      AND src.target_property_id IS DISTINCT FROM p_property_id
+      AND NOT EXISTS (
+        SELECT 1
+        FROM housing_intents already
+        WHERE already.user_id = src.user_id
+          AND already.status = 'waiting'
+          AND already.target_property_id = p_property_id
+      )
+    ORDER BY src.user_id, src.preference_rank ASC NULLS LAST, src.created_at ASC
+  );
 
   SELECT COUNT(DISTINCT hi.user_id)::integer
   INTO v_waiting_count
@@ -103,16 +124,6 @@ BEGIN
       'Concurrency Conflict: One or more users are no longer in waiting status. (waiting=% / need=%)',
       v_waiting_count,
       v_target_size;
-  END IF;
-
-  -- Global Freeze 二次防禦：任何人已有 matching / pending_opt_in / confirmed / matched 則中止
-  IF EXISTS (
-    SELECT 1
-    FROM housing_intents hi
-    WHERE hi.user_id = ANY (v_distinct_ids)
-      AND hi.status IN ('matching', 'pending_opt_in', 'confirmed', 'matched')
-  ) THEN
-    RAISE EXCEPTION 'create_virtual_match_group: 候選人已處於 Global Freeze 狀態';
   END IF;
 
   -- 1) 建立群組（滿員虛擬成團 → 直接 pending_opt_in + 24h）

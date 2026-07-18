@@ -10,6 +10,22 @@ function isLikelyUuid(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
+/** 將關聯於 match_group 的 active 聊天室（group / peer）標記為 closed */
+export async function closeChatRoomsForMatchGroup(
+  admin: SupabaseClient,
+  groupId: string
+): Promise<void> {
+  const { error } = await admin
+    .from("chat_rooms")
+    .update({ status: "closed" })
+    .eq("match_group_id", groupId)
+    .eq("status", "active");
+
+  if (error) {
+    console.warn("[intent-teardown] close chat rooms", groupId, error.message);
+  }
+}
+
 type IntentRow = {
   intent_id: string;
   target_property_id: string | null;
@@ -85,6 +101,7 @@ async function reconcileGroupAfterMemberLeave(
       .from("match_groups")
       .update({ status: "cancelled", current_size: 0, expires_at: null })
       .eq("group_id", groupId);
+    await closeChatRoomsForMatchGroup(admin, groupId);
     return;
   }
 
@@ -223,6 +240,10 @@ export async function disbandGroupAndReleaseMembers(
     console.error("[intent-teardown] disband group", trimmedGroupId, disbandGroupErr);
     return { ok: false, error: disbandGroupErr.message };
   }
+
+  // 1b) 連鎖凍結聊天室：關聯 group / peer 聊天室 → closed
+  // （DB trigger 亦可能關閉；此處顯式執行以涵蓋 pending_opt_in 與未部署 trigger 的環境）
+  await closeChatRoomsForMatchGroup(admin, trimmedGroupId);
 
   // 2) 觸發者意向 → cancelled
   if (trimmedTrigger) {

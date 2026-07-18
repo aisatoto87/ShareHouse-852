@@ -1,86 +1,70 @@
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
-import { resolveGroupTargetSize } from "@/lib/recruiting-fomo";
-import { pickPropertyTitle, parseMembers } from "@/lib/admin-groups";
+import { pickPropertyTitle } from "@/lib/admin-groups";
 
 const STAGNANT_DAYS = 14;
+const OVERDUE_OPT_IN_HOURS = 24;
 
-export type StagnantGroupMember = {
+export type StagnantUserHabits = {
+  cleanliness: number | null;
+  acTemp: number | null;
+  guests: number | null;
+  noise: number | null;
+};
+
+export type StagnantWaitingUser = {
+  intentId: string;
   userId: string;
   displayName: string;
   phone: string | null;
   wechatId: string | null;
-  allowSpillover: boolean;
-  maxBudget: number | null;
-  targetDistrict: string | null;
-};
-
-export type StagnantGroupRow = {
-  groupId: string;
   createdAt: string;
   daysSinceCreated: number;
   propertyId: string | null;
   propertyTitle: string;
-  memberCount: number;
-  targetSize: number;
-  spilloverMemberCount: number;
-  members: StagnantGroupMember[];
-};
-
-type IntentSnapshot = {
-  userId: string;
-  propertyId: string | null;
   allowSpillover: boolean;
   maxBudget: number | null;
   targetDistrict: string | null;
-  preferenceRank: number;
+  preferenceRank: number | null;
+  habits: StagnantUserHabits;
 };
 
-const PROFILE_FIELDS = "display_name, nickname, phone, wechat_id";
+export type OverduePendingOptInGroup = {
+  groupId: string;
+  createdAt: string;
+  hoursSinceCreated: number;
+  propertyId: string | null;
+  propertyTitle: string;
+  memberCount: number;
+  expiresAt: string | null;
+};
 
-const STAGNANT_GROUP_SELECT_ATTEMPTS = [
+const PROFILE_FIELDS =
+  "display_name, nickname, phone, wechat_id, habit_cleanliness, habit_ac_temp, habit_guests, habit_noise";
+
+/** PostgREST：housing_intents 通常無指向 profiles 的 FK，禁止 embed profiles（會 PGRST200）。改批次查詢。 */
+const INTENT_SELECT_ATTEMPTS = [
   `
-      group_id,
+      intent_id,
+      user_id,
       status,
       created_at,
-      target_size,
-      current_size,
-      property_id,
-      properties ( id, title ),
-      group_members (
-        user_id,
-        profiles ( ${PROFILE_FIELDS} )
-      )
+      target_property_id,
+      target_district,
+      max_budget,
+      allow_spillover,
+      preference_rank
     `,
   `
-      group_id,
+      intent_id,
+      user_id,
       status,
       created_at,
-      target_size,
-      current_size,
-      property_id,
-      properties ( id, title ),
-      group_members (
-        user_id,
-        profiles:user_id ( ${PROFILE_FIELDS} )
-      )
-    `,
-  `
-      group_id,
-      status,
-      created_at,
-      target_size,
-      current_size,
-      property_id,
-      properties ( id, title ),
-      group_members ( user_id )
+      target_property_id,
+      target_district,
+      max_budget,
+      preference_rank
     `,
 ] as const;
-
-function parseGroupSize(value: unknown): number {
-  const n = typeof value === "number" ? value : Number(value);
-  if (!Number.isFinite(n) || n < 0) return 0;
-  return Math.round(n);
-}
 
 function daysBetween(createdAt: string): number {
   const created = Date.parse(createdAt);
@@ -88,54 +72,65 @@ function daysBetween(createdAt: string): number {
   return Math.floor((Date.now() - created) / (24 * 60 * 60 * 1000));
 }
 
-function resolveIntentForMember(
-  intents: IntentSnapshot[],
-  userId: string,
-  propertyId: string | null
-): IntentSnapshot | null {
-  const matches = (intents ?? []).filter((intent) => {
-    if (intent.userId !== userId) return false;
-    if (propertyId) return intent.propertyId === propertyId;
-    return intent.propertyId == null;
-  });
-
-  if (matches.length === 0) return null;
-
-  matches.sort((a, b) => a.preferenceRank - b.preferenceRank);
-  return matches[0] ?? null;
+function hoursBetween(createdAt: string): number {
+  const created = Date.parse(createdAt);
+  if (!Number.isFinite(created)) return OVERDUE_OPT_IN_HOURS;
+  return Math.floor((Date.now() - created) / (60 * 60 * 1000));
 }
 
-function collectMemberUserIds(rawGroups: unknown[]): string[] {
-  const ids = new Set<string>();
-  for (const raw of rawGroups) {
-    if (!raw || typeof raw !== "object") continue;
-    const members = (raw as Record<string, unknown>).group_members;
-    if (!Array.isArray(members)) continue;
-    for (const member of members) {
-      if (!member || typeof member !== "object") continue;
-      const userId = (member as { user_id?: unknown }).user_id;
-      if (typeof userId === "string" && userId.trim()) ids.add(userId.trim());
-    }
+function pickProfileField(
+  profiles: unknown,
+  field: "display_name" | "nickname" | "phone" | "wechat_id"
+): string {
+  const read = (obj: Record<string, unknown>) => {
+    const value = obj[field];
+    return typeof value === "string" ? value.trim() : "";
+  };
+
+  if (profiles && typeof profiles === "object" && !Array.isArray(profiles)) {
+    return read(profiles as Record<string, unknown>);
   }
-  return [...ids];
-}
-
-function membersNeedProfileEnrichment(rawGroups: unknown[]): boolean {
-  for (const raw of rawGroups) {
-    if (!raw || typeof raw !== "object") continue;
-    const members = (raw as Record<string, unknown>).group_members;
-    if (!Array.isArray(members) || members.length === 0) continue;
-    for (const member of members) {
-      if (!member || typeof member !== "object") continue;
-      if ((member as { profiles?: unknown }).profiles == null) return true;
-    }
+  if (Array.isArray(profiles) && profiles[0] && typeof profiles[0] === "object") {
+    return read(profiles[0] as Record<string, unknown>);
   }
-  return false;
+  return "";
 }
 
-/** Server-only：招募中超過 14 天的停滯群組（含成員意向與跨盤意願） */
-export async function fetchStagnantRecruitingGroups(): Promise<{
-  groups: StagnantGroupRow[];
+function parseOptionalHabit(value: unknown): number | null {
+  if (value == null) return null;
+  const n = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function parseHabits(profiles: unknown): StagnantUserHabits {
+  const source =
+    profiles && typeof profiles === "object" && !Array.isArray(profiles)
+      ? (profiles as Record<string, unknown>)
+      : Array.isArray(profiles) && profiles[0] && typeof profiles[0] === "object"
+        ? (profiles[0] as Record<string, unknown>)
+        : null;
+
+  if (!source) {
+    return { cleanliness: null, acTemp: null, guests: null, noise: null };
+  }
+
+  return {
+    cleanliness: parseOptionalHabit(source.habit_cleanliness),
+    acTemp: parseOptionalHabit(source.habit_ac_temp),
+    guests: parseOptionalHabit(source.habit_guests),
+    noise: parseOptionalHabit(source.habit_noise),
+  };
+}
+
+function parseGroupSize(value: unknown): number {
+  const n = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(n) || n < 0) return 0;
+  return Math.round(n);
+}
+
+/** Server-only：排隊超過 14 天仍 waiting 的用戶（含聯絡資訊與習慣評分） */
+export async function fetchStagnantWaitingUsers(): Promise<{
+  users: StagnantWaitingUser[];
   error: string | null;
 }> {
   try {
@@ -145,48 +140,61 @@ export async function fetchStagnantRecruitingGroups(): Promise<{
     cutoff.setDate(cutoff.getDate() - STAGNANT_DAYS);
     const cutoffIso = cutoff.toISOString();
 
-    let rawGroups: unknown[] | null = null;
+    let rawIntents: unknown[] | null = null;
     let lastErrorMessage: string | null = null;
 
-    for (const select of STAGNANT_GROUP_SELECT_ATTEMPTS) {
+    for (const select of INTENT_SELECT_ATTEMPTS) {
       const { data, error } = await admin
-        .from("match_groups")
+        .from("housing_intents")
         .select(select)
-        .eq("status", "pending_opt_in")
+        .eq("status", "waiting")
         .lt("created_at", cutoffIso)
         .order("created_at", { ascending: true });
 
       if (error) {
         lastErrorMessage = error.message;
-        console.warn("[admin-stagnant-groups] fetch attempt failed", {
+        console.warn("[admin-stagnant-groups] fetch waiting intents attempt failed", {
           message: error.message,
           code: error.code,
         });
         continue;
       }
 
-      rawGroups = Array.isArray(data) ? data : [];
+      rawIntents = Array.isArray(data) ? data : [];
       break;
     }
 
-    if (rawGroups == null) {
-      console.error("[admin-stagnant-groups] fetch groups", lastErrorMessage);
-      return { groups: [], error: lastErrorMessage ?? "讀取停滯群組失敗。" };
+    if (rawIntents == null) {
+      console.error("[admin-stagnant-groups] fetch waiting intents", lastErrorMessage);
+      return { users: [], error: lastErrorMessage ?? "讀取停滯排隊用戶失敗。" };
     }
 
-    const memberUserIds = collectMemberUserIds(rawGroups);
+    const userIdsNeedingProfile = new Set<string>();
+    const propertyIdsNeedingTitle = new Set<string>();
 
-    let profileByUserId: Map<string, Record<string, unknown>> | undefined;
-    if (membersNeedProfileEnrichment(rawGroups) && memberUserIds.length > 0) {
+    for (const raw of rawIntents) {
+      if (!raw || typeof raw !== "object") continue;
+      const row = raw as Record<string, unknown>;
+      const userId = typeof row.user_id === "string" ? row.user_id.trim() : "";
+      if (userId && row.profiles == null) userIdsNeedingProfile.add(userId);
+
+      const propertyId =
+        typeof row.target_property_id === "string" && row.target_property_id.trim()
+          ? row.target_property_id.trim()
+          : null;
+      if (propertyId && row.properties == null) propertyIdsNeedingTitle.add(propertyId);
+    }
+
+    const profileByUserId = new Map<string, Record<string, unknown>>();
+    if (userIdsNeedingProfile.size > 0) {
       const { data: profileRows, error: profileError } = await admin
         .from("profiles")
         .select(`id, ${PROFILE_FIELDS}`)
-        .in("id", memberUserIds);
+        .in("id", [...userIdsNeedingProfile]);
 
       if (profileError) {
         console.warn("[admin-stagnant-groups] fetch profiles", profileError.message);
       } else {
-        profileByUserId = new Map();
         for (const raw of Array.isArray(profileRows) ? profileRows : []) {
           if (!raw || typeof raw !== "object") continue;
           const row = raw as Record<string, unknown>;
@@ -196,60 +204,138 @@ export async function fetchStagnantRecruitingGroups(): Promise<{
       }
     }
 
-    const intentSnapshots: IntentSnapshot[] = [];
+    const propertyTitleById = new Map<string, string>();
+    if (propertyIdsNeedingTitle.size > 0) {
+      const { data: propertyRows, error: propertyError } = await admin
+        .from("properties")
+        .select("id, title")
+        .in("id", [...propertyIdsNeedingTitle]);
 
-    if (memberUserIds.length > 0) {
-      const { data: intentRows, error: intentError } = await admin
-        .from("housing_intents")
-        .select(
-          "user_id, target_property_id, allow_spillover, max_budget, target_district, preference_rank"
-        )
-        .in("user_id", memberUserIds)
-        .neq("status", "expired")
-        .neq("status", "cancelled");
-
-      if (intentError) {
-        // 意向強化欄位（如 allow_spillover）可能尚未部署：不讓整頁崩潰，改以空意向繼續
-        console.error("[admin-stagnant-groups] fetch intents", intentError.message);
+      if (propertyError) {
+        console.warn("[admin-stagnant-groups] fetch properties", propertyError.message);
       } else {
-        for (const raw of Array.isArray(intentRows) ? intentRows : []) {
+        for (const raw of Array.isArray(propertyRows) ? propertyRows : []) {
           if (!raw || typeof raw !== "object") continue;
           const row = raw as Record<string, unknown>;
-          const userId = typeof row.user_id === "string" ? row.user_id.trim() : "";
-          if (!userId) continue;
-
-          const propertyId =
-            typeof row.target_property_id === "string" && row.target_property_id.trim()
-              ? row.target_property_id.trim()
-              : null;
-          const maxBudgetRaw = row.max_budget;
-          const maxBudget =
-            typeof maxBudgetRaw === "number" && Number.isFinite(maxBudgetRaw)
-              ? Math.round(maxBudgetRaw)
-              : null;
-          const targetDistrict =
-            typeof row.target_district === "string" && row.target_district.trim()
-              ? row.target_district.trim()
-              : null;
-          const preferenceRankRaw = row.preference_rank;
-          const preferenceRank =
-            typeof preferenceRankRaw === "number" && Number.isFinite(preferenceRankRaw)
-              ? preferenceRankRaw
-              : 999;
-
-          intentSnapshots.push({
-            userId,
-            propertyId,
-            allowSpillover: row.allow_spillover === true,
-            maxBudget,
-            targetDistrict,
-            preferenceRank,
-          });
+          const id = typeof row.id === "string" ? row.id.trim() : "";
+          const title = typeof row.title === "string" ? row.title.trim() : "";
+          if (id && title) propertyTitleById.set(id, title);
         }
       }
     }
 
-    const groups: StagnantGroupRow[] = rawGroups
+    const users: StagnantWaitingUser[] = rawIntents
+      .map((raw) => {
+        if (!raw || typeof raw !== "object") return null;
+        const row = raw as Record<string, unknown>;
+
+        const intentId =
+          typeof row.intent_id === "string" && row.intent_id.trim()
+            ? row.intent_id.trim()
+            : "";
+        const userId = typeof row.user_id === "string" ? row.user_id.trim() : "";
+        if (!intentId || !userId) return null;
+
+        const createdAt = typeof row.created_at === "string" ? row.created_at : "";
+        const propertyId =
+          typeof row.target_property_id === "string" && row.target_property_id.trim()
+            ? row.target_property_id.trim()
+            : null;
+
+        const profiles = row.profiles ?? profileByUserId.get(userId) ?? null;
+        const displayName =
+          pickProfileField(profiles, "display_name") ||
+          pickProfileField(profiles, "nickname") ||
+          `用戶 ${userId.slice(0, 8)}`;
+        const phone = pickProfileField(profiles, "phone") || null;
+        const wechatId = pickProfileField(profiles, "wechat_id") || null;
+
+        const maxBudgetRaw = row.max_budget;
+        const maxBudget =
+          typeof maxBudgetRaw === "number" && Number.isFinite(maxBudgetRaw)
+            ? Math.round(maxBudgetRaw)
+            : null;
+        const targetDistrict =
+          typeof row.target_district === "string" && row.target_district.trim()
+            ? row.target_district.trim()
+            : null;
+        const preferenceRankRaw = row.preference_rank;
+        const preferenceRank =
+          typeof preferenceRankRaw === "number" && Number.isFinite(preferenceRankRaw)
+            ? preferenceRankRaw
+            : null;
+
+        const nestedTitle = pickPropertyTitle(row.properties, propertyId);
+        const propertyTitle = propertyId
+          ? (propertyTitleById.get(propertyId) ?? nestedTitle)
+          : nestedTitle;
+
+        return {
+          intentId,
+          userId,
+          displayName,
+          phone,
+          wechatId,
+          createdAt,
+          daysSinceCreated: daysBetween(createdAt),
+          propertyId,
+          propertyTitle,
+          allowSpillover: row.allow_spillover === true,
+          maxBudget,
+          targetDistrict,
+          preferenceRank,
+          habits: parseHabits(profiles),
+        } satisfies StagnantWaitingUser;
+      })
+      .filter((user): user is StagnantWaitingUser => user != null);
+
+    return { users, error: null };
+  } catch (err) {
+    const message =
+      err instanceof Error ? err.message : "讀取停滯排隊用戶時發生未知錯誤。";
+    console.error("[admin-stagnant-groups] fetch waiting exception", message);
+    return { users: [], error: message };
+  }
+}
+
+/**
+ * Server-only：pending_opt_in 超過 24 小時仍未解散的群組。
+ * 有資料通常代表 Cron Job 未正常執行連鎖解散，需管家介入。
+ */
+export async function fetchOverduePendingOptInGroups(): Promise<{
+  groups: OverduePendingOptInGroup[];
+  error: string | null;
+}> {
+  try {
+    const admin = createSupabaseAdminClient();
+
+    const cutoff = new Date();
+    cutoff.setHours(cutoff.getHours() - OVERDUE_OPT_IN_HOURS);
+    const cutoffIso = cutoff.toISOString();
+
+    const { data, error } = await admin
+      .from("match_groups")
+      .select(
+        `
+          group_id,
+          status,
+          created_at,
+          expires_at,
+          current_size,
+          property_id,
+          properties ( id, title )
+        `
+      )
+      .eq("status", "pending_opt_in")
+      .lt("created_at", cutoffIso)
+      .order("created_at", { ascending: true });
+
+    if (error) {
+      console.error("[admin-stagnant-groups] fetch overdue pending_opt_in", error.message);
+      return { groups: [], error: error.message };
+    }
+
+    const groups: OverduePendingOptInGroup[] = (Array.isArray(data) ? data : [])
       .map((raw) => {
         if (!raw || typeof raw !== "object") return null;
         const row = raw as Record<string, unknown>;
@@ -261,41 +347,30 @@ export async function fetchStagnantRecruitingGroups(): Promise<{
           typeof row.property_id === "string" && row.property_id.trim()
             ? row.property_id.trim()
             : null;
-        const parsedMembers = parseMembers(row.group_members, profileByUserId);
-        const targetSize = resolveGroupTargetSize(row.target_size);
-        const effectiveCount =
-          parsedMembers.length > 0 ? parsedMembers.length : parseGroupSize(row.current_size);
-
-        const members: StagnantGroupMember[] = parsedMembers.map((member) => {
-          const intent = resolveIntentForMember(intentSnapshots, member.userId, propertyId);
-          return {
-            ...member,
-            allowSpillover: intent?.allowSpillover ?? false,
-            maxBudget: intent?.maxBudget ?? null,
-            targetDistrict: intent?.targetDistrict ?? null,
-          };
-        });
-
-        const spilloverMemberCount = members.filter((member) => member.allowSpillover).length;
+        const expiresAt =
+          typeof row.expires_at === "string" && row.expires_at.trim()
+            ? row.expires_at.trim()
+            : null;
 
         return {
           groupId,
           createdAt,
-          daysSinceCreated: daysBetween(createdAt),
+          hoursSinceCreated: hoursBetween(createdAt),
           propertyId,
           propertyTitle: pickPropertyTitle(row.properties, propertyId),
-          memberCount: effectiveCount,
-          targetSize,
-          spilloverMemberCount,
-          members,
-        } satisfies StagnantGroupRow;
+          memberCount: parseGroupSize(row.current_size),
+          expiresAt,
+        } satisfies OverduePendingOptInGroup;
       })
-      .filter((group): group is StagnantGroupRow => group != null);
+      .filter((group): group is OverduePendingOptInGroup => group != null);
 
     return { groups, error: null };
   } catch (err) {
-    const message = err instanceof Error ? err.message : "讀取停滯群組時發生未知錯誤。";
-    console.error("[admin-stagnant-groups] fetch exception", message);
+    const message =
+      err instanceof Error
+        ? err.message
+        : "讀取逾時 pending_opt_in 群組時發生未知錯誤。";
+    console.error("[admin-stagnant-groups] fetch overdue exception", message);
     return { groups: [], error: message };
   }
 }

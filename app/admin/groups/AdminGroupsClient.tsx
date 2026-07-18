@@ -6,24 +6,13 @@ import { useRouter } from "next/navigation";
 import { ClipboardCopy, Loader2, UserPlus } from "lucide-react";
 import { toast } from "sonner";
 import {
-  adminCreateVirtualMatchGroupAction,
   adminDissolveGroupAction,
   adminKickConfirmedMemberAction,
 } from "@/app/admin/groups/actions";
 import DealManagementModal from "@/components/admin/DealManagementModal";
+import ManualMatchModal from "@/components/admin/ManualMatchModal";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import type { AdminGroupMember, AdminGroupRow } from "@/lib/admin-groups";
 import { cn } from "@/lib/utils";
 
@@ -93,12 +82,12 @@ async function copyMemberPhones(members: AdminGroupMember[] | null | undefined) 
 
 export default function AdminGroupsClient({ groups, fetchError }: AdminGroupsClientProps) {
   const router = useRouter();
-  const [dialogOpen, setDialogOpen] = useState(false);
+  const [manualMatchOpen, setManualMatchOpen] = useState(false);
+  const [manualMatchPrefillPropertyId, setManualMatchPrefillPropertyId] = useState<
+    string | null
+  >(null);
   const [dealModalOpen, setDealModalOpen] = useState(false);
   const [dealGroup, setDealGroup] = useState<AdminGroupRow | null>(null);
-  const [propertyIdInput, setPropertyIdInput] = useState("");
-  const [userIdsInput, setUserIdsInput] = useState("");
-  const [submitting, setSubmitting] = useState(false);
   const [dissolvingGroupId, setDissolvingGroupId] = useState<string | null>(null);
   const [copyingGroupId, setCopyingGroupId] = useState<string | null>(null);
   const [kickingMemberKey, setKickingMemberKey] = useState<string | null>(null);
@@ -114,14 +103,13 @@ export default function AdminGroupsClient({ groups, fetchError }: AdminGroupsCli
     [safeGroups]
   );
 
-  function openCreateDialog(prefillPropertyId?: string | null) {
-    setPropertyIdInput(
+  function openManualMatch(prefillPropertyId?: string | null) {
+    setManualMatchPrefillPropertyId(
       typeof prefillPropertyId === "string" && prefillPropertyId.trim()
         ? prefillPropertyId.trim()
-        : ""
+        : null
     );
-    setUserIdsInput("");
-    setDialogOpen(true);
+    setManualMatchOpen(true);
   }
 
   function openDealModal(group: AdminGroupRow) {
@@ -129,55 +117,8 @@ export default function AdminGroupsClient({ groups, fetchError }: AdminGroupsCli
     setDealModalOpen(true);
   }
 
-  function parseUserIds(raw: string): string[] {
-    return [
-      ...new Set(
-        raw
-          .split(/[\s,;]+/)
-          .map((id) => id.trim())
-          .filter(Boolean)
-      ),
-    ];
-  }
-
-  async function handleCreateVirtualGroup() {
-    if (submitting) return;
-
-    const propertyId = propertyIdInput.trim();
-    const userIds = parseUserIds(userIdsInput);
-    if (!propertyId) {
-      toast.error("請提供樓盤 property_id。");
-      return;
-    }
-    if (userIds.length < 2) {
-      toast.error("請至少輸入 2 個仍在 waiting 的 user UUID。");
-      return;
-    }
-
-    setSubmitting(true);
-    try {
-      const result = await adminCreateVirtualMatchGroupAction(propertyId, userIds);
-      if (!result.ok) {
-        toast.error(result.error);
-        return;
-      }
-      toast.success(
-        `已建立虛擬成團（${result.currentSize} 人 → pending_opt_in）${
-          result.pausedCount > 0 ? `，並暫停其他樓盤意向 ${result.pausedCount} 筆` : ""
-        }`
-      );
-      setDialogOpen(false);
-      router.refresh();
-    } catch (err) {
-      console.error("[AdminGroupsClient] create virtual group", err);
-      toast.error(err instanceof Error ? err.message : "手動拉人成團時發生未知錯誤");
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
   async function handleDissolve(group: AdminGroupRow) {
-    if (dissolvingGroupId || submitting) return;
+    if (dissolvingGroupId) return;
 
     const confirmed = window.confirm(
       "確定要解散此群組並將所有成員退回『排隊中』狀態嗎？"
@@ -283,8 +224,8 @@ export default function AdminGroupsClient({ groups, fetchError }: AdminGroupsCli
             type="button"
             size="sm"
             className="gap-1.5 bg-[#0f2540] text-white hover:bg-[#1a3a5c]"
-            disabled={submitting || dissolvingGroupId != null}
-            onClick={() => openCreateDialog()}
+            disabled={dissolvingGroupId != null}
+            onClick={() => openManualMatch()}
           >
             <UserPlus className="h-4 w-4" />
             手動拉人成團
@@ -347,8 +288,8 @@ export default function AdminGroupsClient({ groups, fetchError }: AdminGroupsCli
                               size="sm"
                               variant="outline"
                               className="gap-1.5"
-                              disabled={dissolvingGroupId === group.groupId || submitting}
-                              onClick={() => openCreateDialog(group.propertyId)}
+                              disabled={dissolvingGroupId === group.groupId}
+                              onClick={() => openManualMatch(group.propertyId)}
                             >
                               <UserPlus className="h-4 w-4" />
                               同樓盤再成團
@@ -358,7 +299,7 @@ export default function AdminGroupsClient({ groups, fetchError }: AdminGroupsCli
                             type="button"
                             size="sm"
                             variant="outline"
-                            disabled={dissolvingGroupId != null || submitting}
+                            disabled={dissolvingGroupId != null}
                             className={cn(
                               "gap-1.5 border-red-200 bg-red-50 text-red-600 hover:bg-red-100 hover:text-red-700",
                               dissolvingGroupId === group.groupId && "opacity-80"
@@ -541,66 +482,11 @@ export default function AdminGroupsClient({ groups, fetchError }: AdminGroupsCli
         </div>
       </section>
 
-      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="sm:max-w-lg">
-          <DialogHeader>
-            <DialogTitle>手動拉人成團</DialogTitle>
-            <DialogDescription>
-              選定樓盤與至少 2 位仍在 waiting 的用戶，系統會直接呼叫{" "}
-              <code className="text-xs">create_virtual_match_group</code>，一步進入{" "}
-              <code className="text-xs">pending_opt_in</code>（不再經 recruiting）。
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4 py-2">
-            <div className="space-y-2">
-              <Label htmlFor="admin-create-property-id">Property ID (UUID)</Label>
-              <Input
-                id="admin-create-property-id"
-                value={propertyIdInput}
-                onChange={(e) => setPropertyIdInput(e.target.value)}
-                placeholder="樓盤 UUID"
-                className="font-mono text-xs"
-                disabled={submitting}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="admin-create-user-ids">User IDs（至少 2 個，逗號或換行分隔）</Label>
-              <Textarea
-                id="admin-create-user-ids"
-                value={userIdsInput}
-                onChange={(e) => setUserIdsInput(e.target.value)}
-                placeholder={"uuid-a\nuuid-b\nuuid-c"}
-                className="min-h-[120px] font-mono text-xs"
-                disabled={submitting}
-              />
-            </div>
-          </div>
-          <DialogFooter className="gap-2 sm:gap-0">
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => setDialogOpen(false)}
-              disabled={submitting}
-            >
-              取消
-            </Button>
-            <Button
-              type="button"
-              onClick={() => void handleCreateVirtualGroup()}
-              disabled={submitting}
-            >
-              {submitting ? (
-                <>
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  成團中…
-                </>
-              ) : (
-                "確認成團"
-              )}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <ManualMatchModal
+        open={manualMatchOpen}
+        onOpenChange={setManualMatchOpen}
+        prefillPropertyId={manualMatchPrefillPropertyId}
+      />
 
       <DealManagementModal
         open={dealModalOpen}

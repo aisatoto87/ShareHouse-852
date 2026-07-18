@@ -113,8 +113,8 @@ async function fetchGroupTenantMembersDirect(
   matchGroupId: string
 ): Promise<GroupTenantMember[]> {
   const selectAttempts = [
+    "user_id, profiles!user_id ( id, display_name, nickname, avatar_url, role )",
     "user_id, profiles ( id, display_name, nickname, avatar_url, role )",
-    "user_id, profiles:user_id ( id, display_name, nickname, avatar_url, role )",
   ];
 
   for (const select of selectAttempts) {

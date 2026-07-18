@@ -15,7 +15,7 @@ import {
 } from "@/lib/group-chat-members";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
-import type { ChatRoomType, GroupTenantMember } from "@/types/chat";
+import type { ChatRoomStatus, ChatRoomType, GroupTenantMember } from "@/types/chat";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -87,6 +87,7 @@ export default function GroupChatPanel({
     () => resolveMatchGroupId({ match_group_id: matchGroupId ?? groupId ?? null })
   );
   const [resolvedRoomType, setResolvedRoomType] = useState<ChatRoomType>("group");
+  const [roomStatus, setRoomStatus] = useState<ChatRoomStatus | string>("active");
   const [peerPartner, setPeerPartner] = useState<GroupTenantMember | null>(null);
 
   const chatRoomType: ChatRoomType =
@@ -120,7 +121,7 @@ export default function GroupChatPanel({
 
     void supabase
       .from("chat_rooms")
-      .select("match_group_id, room_type")
+      .select("match_group_id, room_type, status")
       .eq("room_id", roomId)
       .maybeSingle()
       .then(({ data, error: roomError }) => {
@@ -128,6 +129,7 @@ export default function GroupChatPanel({
         if (roomError) {
           console.warn("[GroupChatPanel] resolve room failed", roomError.message);
           setResolvedMatchGroupId(null);
+          setRoomStatus("active");
           return;
         }
         setResolvedMatchGroupId(resolveMatchGroupId(data));
@@ -136,6 +138,11 @@ export default function GroupChatPanel({
         } else {
           setResolvedRoomType("group");
         }
+        setRoomStatus(
+          typeof data?.status === "string" && data.status.trim()
+            ? data.status.trim()
+            : "active"
+        );
       });
 
     return () => {
@@ -207,10 +214,10 @@ export default function GroupChatPanel({
 
   const handleSend = useCallback(async () => {
     const text = draft.trim();
-    if (!text || sending || !userId) return;
+    if (!text || sending || !userId || roomStatus === "closed") return;
     const ok = await sendMessage(text, userId);
     if (ok) setDraft("");
-  }, [draft, sendMessage, sending, userId]);
+  }, [draft, roomStatus, sendMessage, sending, userId]);
 
   const onKeyDown = (event: { key: string; shiftKey: boolean; preventDefault: () => void }) => {
     if (event.key === "Enter" && !event.shiftKey) {
@@ -222,6 +229,7 @@ export default function GroupChatPanel({
   if (!isOpen) return null;
 
   const isPeerRoom = resolvedRoomType === "peer";
+  const isClosed = roomStatus === "closed";
   const panelTitle = isPeerRoom
     ? peerPartner
       ? groupTenantDisplayName(peerPartner)
@@ -336,31 +344,37 @@ export default function GroupChatPanel({
           ) : null}
 
           <footer className="border-t border-zinc-200 bg-white p-3">
-            <div className="flex items-center gap-2">
-              <Input
-                value={draft}
-                onChange={(event) => setDraft(event.target.value)}
-                onKeyDown={onKeyDown}
-                placeholder="輸入訊息…"
-                disabled={sending || !userId || !roomId}
-                className="h-10 flex-1 rounded-xl border-zinc-200 bg-zinc-50 text-sm"
-              />
-              <Button
-                type="button"
-                onClick={() => void handleSend()}
-                disabled={sending || !draft.trim() || !userId || !roomId}
-                className={cn(
-                  "h-10 rounded-xl bg-[#0f2540] px-3 hover:bg-[#1a3a5c]"
-                )}
-              >
-                {sending ? (
-                  <Loader2 className="size-4 animate-spin" />
-                ) : (
-                  <Send className="size-4" />
-                )}
-                <span className="sr-only">發送</span>
-              </Button>
-            </div>
+            {isClosed ? (
+              <p className="rounded-xl bg-zinc-100 px-3 py-2 text-center text-xs text-zinc-500">
+                此聊天室已結束，無法再傳送訊息。
+              </p>
+            ) : (
+              <div className="flex items-center gap-2">
+                <Input
+                  value={draft}
+                  onChange={(event) => setDraft(event.target.value)}
+                  onKeyDown={onKeyDown}
+                  placeholder="輸入訊息…"
+                  disabled={sending || !userId || !roomId}
+                  className="h-10 flex-1 rounded-xl border-zinc-200 bg-zinc-50 text-sm"
+                />
+                <Button
+                  type="button"
+                  onClick={() => void handleSend()}
+                  disabled={sending || !draft.trim() || !userId || !roomId}
+                  className={cn(
+                    "h-10 rounded-xl bg-[#0f2540] px-3 hover:bg-[#1a3a5c]"
+                  )}
+                >
+                  {sending ? (
+                    <Loader2 className="size-4 animate-spin" />
+                  ) : (
+                    <Send className="size-4" />
+                  )}
+                  <span className="sr-only">發送</span>
+                </Button>
+              </div>
+            )}
           </footer>
         </div>
       </div>

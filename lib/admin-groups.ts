@@ -52,7 +52,7 @@ const MATCH_GROUP_SELECT_ATTEMPTS = [
       properties ( id, title ),
       group_members (
         user_id,
-        profiles:user_id ( ${PROFILE_FIELDS} )
+        profiles!user_id ( ${PROFILE_FIELDS} )
       )
     `,
   `

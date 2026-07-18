@@ -687,7 +687,7 @@ export default function DashboardPageClient() {
       const { data, error } = await supabase
         .from("housing_intents")
         .select(
-          "intent_id, status, preference_rank, target_district, max_budget, created_at, target_property_id, properties:target_property_id(id, title)"
+          "intent_id, status, preference_rank, target_district, max_budget, created_at, target_property_id, properties!target_property_id(id, title)"
         )
         .eq("user_id", userId)
         .order("created_at", { ascending: false });

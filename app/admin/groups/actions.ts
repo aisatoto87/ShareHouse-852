@@ -2,7 +2,14 @@
 
 import { revalidatePath } from "next/cache";
 import { checkAdminAccessFromProfile } from "@/lib/admin-auth";
-import { disbandGroupAndReleaseMembers } from "@/lib/intent-teardown";
+import {
+  fetchAdminWaitingPoolGrouped,
+  reassignWaitingIntentsToProperty,
+  resolvePropertyTargetSizeById,
+  type WaitingPoolPropertyGroup,
+  type WaitingPoolUser,
+} from "@/lib/admin-waiting-pool";
+import { disbandGroupAndReleaseMembers, closeChatRoomsForMatchGroup } from "@/lib/intent-teardown";
 import { ensureOfflineDealForGroup } from "@/lib/offline-deals";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { createSupabaseServerClient, getServerUser } from "@/lib/supabase/server";
@@ -41,9 +48,36 @@ async function requireAdminRpcClient(): Promise<
   return { ok: true, rpc: createSupabaseAdminClient() };
 }
 
+export type AdminWaitingPoolResult =
+  | { ok: true; groups: WaitingPoolPropertyGroup[]; users: WaitingPoolUser[] }
+  | { ok: false; error: string };
+
+/** 管家：讀取 waiting 排隊池（依樓盤分組 + 扁平全域名單，含習慣評分與 target_size） */
+export async function getAdminWaitingPoolAction(): Promise<AdminWaitingPoolResult> {
+  const gate = await requireAdminRpcClient();
+  if (!gate.ok) return gate;
+
+  try {
+    const result = await fetchAdminWaitingPoolGrouped();
+    if (result.error) {
+      return { ok: false, error: result.error };
+    }
+    return {
+      ok: true,
+      groups: Array.isArray(result.groups) ? result.groups : [],
+      users: Array.isArray(result.users) ? result.users : [],
+    };
+  } catch (e) {
+    const message = e instanceof Error ? e.message : "伺服器錯誤";
+    console.error("[getAdminWaitingPoolAction]", message);
+    return { ok: false, error: message || "讀取排隊池失敗。" };
+  }
+}
+
 /**
  * 管家手動拉人成團：直接呼叫 `create_virtual_match_group`，
  * 選定名單一步進入 pending_opt_in（不再經 recruiting／admin_add_to_group）。
+ * 支援跨盤：送出前先將來源 waiting 意向改掛到目標 property_id。
  */
 export async function adminCreateVirtualMatchGroupAction(
   propertyId: string,
@@ -74,6 +108,22 @@ export async function adminCreateVirtualMatchGroupAction(
   if (!gate.ok) return gate;
 
   try {
+    const targetSize = await resolvePropertyTargetSizeById(trimmedPropertyId);
+    if (uniqueUserIds.length < targetSize) {
+      return {
+        ok: false,
+        error: `勾選人數不足：此樓盤目標成團人數為 ${targetSize}，目前僅選 ${uniqueUserIds.length} 人。`,
+      };
+    }
+
+    const reassigned = await reassignWaitingIntentsToProperty(
+      trimmedPropertyId,
+      uniqueUserIds
+    );
+    if (!reassigned.ok) {
+      return { ok: false, error: reassigned.error };
+    }
+
     const created = await invokeCreateVirtualMatchGroup(gate.rpc, {
       propertyId: trimmedPropertyId,
       userIds: uniqueUserIds,
@@ -198,6 +248,8 @@ export async function adminDissolveGroupAction(
         error: error.message || "解散群組失敗（RPC admin_dissolve_group）。",
       };
     }
+
+    await closeChatRoomsForMatchGroup(gate.rpc, trimmedGroupId);
 
     revalidatePath("/admin/groups", "page");
     revalidatePath("/dashboard", "page");

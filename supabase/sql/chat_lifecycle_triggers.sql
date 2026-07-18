@@ -80,8 +80,8 @@ SECURITY DEFINER
 SET search_path = public
 AS $$
 BEGIN
+  -- 群組進入終態時關閉所有關聯聊天室（group + peer），不限舊狀態
   IF TG_OP = 'UPDATE'
-     AND OLD.status IN ('confirmed', 'matched')
      AND NEW.status IS DISTINCT FROM OLD.status
      AND NEW.status IN ('dissolved', 'cancelled', 'expired')
   THEN
@@ -90,7 +90,6 @@ BEGIN
       status = 'closed',
       updated_at = now()
     WHERE cr.match_group_id = NEW.group_id
-      AND cr.room_type = 'group'
       AND cr.status = 'active';
   END IF;
 
@@ -106,7 +105,7 @@ CREATE TRIGGER trg_match_groups_inactive_close_group_chat
   EXECUTE FUNCTION public.trg_close_group_chat_on_group_inactive();
 
 COMMENT ON FUNCTION public.trg_close_group_chat_on_group_inactive() IS
-  'match_groups 自 confirmed/matched 轉為 dissolved/cancelled/expired 時關閉 active 群聊';
+  'match_groups 轉為 dissolved/cancelled/expired 時關閉所有關聯 active 聊天室（group + peer）';
 
 -- -----------------------------------------------------------------------------
 -- C. 踢出成員：group_members DELETE → 移除 chat_room_participants
