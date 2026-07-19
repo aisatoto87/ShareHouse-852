@@ -28,7 +28,7 @@ export function applyFilters(properties: Property[], filters: Filters): Property
       return false;
     }
 
-    if (filters.price && filters.price !== "") {
+    if (filters.price) {
       if (!propertyMatchesPriceBand(property, filters.price as PriceBand)) {
         return false;
       }

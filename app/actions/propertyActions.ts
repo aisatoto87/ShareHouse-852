@@ -119,7 +119,7 @@ export async function searchProperties(
       );
     }
 
-    if (params.price && params.price !== "") {
+    if (params.price) {
       properties = properties.filter((p) =>
         propertyMatchesPriceBand(p, params.price as PriceBand)
       );
