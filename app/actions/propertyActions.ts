@@ -7,7 +7,7 @@ import {
   type CategoryPresetId,
 } from "@/lib/category-presets";
 import { mapRowToProperty } from "@/lib/property-mapper";
-import { propertyMatchesPriceBand } from "@/lib/property-pricing";
+import { propertyMatchesPriceBand, type PriceBand } from "@/lib/property-pricing";
 import {
   sanitizeUniversityZones,
 } from "@/lib/university-zones";
@@ -119,8 +119,10 @@ export async function searchProperties(
       );
     }
 
-    if (params.price) {
-      properties = properties.filter((p) => propertyMatchesPriceBand(p, params.price!));
+    if (params.price && params.price !== "") {
+      properties = properties.filter((p) =>
+        propertyMatchesPriceBand(p, params.price as PriceBand)
+      );
     }
 
     const limit =
