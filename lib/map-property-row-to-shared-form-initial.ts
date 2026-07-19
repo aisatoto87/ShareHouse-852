@@ -85,6 +85,9 @@ export function propertyRowToInitialData(row: Record<string, unknown>): SharedPr
     habit_guests: clampHabitValue(row.habit_guests),
     habit_noise: clampHabitValue(row.habit_noise),
     tags: Array.isArray(row.tags) ? row.tags.map(String) : [],
+    university_zones: Array.isArray(row.university_zones)
+      ? row.university_zones.map(String)
+      : [],
     amenities: Array.isArray(row.amenities) ? row.amenities.map(String) : [],
     roommates_req: Array.isArray(row.roommates_req) ? row.roommates_req.map(String) : [],
     room_count: roomCount,

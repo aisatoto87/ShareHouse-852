@@ -7,14 +7,36 @@ import { toast } from "sonner";
 import Navbar from "@/components/Navbar";
 import SharedPropertyForm from "@/components/SharedPropertyForm";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
-import type { PropertyListingInsertRow, SharedPropertyFormSubmitPayload } from "@/types/shared-property-form";
+import { resolveUniversityZonesForWrite } from "@/lib/utils/zoneMapper";
+import type {
+  PropertyListingInsertRow,
+  SharedPropertyFormInitialData,
+  SharedPropertyFormSubmitPayload,
+} from "@/types/shared-property-form";
+
+function clampHabitValue(value: unknown): number {
+  const n = Number(value);
+  const base = Number.isFinite(n) ? n : 3;
+  return Math.min(5, Math.max(1, Math.round(base)));
+}
+
+function habitsFromProfileRow(row: Record<string, unknown> | null): SharedPropertyFormInitialData {
+  return {
+    habit_cleanliness: clampHabitValue(row?.habit_cleanliness),
+    habit_ac_temp: clampHabitValue(row?.habit_ac_temp),
+    habit_guests: clampHabitValue(row?.habit_guests),
+    habit_noise: clampHabitValue(row?.habit_noise),
+  };
+}
 
 export default function ListPropertyPageClient() {
   const router = useRouter();
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
   const [authChecking, setAuthChecking] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  /** 發布成功後遞增，強制表單 remount 清空 */
+  /** 業主 profiles 四維習慣 → 表單 Vibe 滑桿預設值 */
+  const [habitDefaults, setHabitDefaults] = useState<SharedPropertyFormInitialData | null>(null);
+  /** 發布成功後遞增，強制表單 remount 清空（仍沿用 habitDefaults） */
   const [propertyFormKey, setPropertyFormKey] = useState(0);
 
   useEffect(() => {
@@ -44,18 +66,33 @@ export default function ListPropertyPageClient() {
         if (settled) return;
 
         if (error || !data.session?.user) {
+          window.clearTimeout(timeoutId);
           toast.info("請先登入以發布租盤");
           router.replace("/login");
           return;
         }
-      } catch {
+
+        const userId = data.session.user.id;
+        const { data: profile, error: profileError } = await supabase
+          .from("profiles")
+          .select("habit_cleanliness, habit_ac_temp, habit_guests, habit_noise")
+          .eq("id", userId)
+          .maybeSingle();
+
         if (!mounted) return;
-        if (settled) return;
-        toast.info("請先登入以發布租盤");
-        router.replace("/login");
-      } finally {
+
+        if (profileError) {
+          console.error("[list-property] load profile habits", profileError);
+        }
+
+        setHabitDefaults(habitsFromProfileRow((profile as Record<string, unknown> | null) ?? null));
         window.clearTimeout(timeoutId);
         finishAuthCheck();
+      } catch {
+        if (!mounted) return;
+        window.clearTimeout(timeoutId);
+        toast.info("請先登入以發布租盤");
+        router.replace("/login");
       }
     };
 
@@ -157,6 +194,11 @@ export default function ListPropertyPageClient() {
       amenities: data.amenities,
       roommates_req: data.roommates_req,
       tags: data.tags,
+      university_zones: resolveUniversityZonesForWrite({
+        district: data.district,
+        sub_district: data.sub_district,
+        university_zones: data.university_zones,
+      }),
       gallery: galleryUploads,
       owner_id: ownerUserId,
       room_count: data.room_count,
@@ -177,14 +219,14 @@ export default function ListPropertyPageClient() {
     setPropertyFormKey((k) => k + 1);
   }
 
-  if (authChecking) {
+  if (authChecking || habitDefaults == null) {
     return (
       <div className="min-h-screen bg-zinc-50">
         <Navbar />
         <main className="mx-auto flex max-w-6xl items-center justify-center px-4 py-20 sm:px-6">
           <p className="inline-flex items-center gap-2 text-sm text-zinc-500">
             <Loader2 className="h-4 w-4 animate-spin" />
-            正在驗證登入狀態...
+            {authChecking ? "正在驗證登入狀態..." : "正在載入預設氛圍範本..."}
           </p>
         </main>
       </div>
@@ -202,6 +244,7 @@ export default function ListPropertyPageClient() {
 
         <SharedPropertyForm
           key={propertyFormKey}
+          initialData={habitDefaults}
           onSubmit={handlePropertySubmit}
           isSubmitting={isSubmitting}
           submitButtonText="發布租盤"

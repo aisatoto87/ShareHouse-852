@@ -152,6 +152,7 @@ export type DisbandGroupResult =
   | {
       ok: true;
       groupId: string;
+      propertyId: string | null;
       releasedUserIds: string[];
       cancelledUserId: string | null;
       liftedPausedCount: number;
@@ -387,6 +388,7 @@ export async function disbandGroupAndReleaseMembers(
   return {
     ok: true,
     groupId: trimmedGroupId,
+    propertyId,
     releasedUserIds: innocentUserIds,
     cancelledUserId: trimmedTrigger,
     liftedPausedCount,

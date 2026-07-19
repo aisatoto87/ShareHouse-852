@@ -32,6 +32,8 @@ export interface SharedPropertyFormInitialData {
   habit_guests?: number;
   habit_noise?: number;
   tags?: string[];
+  /** 大學通勤圈 zone_id */
+  university_zones?: string[];
   amenities?: string[];
   roommates_req?: string[];
   room_count?: number;
@@ -74,6 +76,7 @@ export interface SharedPropertyFormSubmitPayload {
   amenities: string[];
   roommates_req: string[];
   tags: string[];
+  university_zones: string[];
   room_count: number;
   max_tenants: number;
   pricing_mode: "average" | "custom";
@@ -106,6 +109,7 @@ export interface PropertyListingInsertRow {
   amenities: string[];
   roommates_req: string[];
   tags: string[];
+  university_zones: string[];
   gallery: string[];
   owner_id: string;
   room_count: number;

@@ -1,10 +1,12 @@
 import { revalidatePath } from "next/cache";
 import { NextResponse } from "next/server";
+import { dismissWaitingIntentsOnPropertyFull } from "@/lib/dismiss-property-queue";
 import { insertGroupConfirmedWelcomeMessage } from "@/lib/group-chat-welcome";
 import { disbandGroupAndReleaseMembers } from "@/lib/intent-teardown";
 import { ensureOfflineDealForGroup } from "@/lib/offline-deals";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { createSupabaseServerClient, getServerUser } from "@/lib/supabase/server";
+import { runVirtualMatchEngine } from "@/lib/virtual-matcher";
 
 export const runtime = "nodejs";
 
@@ -248,13 +250,37 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: teardown.error }, { status: 500 });
       }
 
+      // 解散後立刻重啟配對引擎：無辜成員 + 原 waiting 池無縫遞補
+      const rematchPropertyId = teardown.propertyId ?? propertyId;
+      let rematchMatched = false;
+      if (rematchPropertyId) {
+        try {
+          const rematch = await runVirtualMatchEngine(rematchPropertyId, admin);
+          rematchMatched = rematch.matched === true;
+          console.log("[api/match/action] post-reject rematch", {
+            property_id: rematchPropertyId,
+            matched: rematch.matched,
+            message: rematch.message,
+          });
+        } catch (rematchErr) {
+          console.error(
+            "[api/match/action] post-reject rematch failed",
+            rematchPropertyId,
+            rematchErr
+          );
+        }
+      }
+
       revalidatePath("/dashboard", "page");
+      revalidatePath("/");
       return NextResponse.json({
         ok: true,
         action: "reject",
         group_status: "cancelled",
         released_count: teardown.releasedUserIds.length,
         lifted_paused_count: teardown.liftedPausedCount,
+        rematch_triggered: Boolean(rematchPropertyId),
+        rematch_matched: rematchMatched,
       });
     }
 
@@ -431,6 +457,38 @@ export async function POST(request: Request) {
         });
       }
 
+      let dismissedQueueCount = 0;
+      if (holdPropertyId) {
+        try {
+          const dismissed = await dismissWaitingIntentsOnPropertyFull(
+            admin,
+            holdPropertyId,
+            { excludeUserIds: memberUserIds }
+          );
+          dismissedQueueCount = dismissed.dismissedCount;
+          console.log("[api/match/action] property-full queue dismissed", {
+            groupId,
+            holdPropertyId,
+            dismissedQueueCount,
+            dismissedUserIds: dismissed.dismissedUserIds,
+          });
+        } catch (dismissErr) {
+          console.error(
+            "[api/match/action] dismiss waiting queue on property full",
+            dismissErr
+          );
+          return NextResponse.json(
+            {
+              error:
+                dismissErr instanceof Error
+                  ? dismissErr.message
+                  : "成團後清理樓盤排隊池失敗。",
+            },
+            { status: 500 }
+          );
+        }
+      }
+
       const { error: offlineDealErr } = await ensureOfflineDealForGroup(admin, groupId);
       if (offlineDealErr) {
         console.warn("[api/match/action] offline_deals ensure", offlineDealErr);
@@ -444,6 +502,7 @@ export async function POST(request: Request) {
         propertyId,
         holdPropertyId,
         propertyHeld,
+        dismissedQueueCount,
         memberUserIds,
       });
 
@@ -459,6 +518,7 @@ export async function POST(request: Request) {
         target_size: targetSize,
         property_held: propertyHeld,
         hold_property_id: holdPropertyId,
+        dismissed_queue_count: dismissedQueueCount,
       });
     }
 

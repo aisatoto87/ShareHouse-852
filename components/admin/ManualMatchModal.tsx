@@ -262,7 +262,12 @@ export default function ManualMatchModal({
         [...selectedUserIds]
       );
       if (!result.ok) {
-        toast.error(result.error);
+        // Server Action 已轉譯 SyncNest clique 等 RPC 錯誤；直接顯示精確字串
+        const errorMessage =
+          typeof result.error === "string" && result.error.trim()
+            ? result.error.trim()
+            : "手動拉人成團失敗。";
+        toast.error(errorMessage);
         return;
       }
 

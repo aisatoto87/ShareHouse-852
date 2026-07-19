@@ -14,6 +14,7 @@ import { propertyRowToInitialData, roomPricesArrayToDbObject } from "@/lib/map-p
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { useAdminPendingCounts } from "@/hooks/useAdminPendingCounts";
 import { mapRowToProperty } from "@/lib/property-mapper";
+import { resolveUniversityZonesForWrite } from "@/lib/utils/zoneMapper";
 import type { Property } from "@/types/property";
 import type { SharedPropertyFormInitialData, SharedPropertyFormSubmitPayload } from "@/types/shared-property-form";
 import { Button } from "@/components/ui/button";
@@ -285,6 +286,11 @@ export default function AdminPageClient() {
         amenities: data.amenities,
         roommates_req: data.roommates_req,
         tags: data.tags,
+        university_zones: resolveUniversityZonesForWrite({
+          district: data.district,
+          sub_district: data.sub_district,
+          university_zones: data.university_zones,
+        }),
         gallery: galleryStrings,
         room_count: data.room_count,
         max_tenants: data.max_tenants,
@@ -388,6 +394,11 @@ export default function AdminPageClient() {
         amenities: data.amenities,
         roommates_req: data.roommates_req,
         tags: data.tags,
+        university_zones: resolveUniversityZonesForWrite({
+          district: data.district,
+          sub_district: data.sub_district,
+          university_zones: data.university_zones,
+        }),
         gallery: galleryStrings,
         room_count: data.room_count,
         max_tenants: data.max_tenants,

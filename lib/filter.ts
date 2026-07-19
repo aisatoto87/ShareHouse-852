@@ -1,16 +1,35 @@
+import {
+  getCategoryPreset,
+  propertyMatchesCategoryPreset,
+} from "@/lib/category-presets";
+import { propertyMatchesPriceBand } from "@/lib/property-pricing";
+import { propertyOverlapsUniversityZones } from "@/lib/university-zones";
 import type { Filters, Property } from "@/types/property";
 
 export function applyFilters(properties: Property[], filters: Filters): Property[] {
+  const preset = getCategoryPreset(filters.categoryPreset);
+
   return properties.filter((property) => {
+    if (preset && !propertyMatchesCategoryPreset(property.tags, preset, property)) {
+      return false;
+    }
+
+    if (
+      filters.universityZones.length > 0 &&
+      !propertyOverlapsUniversityZones(
+        property.university_zones,
+        filters.universityZones
+      )
+    ) {
+      return false;
+    }
+
     if (filters.district && property.district !== filters.district) {
       return false;
     }
 
-    if (filters.price) {
-      if (filters.price === "low" && property.price >= 4000) return false;
-      if (filters.price === "mid" && (property.price < 4000 || property.price > 6000))
-        return false;
-      if (filters.price === "high" && property.price <= 6000) return false;
+    if (filters.price && !propertyMatchesPriceBand(property, filters.price)) {
+      return false;
     }
 
     if (filters.size) {

@@ -7,8 +7,11 @@
 --     ARRAY['user-a'::uuid, 'user-b'::uuid, 'user-c'::uuid]
 --   );
 --
--- 同一事務內完成：
---   0) （跨盤）將尚未掛在目標樓盤的 waiting 意向改掛至 p_property_id
+-- 同一事務內完成（原子性）：
+--   0a) SELECT properties FOR UPDATE（樓盤行級鎖，序列化同盤成團）
+--   0b) SELECT housing_intents FOR UPDATE（本盤 waiting + 候選人跨盤 waiting）
+--   0c) （跨盤）將尚未掛在目標樓盤的 waiting 意向改掛至 p_property_id
+--   0d) SyncNest clique 契合度校驗
 --   1) INSERT match_groups (status = pending_opt_in)
 --   2) INSERT group_members
 --   3) UPDATE 本樓盤 housing_intents → pending_opt_in（寫入 group_id）
@@ -52,6 +55,7 @@ DECLARE
   v_target_size integer;
   v_waiting_count integer;
   v_paused_count integer := 0;
+  v_locked_property_id uuid;
 BEGIN
   IF p_property_id IS NULL THEN
     RAISE EXCEPTION 'create_virtual_match_group: p_property_id 不可為 NULL';
@@ -72,13 +76,40 @@ BEGIN
   END IF;
 
   -- -------------------------------------------------------------------------
-  -- 併發防禦：鎖住候選人所有 waiting 意向（含跨盤來源）
+  -- 併發防禦（原子打包）：先鎖樓盤列，再鎖相關 waiting 意向
+  -- 同一事務內完成「讀人數 → SyncNest → pending_opt_in」，避免超收 Oversized Group
   -- -------------------------------------------------------------------------
+  SELECT p.id
+  INTO v_locked_property_id
+  FROM properties p
+  WHERE p.id = p_property_id
+  FOR UPDATE OF p;
+
+  IF v_locked_property_id IS NULL THEN
+    RAISE EXCEPTION 'create_virtual_match_group: 找不到樓盤 %', p_property_id;
+  END IF;
+
+  -- 鎖住本樓盤所有 waiting（依 intent_id 排序，降低跨請求死鎖機率）
   PERFORM 1
-  FROM housing_intents hi
-  WHERE hi.user_id = ANY (v_distinct_ids)
-    AND hi.status = 'waiting'
-  FOR UPDATE OF hi;
+  FROM (
+    SELECT hi.intent_id
+    FROM housing_intents hi
+    WHERE hi.target_property_id = p_property_id
+      AND hi.status = 'waiting'
+    ORDER BY hi.intent_id
+    FOR UPDATE OF hi
+  ) AS locked_property_waiting;
+
+  -- 再鎖候選人所有 waiting 意向（含跨盤來源；同樣排序）
+  PERFORM 1
+  FROM (
+    SELECT hi.intent_id
+    FROM housing_intents hi
+    WHERE hi.user_id = ANY (v_distinct_ids)
+      AND hi.status = 'waiting'
+    ORDER BY hi.intent_id
+    FOR UPDATE OF hi
+  ) AS locked_candidate_waiting;
 
   -- Global Freeze 二次防禦：任何人已有 matching / pending_opt_in / confirmed / matched 則中止
   IF EXISTS (

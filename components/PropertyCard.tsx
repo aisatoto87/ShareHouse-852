@@ -2,13 +2,16 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import type { MouseEvent, ReactNode } from "react";
-import { MapPin, Maximize2 } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { useTransition, type MouseEvent, type ReactNode } from "react";
+import { Loader2, MapPin, Maximize2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardFooter } from "@/components/ui/card";
 import WaitingPoolHeatBadge from "@/components/WaitingPoolHeatBadge";
 import WishlistHeartButton from "@/components/WishlistHeartButton";
 import { PROPERTY_GROUP_LOCKED_LABEL, PROPERTY_LISTING_BLOCKED_LABEL } from "@/lib/property-listing";
+import { formatPropertyTagLabel } from "@/lib/category-presets";
+import { formatHkd, getSharePriceQuote } from "@/lib/property-pricing";
 import { cn } from "@/lib/utils";
 import type { Property, PropertyListingStatus } from "@/types/property";
 
@@ -24,6 +27,14 @@ const TAG_STYLES: Record<string, string> = {
   即時起租: "bg-orange-100 text-orange-800",
   獨立單位: "bg-amber-100 text-amber-800",
   包傢俬: "bg-pink-100 text-pink-800",
+  solid_wall: "bg-stone-100 text-stone-800",
+  en_suite: "bg-violet-100 text-violet-800",
+  all_inclusive: "bg-sky-100 text-sky-800",
+  vr_verified: "bg-indigo-100 text-indigo-800",
+  no_deposit_risk: "bg-emerald-100 text-emerald-800",
+  flexible_lease: "bg-amber-100 text-amber-900",
+  high_speed_rail_zone: "bg-blue-100 text-blue-800",
+  low_startup_cost: "bg-teal-100 text-teal-800",
 };
 
 const DEFAULT_TAG = "bg-zinc-100 text-zinc-600";
@@ -61,34 +72,23 @@ export default function PropertyCard({
   targetSize = null,
   adminMenu,
 }: PropertyCardProps) {
-  const { id, title, district, sub_district, price, size_sqft, imageUrl, tags } = property;
-  const formattedPrice = new Intl.NumberFormat("zh-HK").format(price);
-  const roomCount = Math.max(1, property.room_count ?? 1);
-  const averagePrice = Math.round(price / roomCount);
-  const formattedAveragePrice = new Intl.NumberFormat("zh-HK").format(averagePrice);
-  const customRoomPriceEntries = (() => {
-    const raw = (property as unknown as Record<string, unknown>).room_prices;
-    if (Array.isArray(raw)) {
-      return raw
-        .map((item, index) => ({ roomNo: index + 1, value: Number(item) }))
-        .filter((item) => Number.isFinite(item.value) && item.value >= 0);
-    }
-    if (raw && typeof raw === "object") {
-      return Object.entries(raw as Record<string, unknown>)
-        .map(([key, value]) => {
-          const match = key.match(/^room(\d+)$/i);
-          const roomNo = match ? Number(match[1]) : Number.NaN;
-          return { roomNo, value: Number(value) };
-        })
-        .filter((item) => Number.isFinite(item.roomNo) && Number.isFinite(item.value) && item.value >= 0)
-        .sort((a, b) => a.roomNo - b.roomNo);
-    }
-    return [];
-  })();
+  const router = useRouter();
+  const [isPending, startTransition] = useTransition();
+  const { id, title, district, sub_district, size_sqft, imageUrl, tags } = property;
+  const shareQuote = getSharePriceQuote(property);
+  const formattedSharePrice = formatHkd(shareQuote.amount);
+  const formattedTotalRent = formatHkd(shareQuote.totalRent);
+  const customRoomPriceEntries = shareQuote.rooms;
   const visibleRoomEntries = customRoomPriceEntries.slice(0, MAX_ROOMS_DISPLAY);
   const hiddenRoomCount = Math.max(0, customRoomPriceEntries.length - visibleRoomEntries.length);
 
   const detailHref = `/property/${id}`;
+  const handleNavigation = () => {
+    if (isPending) return;
+    startTransition(() => {
+      router.push(detailHref);
+    });
+  };
   const blockCardNavigation = (e: MouseEvent<HTMLDivElement>) => {
     e.preventDefault();
     e.stopPropagation();
@@ -174,7 +174,7 @@ export default function PropertyCard({
                   TAG_STYLES[tag] ?? DEFAULT_TAG
                 }`}
               >
-                {tag}
+                {formatPropertyTagLabel(tag)}
               </Badge>
             ))}
           </div>
@@ -232,40 +232,61 @@ export default function PropertyCard({
               />
             </div>
           ) : null}
-          <p className="mt-3 text-xl font-extrabold text-[#0f2540]">
-            HK$ {formattedPrice}
-            <span className="ml-1 text-sm font-normal text-zinc-400">/月</span>
-          </p>
+          <div className="mt-3">
+            {shareQuote.kind === "min_room" ? (
+              <p className="text-xl font-extrabold text-[#0f2540]">
+                單房最低 HK$ {formattedSharePrice}
+                <span className="ml-1 text-sm font-semibold text-[#0f2540]/80">起</span>
+              </p>
+            ) : (
+              <p className="text-xl font-extrabold text-[#0f2540]">
+                人均均價 HK$ {formattedSharePrice}
+              </p>
+            )}
+            <p className="mt-0.5 text-xs font-medium text-zinc-400">
+              單位總租 HK$ {formattedTotalRent}/月
+            </p>
+          </div>
           <div className="mt-2 min-h-[2.75rem] flex-1">
-            {property.pricing_mode === "custom" && customRoomPriceEntries.length > 0 ? (
+            {shareQuote.kind === "min_room" && customRoomPriceEntries.length > 0 ? (
               <div className="flex flex-wrap gap-1.5">
                 {visibleRoomEntries.map((item) => (
                   <Badge key={`${id}-room-${item.roomNo}`} className="bg-blue-50 text-blue-700">
-                    房間 {item.roomNo}: HK$ {new Intl.NumberFormat("zh-HK").format(item.value)}
+                    房間 {item.roomNo}: HK$ {formatHkd(item.value)}
                   </Badge>
                 ))}
                 {hiddenRoomCount > 0 ? (
                   <Badge className="bg-zinc-100 text-zinc-600">+{hiddenRoomCount} 更多房間</Badge>
                 ) : null}
               </div>
-            ) : (
+            ) : shareQuote.kind === "per_person" ? (
               <p className="text-xs font-medium text-zinc-500">
-                平均每房 HK$ {formattedAveragePrice} /月
+                按 {shareQuote.divisor} 人攤分估算
               </p>
-            )}
+            ) : null}
           </div>
         </Link>
       </CardContent>
 
       <CardFooter className="relative z-10 mt-auto px-4 pb-4 pt-2">
         {isListingBlocked ? (
-          <Link
-            href={detailHref}
+          <button
+            type="button"
+            onClick={handleNavigation}
+            disabled={isPending}
+            aria-busy={isPending}
             aria-label={`${PROPERTY_LISTING_BLOCKED_LABEL} — 查看 ${title} 詳情`}
-            className="inline-flex h-10 w-full cursor-pointer items-center justify-center gap-2 rounded-xl bg-zinc-400 px-4 text-sm font-medium text-white opacity-90 transition-opacity hover:opacity-100"
+            className="inline-flex h-10 w-full cursor-pointer items-center justify-center gap-2 rounded-xl bg-zinc-400 px-4 text-sm font-medium text-white opacity-90 transition-opacity hover:opacity-100 disabled:cursor-wait disabled:opacity-80"
           >
-            {PROPERTY_LISTING_BLOCKED_LABEL}
-          </Link>
+            {isPending ? (
+              <>
+                <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+                載入中...
+              </>
+            ) : (
+              PROPERTY_LISTING_BLOCKED_LABEL
+            )}
+          </button>
         ) : isLockedByGroup ? (
           <button
             type="button"
@@ -277,13 +298,23 @@ export default function PropertyCard({
             {PROPERTY_GROUP_LOCKED_LABEL}
           </button>
         ) : (
-          <Link
-            href={detailHref}
+          <button
+            type="button"
+            onClick={handleNavigation}
+            disabled={isPending}
+            aria-busy={isPending}
             aria-label={`查看 ${title} 詳情`}
-            className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-xl bg-[#0f2540] px-4 text-sm font-medium text-white shadow-sm transition-all hover:bg-[#1a3a5c] active:scale-[0.98]"
+            className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-xl bg-[#0f2540] px-4 text-sm font-medium text-white shadow-sm transition-all hover:bg-[#1a3a5c] active:scale-[0.98] disabled:cursor-wait disabled:opacity-80 disabled:active:scale-100"
           >
-            👀 查看詳情
-          </Link>
+            {isPending ? (
+              <>
+                <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+                載入中...
+              </>
+            ) : (
+              <>👀 查看詳情</>
+            )}
+          </button>
         )}
       </CardFooter>
     </Card>

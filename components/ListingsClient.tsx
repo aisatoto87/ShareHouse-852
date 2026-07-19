@@ -14,6 +14,7 @@ import { applyFilters } from "@/lib/filter";
 import { mapRowToProperty } from "@/lib/property-mapper";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import type { UserHabits } from "@/lib/matchingAlgorithm";
+import { searchProperties } from "@/app/actions/propertyActions";
 import {
   applyWaitingPoolStatsToSmartRows,
   fetchWaitingPoolStats,
@@ -67,6 +68,8 @@ const defaultFilters: Filters = {
   district: "",
   price: "",
   size: "",
+  categoryPreset: "",
+  universityZones: [],
 };
 
 const LIMIT = 12;
@@ -84,6 +87,8 @@ export default function ListingsClient() {
   const [hasMore, setHasMore] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const matchedFullCacheRef = useRef<SmartMatchedPropertyRow[] | null>(null);
+  /** 與 ref 快取同步，供 useMemo 在 fetch 完成後重算客群篩選 */
+  const [catalogEpoch, setCatalogEpoch] = useState(0);
   const [isLoadingListings, setIsLoadingListings] = useState(true);
   /** 未登入卻選了智能配對時為 true，用於顯示登入提示而非發 RPC */
   const [matchedRequiresAuth, setMatchedRequiresAuth] = useState(false);
@@ -184,7 +189,42 @@ export default function ListingsClient() {
 
       try {
         if (viewMode === "all") {
-          const fullCatalog = await buildAllModeListingCatalog(supabase);
+          let fullCatalog: SmartMatchedPropertyRow[];
+
+          if (filters.categoryPreset) {
+            const result = await searchProperties({
+              categoryPreset: filters.categoryPreset,
+              universityZones:
+                filters.categoryPreset === "local_student"
+                  ? filters.universityZones
+                  : undefined,
+              limit: 500,
+            });
+            if (!result.success) {
+              throw new Error(result.error);
+            }
+            const base: SmartMatchedPropertyRow[] = result.properties.map(
+              (property) => ({ property, similarity: 0 })
+            );
+            const allIds = base.map((r) => r.property.id);
+            const [statusMap, waitingStats, lockedIds] = await Promise.all([
+              fetchPropertyStatuses(supabase, allIds),
+              fetchWaitingPoolStats(supabase, allIds),
+              fetchPropertiesLockedByGroup(supabase, allIds),
+            ]);
+            fullCatalog = sortSmartMatchedPropertyRows(
+              applyGroupLocksToSmartRows(
+                applyWaitingPoolStatsToSmartRows(
+                  applyPropertyStatusesToRows(base, statusMap),
+                  waitingStats
+                ),
+                lockedIds
+              ),
+              false
+            );
+          } else {
+            fullCatalog = await buildAllModeListingCatalog(supabase);
+          }
 
           if (!isActive()) {
             return;
@@ -192,6 +232,7 @@ export default function ListingsClient() {
 
           matchedFullCacheRef.current = fullCatalog;
           if (isActive()) {
+            setCatalogEpoch((n) => n + 1);
             setMatchedRows(fullCatalog.slice(0, LIMIT));
             setHasMore(fullCatalog.length > LIMIT);
           }
@@ -286,6 +327,7 @@ export default function ListingsClient() {
 
         if (isActive()) {
           matchedFullCacheRef.current = fullWithPool;
+          setCatalogEpoch((n) => n + 1);
           setMatchedRows(fullWithPool.slice(0, LIMIT));
           setHasMore(fullWithPool.length > LIMIT);
         }
@@ -305,6 +347,7 @@ export default function ListingsClient() {
           setMatchedRows([]);
           setHasMore(false);
           matchedFullCacheRef.current = null;
+          setCatalogEpoch((n) => n + 1);
         }
       } finally {
         window.clearTimeout(fallbackTimer);
@@ -320,26 +363,38 @@ export default function ListingsClient() {
       listingsFetchRequestIdRef.current += 1;
       window.clearTimeout(fallbackTimer);
     };
-  }, [viewMode, supabase, authReady, sessionUser]);
+  }, [
+    viewMode,
+    supabase,
+    authReady,
+    sessionUser,
+    // 僅「全部租盤」依客群／通勤圈重打 searchProperties；智能配對改走客戶端篩選
+    viewMode === "all" ? filters.categoryPreset : "",
+    viewMode === "all" && filters.categoryPreset === "local_student"
+      ? filters.universityZones.join(",")
+      : "",
+  ]);
 
   async function handleLoadMore() {
-    if (!hasMore || isLoadingMore || isLoadingListings) return;
+    if (isLoadingMore || isLoadingListings) return;
 
     const full = matchedFullCacheRef.current;
-    if (full?.length) {
-      setIsLoadingMore(true);
-      try {
-        let nextLen = 0;
-        setMatchedRows((prev) => {
-          nextLen = Math.min(prev.length + LIMIT, full.length);
-          return full.slice(0, nextLen);
-        });
-        setHasMore(full.length > nextLen);
-        setPage((p) => p + 1);
-      } finally {
-        setIsLoadingMore(false);
-      }
-      return;
+    if (!full?.length) return;
+
+    const filteredFull = full.filter(
+      ({ property }) => applyFilters([property], filters).length > 0
+    );
+    if (filteredFull.length <= page * LIMIT) return;
+
+    setIsLoadingMore(true);
+    try {
+      const nextPage = page + 1;
+      const nextLen = Math.min(nextPage * LIMIT, filteredFull.length);
+      setMatchedRows(filteredFull.slice(0, nextLen));
+      setHasMore(filteredFull.length > nextLen);
+      setPage(nextPage);
+    } finally {
+      setIsLoadingMore(false);
     }
   }
 
@@ -347,23 +402,51 @@ export default function ListingsClient() {
     setSortByMatch((prev) => !prev);
   }
 
+  function handleFiltersChange(next: Filters) {
+    const presetChanged = next.categoryPreset !== filters.categoryPreset;
+    const zonesChanged =
+      next.universityZones.join(",") !== filters.universityZones.join(",");
+    setPage(1);
+    setFilters(next);
+
+    // 「全部租盤」切換客群／通勤圈時由 effect 呼叫 searchProperties 重抓
+    if (viewMode === "all" && (presetChanged || zonesChanged)) return;
+
+    const full = matchedFullCacheRef.current;
+    if (!full) return;
+    const filteredFull = full.filter(
+      ({ property }) => applyFilters([property], next).length > 0
+    );
+    setMatchedRows(filteredFull.slice(0, LIMIT));
+    setHasMore(filteredFull.length > LIMIT);
+  }
+
+  const filteredCatalog = useMemo(() => {
+    void catalogEpoch;
+    const source = matchedFullCacheRef.current ?? matchedRows;
+    return source.filter(
+      ({ property }) => applyFilters([property], filters).length > 0
+    );
+  }, [matchedRows, filters, catalogEpoch]);
+
   const filteredRows = useMemo(
-    () =>
-      matchedRows.filter(({ property }) => applyFilters([property], filters).length > 0),
-    [matchedRows, filters]
+    () => filteredCatalog.slice(0, Math.max(page, 1) * LIMIT),
+    [filteredCatalog, page]
   );
 
+  const hasMoreFiltered = filteredCatalog.length > filteredRows.length;
   const showSimilarityBadge = viewMode === "matched";
   const sortByMatchEffective = showSimilarityBadge && sortByMatch;
 
   const showPaginationFooter =
-    matchedRows.length > 0 && (hasMore || page > 1 || matchedRows.length >= LIMIT);
+    filteredCatalog.length > 0 &&
+    (hasMoreFiltered || page > 1 || filteredRows.length >= LIMIT);
 
   return (
     <>
       <FilterBar
         filters={filters}
-        onChange={setFilters}
+        onChange={handleFiltersChange}
         viewMode={viewMode}
         onViewModeChange={(mode: ListingsViewMode) => {
           setPage(1);
@@ -414,13 +497,15 @@ export default function ListingsClient() {
           <>
             <ListingGrid
               rows={filteredRows}
-              totalBeforeFilters={matchedRows.length}
+              totalBeforeFilters={
+                (matchedFullCacheRef.current ?? matchedRows).length
+              }
               sortByMatch={sortByMatchEffective}
               showSimilarityBadge={showSimilarityBadge}
             />
             {showPaginationFooter ? (
               <div className="mt-10 flex flex-col items-center justify-center gap-2 pb-6">
-                {hasMore ? (
+                {hasMoreFiltered ? (
                   <Button
                     type="button"
                     variant="outline"

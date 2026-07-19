@@ -41,7 +41,13 @@ type PropertyScanResult =
     };
 
 type ExpiredGroupTeardownResult =
-  | { group_id: string; status: "disbanded"; released_count: number }
+  | {
+      group_id: string;
+      status: "disbanded";
+      released_count: number;
+      property_id: string | null;
+      rematch_matched: boolean;
+    }
   | { group_id: string; status: "error"; message: string };
 
 function authorizeCronRequest(request: Request): boolean {
@@ -59,7 +65,7 @@ function authorizeCronRequest(request: Request): boolean {
 }
 
 /**
- * pending_opt_in 超時：整團連鎖解散，無辜成員退回 waiting 並解除 paused。
+ * pending_opt_in 超時：整團連鎖解散，無辜成員退回 waiting，並立刻重啟該盤配對引擎。
  */
 async function runExpiredOptInTeardown(
   admin: ReturnType<typeof createSupabaseAdminClient>
@@ -98,11 +104,34 @@ async function runExpiredOptInTeardown(
       continue;
     }
 
+    let rematchMatched = false;
+    if (teardown.propertyId) {
+      try {
+        const rematch = await runVirtualMatchEngine(teardown.propertyId, admin);
+        rematchMatched = rematch.matched === true;
+        console.log("[api/match/cron] post-expire rematch", {
+          group_id: groupId,
+          property_id: teardown.propertyId,
+          matched: rematch.matched,
+          message: rematch.message,
+        });
+      } catch (rematchErr) {
+        console.error(
+          "[api/match/cron] post-expire rematch failed",
+          groupId,
+          teardown.propertyId,
+          rematchErr
+        );
+      }
+    }
+
     expired_disbanded += 1;
     expired_results.push({
       group_id: groupId,
       status: "disbanded",
       released_count: teardown.releasedUserIds.length,
+      property_id: teardown.propertyId,
+      rematch_matched: rematchMatched,
     });
   }
 

@@ -19,4 +19,6 @@ export interface Filters {
   district: DistrictFilter;
   price: PriceFilter;
   size: SizeFilter;
+  categoryPreset: "" | "local_student" | "hk_drifter" | "cross_border";
+  universityZones: string[];
 }

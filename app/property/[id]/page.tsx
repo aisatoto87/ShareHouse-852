@@ -24,6 +24,7 @@ import {
 } from "@/lib/profile-completeness";
 import { createSupabaseServerClient, getServerUser } from "@/lib/supabase/server";
 import { mapRowToProperty } from "@/lib/property-mapper";
+import { formatHkd, getSharePriceQuote } from "@/lib/property-pricing";
 import { fetchWaitingPoolStats } from "@/lib/waiting-pool";
 import WaitingPoolHeatBadge from "@/components/WaitingPoolHeatBadge";
 import {
@@ -88,22 +89,12 @@ function propertyToRadarValues(property: {
 function computeIntentDefaultBudget(property: {
   price: number;
   room_count?: number;
+  max_tenants?: number;
   pricing_mode?: "average" | "custom";
   room_prices?: Record<string, number>;
 }): number {
-  const rooms = Math.max(1, property.room_count ?? 1);
-  const rp = property.room_prices;
-  if (property.pricing_mode === "custom" && rp && typeof rp === "object") {
-    const vals = Object.values(rp).filter(
-      (v): v is number => typeof v === "number" && Number.isFinite(v) && v > 0,
-    );
-    if (vals.length > 0) {
-      const avgRoom = Math.round(vals.reduce((a, b) => a + b, 0) / vals.length);
-      return Math.ceil(avgRoom * 1.05);
-    }
-  }
-  const perRoom = Math.round(property.price / rooms);
-  return Math.ceil(perRoom * 1.05);
+  const share = getSharePriceQuote(property).amount;
+  return Math.ceil(share * 1.05);
 }
 
 async function fetchProperty(id: string) {
@@ -271,13 +262,10 @@ export default async function PropertyDetailPage({ params }: PageProps) {
   const sideImages = parsedGallery
     .filter((item) => item.url !== mainImage)
     .slice(0, 4);
-  const formattedPrice = new Intl.NumberFormat("zh-HK").format(property.price);
-  const roomCount = Math.max(1, property.room_count ?? 1);
-  const averagePrice = Math.round(property.price / roomCount);
-  const formattedAveragePrice = new Intl.NumberFormat("zh-HK").format(averagePrice);
-  const customRoomPrices = Object.values(property.room_prices || {}).filter(
-    (item) => Number.isFinite(item) && item >= 0,
-  );
+  const shareQuote = getSharePriceQuote(property);
+  const formattedSharePrice = formatHkd(shareQuote.amount);
+  const formattedTotalRent = formatHkd(shareQuote.totalRent);
+  const customRoomPrices = shareQuote.rooms;
   const conciergeWaUrl = buildShareHouseConciergeWhatsAppUrl(property.title);
   const intentDefaultDistrict =
     property.sub_district.trim() !== "" ? property.sub_district.trim() : property.district;
@@ -331,22 +319,33 @@ export default async function PropertyDetailPage({ params }: PageProps) {
               ) : null}
             </div>
             <div className="rounded-xl border border-zinc-200 bg-white px-4 py-3 shadow-sm">
-              <p className="text-3xl font-extrabold tracking-tight text-[#0f2540] sm:text-4xl">
-                HK$ {formattedPrice}
-                <span className="ml-1 text-base font-normal text-zinc-400">/月</span>
+              {shareQuote.kind === "min_room" ? (
+                <p className="text-3xl font-extrabold tracking-tight text-[#0f2540] sm:text-4xl">
+                  單房最低 HK$ {formattedSharePrice}
+                  <span className="ml-1 text-base font-semibold text-[#0f2540]/80">起</span>
+                </p>
+              ) : (
+                <p className="text-3xl font-extrabold tracking-tight text-[#0f2540] sm:text-4xl">
+                  人均均價 HK$ {formattedSharePrice}
+                </p>
+              )}
+              <p className="mt-1 text-sm font-medium text-zinc-400">
+                單位總租 HK$ {formattedTotalRent}/月
               </p>
               <div className="mt-2">
-                {property.pricing_mode === "custom" && customRoomPrices.length > 0 && roomCount > 1 ? (
+                {shareQuote.kind === "min_room" && customRoomPrices.length > 0 ? (
                   <div className="flex flex-wrap gap-2">
-                    {customRoomPrices.map((item, index) => (
-                      <Badge key={`detail-room-${index}`} className="bg-blue-50 text-blue-700">
-                        房間 {index + 1}: HK$ {new Intl.NumberFormat("zh-HK").format(item)}
+                    {customRoomPrices.map((item) => (
+                      <Badge key={`detail-room-${item.roomNo}`} className="bg-blue-50 text-blue-700">
+                        房間 {item.roomNo}: HK$ {formatHkd(item.value)}
                       </Badge>
                     ))}
                   </div>
-                ) : (
-                  <p className="text-sm font-medium text-zinc-500">平均每房 HK$ {formattedAveragePrice} /月</p>
-                )}
+                ) : shareQuote.kind === "per_person" ? (
+                  <p className="text-sm font-medium text-zinc-500">
+                    按 {shareQuote.divisor} 人攤分估算
+                  </p>
+                ) : null}
               </div>
             </div>
           </div>
@@ -410,7 +409,18 @@ export default async function PropertyDetailPage({ params }: PageProps) {
           <aside className="hidden lg:block">
             <div className="sticky top-24 rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm">
               <p className="text-sm text-zinc-500">透過管家媒合</p>
-              <p className="mt-1 text-2xl font-bold text-[#0f2540]">HK$ {formattedPrice}/月</p>
+              {shareQuote.kind === "min_room" ? (
+                <p className="mt-1 text-2xl font-bold text-[#0f2540]">
+                  單房最低 HK$ {formattedSharePrice} 起
+                </p>
+              ) : (
+                <p className="mt-1 text-2xl font-bold text-[#0f2540]">
+                  人均均價 HK$ {formattedSharePrice}
+                </p>
+              )}
+              <p className="mt-0.5 text-xs font-medium text-zinc-400">
+                單位總租 HK$ {formattedTotalRent}/月
+              </p>
               {showWaitingPoolHeat ? (
                 <div className="mt-3">
                   <WaitingPoolHeatBadge
@@ -421,17 +431,19 @@ export default async function PropertyDetailPage({ params }: PageProps) {
                   />
                 </div>
               ) : null}
-              {property.pricing_mode === "custom" && customRoomPrices.length > 0 && roomCount > 1 ? (
+              {shareQuote.kind === "min_room" && customRoomPrices.length > 0 ? (
                 <div className="mt-2 flex flex-wrap gap-1.5">
-                  {customRoomPrices.map((item, index) => (
-                    <Badge key={`aside-room-${index}`} className="bg-blue-50 text-blue-700">
-                      房間 {index + 1}: HK$ {new Intl.NumberFormat("zh-HK").format(item)}
+                  {customRoomPrices.map((item) => (
+                    <Badge key={`aside-room-${item.roomNo}`} className="bg-blue-50 text-blue-700">
+                      房間 {item.roomNo}: HK$ {formatHkd(item.value)}
                     </Badge>
                   ))}
                 </div>
-              ) : (
-                <p className="mt-1 text-xs font-medium text-zinc-500">平均每房 HK$ {formattedAveragePrice}/月</p>
-              )}
+              ) : shareQuote.kind === "per_person" ? (
+                <p className="mt-1 text-xs font-medium text-zinc-500">
+                  按 {shareQuote.divisor} 人攤分估算
+                </p>
+              ) : null}
               <PropertyLandlordRatingCard
                 ownerId={ownerId}
                 viewerUserId={user?.id ?? null}

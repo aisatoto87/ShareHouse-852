@@ -131,8 +131,13 @@ export function mapRowToProperty(row: Record<string, unknown>): Property {
     amenities: toStringArray(row.amenities),
     roommates_req: toStringArray(row.roommates_req ?? row.roommatesReq),
     tags: toStringArray(row.tags),
+    university_zones: toStringArray(row.university_zones ?? row.universityZones),
     contact_whatsapp: pickString(row, "contact_whatsapp", "contactWhatsapp"),
     room_count: Math.max(1, Math.trunc(toNumber(row.room_count ?? row.roomCount, 1))),
+    max_tenants: (() => {
+      const n = toNumber(row.max_tenants ?? row.maxTenants, 0);
+      return n >= 1 ? Math.trunc(n) : undefined;
+    })(),
     pricing_mode: parsePricingMode(row.pricing_mode ?? row.pricingMode),
     room_prices: (row.room_prices ?? row.roomPrices) as Record<string, any>,
     habit_cleanliness: optionalHabitField(row.habit_cleanliness),

@@ -6,6 +6,18 @@ import { toast } from "sonner";
 import type { HabitDimensionKey } from "@/components/HabitDefenseSliders";
 import HabitDefenseSliders from "@/components/HabitDefenseSliders";
 import { TagInputField } from "@/components/TagInputField";
+import {
+  CATEGORY_TAG_OPTIONS,
+  formatPropertyTagLabel,
+} from "@/lib/category-presets";
+import {
+  UNIVERSITY_ZONE_GROUPS,
+  getUniversityZoneLabel,
+  sanitizeUniversityZones,
+  type UniversityZoneId,
+} from "@/lib/university-zones";
+import { getUniversityZonesByDistrict } from "@/lib/utils/zoneMapper";
+import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -48,6 +60,7 @@ const DEFAULT_TAG_OPTIONS = [
   "全新裝修",
   "可養寵物",
   "包寬頻",
+  ...CATEGORY_TAG_OPTIONS,
 ] as const;
 const DEFAULT_AMENITY_OPTIONS = [
   "冷氣",
@@ -143,6 +156,7 @@ function resolveSubDistrictFields(
 function applyInitialData(data: SharedPropertyFormInitialData): {
   form: FormState;
   selectedTags: string[];
+  selectedUniversityZones: UniversityZoneId[];
   selectedAmenities: string[];
   selectedRoommateReqs: string[];
   customSubDistrict: string;
@@ -188,6 +202,7 @@ function applyInitialData(data: SharedPropertyFormInitialData): {
   return {
     form,
     selectedTags: data.tags ? [...data.tags] : [],
+    selectedUniversityZones: sanitizeUniversityZones(data.university_zones),
     selectedAmenities: data.amenities ? [...data.amenities] : [],
     selectedRoommateReqs: data.roommates_req ? [...data.roommates_req] : [],
     customSubDistrict,
@@ -206,6 +221,7 @@ export default function SharedPropertyForm({
 }: SharedPropertyFormProps) {
   const [form, setForm] = useState<FormState>(initialForm);
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [selectedUniversityZones, setSelectedUniversityZones] = useState<UniversityZoneId[]>([]);
   const [tagQuery, setTagQuery] = useState("");
   const [tagComboboxOpen, setTagComboboxOpen] = useState(false);
   const [selectedAmenities, setSelectedAmenities] = useState<string[]>([]);
@@ -230,6 +246,7 @@ export default function SharedPropertyForm({
     if (initialData == null) {
       setForm(initialForm);
       setSelectedTags([]);
+      setSelectedUniversityZones([]);
       setSelectedAmenities([]);
       setSelectedRoommateReqs([]);
       setCustomSubDistrict("");
@@ -252,6 +269,7 @@ export default function SharedPropertyForm({
     const applied = applyInitialData(initialData);
     setForm(applied.form);
     setSelectedTags(applied.selectedTags);
+    setSelectedUniversityZones(applied.selectedUniversityZones);
     setSelectedAmenities(applied.selectedAmenities);
     setSelectedRoommateReqs(applied.selectedRoommateReqs);
     setCustomSubDistrict(applied.customSubDistrict);
@@ -353,7 +371,11 @@ export default function SharedPropertyForm({
   );
   const filteredTagOptions = useMemo(() => {
     const keyword = tagQuery.trim().toLowerCase();
-    return DEFAULT_TAG_OPTIONS.filter((tag) => tag.toLowerCase().includes(keyword));
+    if (!keyword) return [...DEFAULT_TAG_OPTIONS];
+    return DEFAULT_TAG_OPTIONS.filter((tag) => {
+      const label = formatPropertyTagLabel(tag).toLowerCase();
+      return tag.toLowerCase().includes(keyword) || label.includes(keyword);
+    });
   }, [tagQuery]);
   const canAddCustomTag =
     tagQuery.trim().length > 0 && !normalizedSelectedTags.includes(tagQuery.trim().toLowerCase());
@@ -387,6 +409,10 @@ export default function SharedPropertyForm({
     : [];
   const usingOtherSubDistrict = form.sub_district === SUBDISTRICT_OTHER_VALUE;
   const finalSubDistrict = usingOtherSubDistrict ? customSubDistrict.trim() : form.sub_district.trim();
+  const autoUniversityZones = useMemo(
+    () => sanitizeUniversityZones(getUniversityZonesByDistrict(finalSubDistrict)),
+    [finalSubDistrict]
+  );
 
   function toggleTag(tag: string) {
     setSelectedTags((prev) => (prev.includes(tag) ? prev.filter((item) => item !== tag) : [...prev, tag]));
@@ -526,6 +552,7 @@ export default function SharedPropertyForm({
       amenities: selectedAmenities,
       roommates_req: selectedRoommateReqs,
       tags: selectedTags,
+      university_zones: selectedUniversityZones,
       room_count: roomCount,
       max_tenants: maxTenantsNum,
       pricing_mode: pricingMode,
@@ -833,7 +860,10 @@ export default function SharedPropertyForm({
           canAddCustom={canAddCustomAmenity}
         />
         <div className="sm:col-span-2 rounded-xl border border-zinc-200 bg-zinc-50/70 p-4">
-          <h3 className="text-sm font-semibold text-[#0f2540]">✨ 單位專屬 Vibe (配對神仙室友必填)</h3>
+          <h3 className="text-sm font-semibold text-[#0f2540]">期望的租屋與室友氛圍</h3>
+          <p className="mt-1 text-xs text-zinc-500">
+            可依此單位微調；未調整時沿用您在個人檔案儲存的預設範本。
+          </p>
           <HabitDefenseSliders
             values={{
               habit_cleanliness: form.habit_cleanliness,
@@ -869,13 +899,76 @@ export default function SharedPropertyForm({
           setOpen={setTagComboboxOpen}
           filteredOptions={filteredTagOptions}
           emptyText="找不到符合的標籤。"
-          placeholder="輸入標籤後按 Enter，例如：近地鐵、全新裝修"
+          placeholder="輸入標籤後按 Enter，例如：近地鐵、獨立衛浴"
           heading="常用標籤"
           onToggle={toggleTag}
           onRemove={removeTag}
           onAddCustom={addCustomTag}
           canAddCustom={canAddCustomTag}
+          formatLabel={formatPropertyTagLabel}
         />
+
+        <div className="sm:col-span-2">
+          <label className="mb-1 block text-sm font-medium text-zinc-700">
+            大學通勤圈（可多選，學生客群篩選用）
+          </label>
+          <p className="mb-2 text-xs text-zinc-500">
+            儲存時會依分區自動套用通勤圈；下方可再手動加減。
+          </p>
+          {autoUniversityZones.length > 0 ? (
+            <div className="mb-2 flex flex-wrap items-center gap-1.5">
+              <span className="text-[11px] font-medium text-amber-800">依分區自動：</span>
+              {autoUniversityZones.map((id) => (
+                <span
+                  key={`auto-${id}`}
+                  className="inline-flex rounded-md border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-950"
+                >
+                  {getUniversityZoneLabel(id)}
+                </span>
+              ))}
+            </div>
+          ) : null}
+          <div className="space-y-2.5 rounded-lg border border-zinc-200 bg-zinc-50/80 px-3 py-2.5">
+            {UNIVERSITY_ZONE_GROUPS.map((group) => (
+              <div key={group.id}>
+                <p className="mb-1 text-[11px] font-medium text-zinc-500">
+                  {group.title}
+                  <span className="ml-1 font-normal text-zinc-400">（{group.subtitle}）</span>
+                </p>
+                <div className="flex flex-wrap gap-1.5">
+                  {group.zones.map((zone) => {
+                    const active =
+                      selectedUniversityZones.includes(zone.id) ||
+                      autoUniversityZones.includes(zone.id);
+                    return (
+                      <button
+                        key={zone.id}
+                        type="button"
+                        aria-pressed={selectedUniversityZones.includes(zone.id)}
+                        onClick={() => {
+                          setSelectedUniversityZones((prev) =>
+                            prev.includes(zone.id)
+                              ? prev.filter((id) => id !== zone.id)
+                              : [...prev, zone.id]
+                          );
+                        }}
+                        className={cn(
+                          "rounded-md border px-2.5 py-1 text-xs font-medium transition-colors",
+                          active
+                            ? "border-[#0f2540] bg-[#0f2540] text-white"
+                            : "border-zinc-200 bg-white text-zinc-700 hover:border-zinc-300"
+                        )}
+                      >
+                        {zone.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
         <div className="sm:col-span-2">
           <label className="mb-1 block text-sm font-medium text-zinc-700">相簿上傳 (可多張 + 分類)</label>
           <label className="flex cursor-pointer items-center gap-3 rounded-xl border border-dashed border-zinc-300 bg-zinc-50 p-4 transition-colors hover:border-[#1a3a5c]/50 hover:bg-zinc-100/70">

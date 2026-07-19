@@ -38,8 +38,12 @@ export interface Property {
   amenities: string[];
   roommates_req: string[];
   tags: string[];
+  /** 大學通勤圈 zone_id（如 HKU_zone）；空陣列 = 未標註 */
+  university_zones?: string[];
   contact_whatsapp: string;
   room_count?: number;
+  /** 成團／合租目標人數；人均均價 = price / max_tenants */
+  max_tenants?: number;
   pricing_mode?: "average" | "custom";
   room_prices?: Record<string, number>;
   /** 室友配對用：來自 `properties` 表，可能未填 */
@@ -59,8 +63,18 @@ export type DistrictFilter = "" | "港島" | "九龍" | "新界";
 export type PriceFilter = "" | "low" | "mid" | "high";
 export type SizeFilter = "" | "small" | "med" | "large";
 
+/** 客群專屬推薦；空字串 = 未套用 */
+export type CategoryPresetFilter =
+  | ""
+  | "local_student"
+  | "hk_drifter"
+  | "cross_border";
+
 export interface Filters {
   district: DistrictFilter;
   price: PriceFilter;
   size: SizeFilter;
+  categoryPreset: CategoryPresetFilter;
+  /** 本地學生：已選大學通勤圈 zone_id */
+  universityZones: string[];
 }

@@ -38,6 +38,11 @@ import {
 } from "@/lib/profile-display-name";
 import { userHasGlobalFreezeBlockingIntent, userHasLockingMatchGroup } from "@/lib/housing-intent-status";
 import {
+  AUTO_CANCELLED_PROPERTY_FULL,
+  buildPropertyFullDismissMessage,
+  isAutoDismissedPropertyFullIntent,
+} from "@/lib/dismiss-property-queue";
+import {
   isActiveMatchGroupStatus,
   isValidMatchGroupEntity,
   parseGroupSize,
@@ -46,8 +51,16 @@ import {
 } from "@/lib/intent-group-ui";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
-import { cancelHousingIntentAction } from "@/app/actions/intentActions";
-import { getMyCommunityReputation, updateProfileBio } from "@/app/actions/profileActions";
+import {
+  cancelHousingIntentAction,
+  clearPropertyFullDismissedIntentAction,
+} from "@/app/actions/intentActions";
+import {
+  getMyCommunityReputation,
+  updateProfileBio,
+  updateProfileHabits,
+} from "@/app/actions/profileActions";
+import { isLandlordProfileRole } from "@/lib/user-roles";
 import {
   resolveCommunityReputationDisplay,
   type CommunityReputationDisplay,
@@ -74,6 +87,8 @@ type HousingIntentRow = {
   /** v3.0 意向主鍵（housing_intents.intent_id；若 API 仍回傳 id 則於 map 內對齊） */
   intent_id: string;
   status: string;
+  /** 取消原因；auto_cancelled_property_full 表示系統因樓盤滿員遣散 */
+  cancel_reason: string | null;
   /** JUPAS 風格志願序（1 起算）；舊資料可能為 null */
   preference_rank: number | null;
   target_district: string;
@@ -129,6 +144,10 @@ function mapHousingIntentRows(rows: unknown[] | null): HousingIntentRow[] {
           : String(r.intent_id ?? r.id ?? "");
     const status =
       typeof r.status === "string" && r.status.trim() !== "" ? r.status.trim() : "waiting";
+    const cancel_reason =
+      typeof r.cancel_reason === "string" && r.cancel_reason.trim() !== ""
+        ? r.cancel_reason.trim()
+        : null;
     const target_district =
       typeof r.target_district === "string" && r.target_district.trim() !== ""
         ? r.target_district.trim()
@@ -152,6 +171,7 @@ function mapHousingIntentRows(rows: unknown[] | null): HousingIntentRow[] {
     return {
       intent_id,
       status,
+      cancel_reason,
       preference_rank,
       target_district,
       max_budget,
@@ -198,6 +218,10 @@ async function reconcileStalePausedIntents(
 
 function sortIntentsByPreferenceRank(rows: HousingIntentRow[]): HousingIntentRow[] {
   return [...rows].sort((a, b) => {
+    const aDismissed = isAutoDismissedPropertyFullIntent(a);
+    const bDismissed = isAutoDismissedPropertyFullIntent(b);
+    if (aDismissed !== bDismissed) return aDismissed ? 1 : -1;
+
     const rankA = a.preference_rank;
     const rankB = b.preference_rank;
     const hasA = rankA != null && rankA > 0;
@@ -241,12 +265,26 @@ function intentStatusBadge(
     groupId?: string | null;
     groupStatus?: string | null;
     rawIntentStatus?: string | null;
+    cancelReason?: string | null;
     currentMemberCount?: number | null;
     targetSize?: number | null;
     isPropertyOffline?: boolean;
     viewerHasAgreed?: boolean | null;
   }
 ): { className: string; label: string } {
+  if (
+    isAutoDismissedPropertyFullIntent({
+      status: options?.rawIntentStatus ?? status,
+      cancel_reason: options?.cancelReason,
+    })
+  ) {
+    return {
+      className:
+        "max-w-full whitespace-normal rounded-lg border border-zinc-300 bg-zinc-100 px-3 py-1.5 text-left font-medium text-zinc-600 shadow-sm",
+      label: "🚫 樓盤已滿員",
+    };
+  }
+
   if (options?.isPropertyOffline) {
     return {
       className:
@@ -496,6 +534,7 @@ export default function DashboardPageClient() {
   const savedBioRef = useRef("");
   const profileLoadedRef = useRef(false);
   const [intentRows, setIntentRows] = useState<HousingIntentRow[]>([]);
+  const intentRowsRef = useRef<HousingIntentRow[]>([]);
   const [intentsLoading, setIntentsLoading] = useState(false);
   const [cancellingId, setCancellingId] = useState<string | null>(null);
   const [reordering, setReordering] = useState(false);
@@ -511,6 +550,10 @@ export default function DashboardPageClient() {
     () => sortIntentsByPreferenceRank(intentRows),
     [intentRows]
   );
+
+  useEffect(() => {
+    intentRowsRef.current = intentRows;
+  }, [intentRows]);
 
   useEffect(() => {
     let cancelled = false;
@@ -687,10 +730,12 @@ export default function DashboardPageClient() {
       const { data, error } = await supabase
         .from("housing_intents")
         .select(
-          "intent_id, status, preference_rank, target_district, max_budget, created_at, target_property_id, properties!target_property_id(id, title)"
+          "intent_id, status, cancel_reason, preference_rank, target_district, max_budget, created_at, target_property_id, properties!target_property_id(id, title)"
         )
         .eq("user_id", userId)
-        .not("status", "in", '("cancelled","expired","disbanded")')
+        .or(
+          `status.in.(waiting,matching,pending_opt_in,confirmed,matched,paused),and(status.eq.cancelled,cancel_reason.eq.${AUTO_CANCELLED_PROPERTY_FULL})`
+        )
         .order("created_at", { ascending: false });
 
       if (error) {
@@ -960,9 +1005,31 @@ export default function DashboardPageClient() {
             payload.old && typeof payload.old === "object"
               ? String((payload.old as { status?: unknown }).status ?? "").trim()
               : "";
+          const nextCancelReason =
+            payload.new && typeof payload.new === "object"
+              ? String((payload.new as { cancel_reason?: unknown }).cancel_reason ?? "").trim()
+              : "";
 
           if (nextStatus === "pending_opt_in" && prevStatus !== "pending_opt_in") {
             toast.success("🎉 管家已為您找到合適的室友，請盡速確認！");
+          }
+
+          if (
+            nextStatus === "cancelled" &&
+            prevStatus !== "cancelled" &&
+            nextCancelReason === AUTO_CANCELLED_PROPERTY_FULL
+          ) {
+            const propertyTitleFromPayload =
+              payload.new && typeof payload.new === "object"
+                ? (() => {
+                    const intentId = String(
+                      (payload.new as { intent_id?: unknown }).intent_id ?? ""
+                    ).trim();
+                    const match = intentRowsRef.current.find((r) => r.intent_id === intentId);
+                    return match?.target_property_title ?? "";
+                  })()
+                : "";
+            toast.message(buildPropertyFullDismissMessage(propertyTitleFromPayload));
           }
 
           // 熱更新意向卡片（含 pending_opt_in → 同意／拒絕 UI）
@@ -1031,26 +1098,50 @@ export default function DashboardPageClient() {
     }
   };
 
+  const handleClearPropertyFullDismissed = async (intentId: string) => {
+    if (!userId || cancellingId) return;
+    setCancellingId(intentId);
+    try {
+      const result = await clearPropertyFullDismissedIntentAction(intentId);
+      if (!result.success) {
+        throw new Error(result.error || "清除失敗，請稍後再試。");
+      }
+      await loadHousingIntents();
+      router.refresh();
+      toast.success("已刪除紀錄");
+    } catch (error) {
+      console.error("[dashboard] handleClearPropertyFullDismissed", error);
+      const message =
+        error instanceof Error
+          ? error.message
+          : "清除失敗，請稍後再試。";
+      toast.error(`清除失敗：${message}`);
+    } finally {
+      setCancellingId(null);
+    }
+  };
+
   const handleSave = async () => {
     if (!userId) return toast.error("請先登入再儲存設定。");
     setIsSaving(true);
-    const { error } = await supabase
-        .from("profiles")
-      .update({
-        habit_cleanliness: habits.habit_cleanliness,
-        habit_ac_temp: habits.habit_ac_temp,
-        habit_guests: habits.habit_guests,
-        habit_noise: habits.habit_noise,
-      })
-      .eq("id", userId);
+    const result = await updateProfileHabits({
+      habit_cleanliness: habits.habit_cleanliness,
+      habit_ac_temp: habits.habit_ac_temp,
+      habit_guests: habits.habit_guests,
+      habit_noise: habits.habit_noise,
+    });
     setIsSaving(false);
 
-    if (error) {
-      toast.error(`儲存失敗：${error.message}`);
+    if (!result.success) {
+      toast.error(`儲存失敗：${result.error}`);
       return;
     }
 
-    toast.success("✅ 習慣設定已更新，助你配對完美室友！");
+    toast.success(
+      isLandlordProfileRole(userRole)
+        ? "✅ 預設氛圍範本已儲存，新增樓盤時會自動套用。"
+        : "✅ 習慣設定已更新，助你配對完美室友！"
+    );
     router.refresh();
   };
 
@@ -1199,7 +1290,7 @@ export default function DashboardPageClient() {
                   : "border-transparent text-zinc-500 hover:text-zinc-700"
               }`}
             >
-              室友配對檔案
+              {isLandlordProfileRole(userRole) ? "期望的租屋與室友氛圍" : "室友配對檔案"}
             </button>
             <button
               type="button"
@@ -1599,9 +1690,15 @@ export default function DashboardPageClient() {
             <>
               <div className="flex flex-col space-y-1.5 p-6">
                 <h2 className="text-2xl font-semibold leading-none tracking-tight">
-                  我的室友配對檔案
+                  {isLandlordProfileRole(userRole)
+                    ? "期望的租屋與室友氛圍"
+                    : "我的室友配對檔案"}
                 </h2>
-                <p className="text-sm text-zinc-500">調整生活習慣偏好，幫你搵到更夾嘅室友。</p>
+                <p className="text-sm text-zinc-500">
+                  {isLandlordProfileRole(userRole)
+                    ? "設定您的管理標準。這些數據將儲存為預設範本，方便日後套用於不同樓盤。"
+                    : "調整生活習慣偏好，幫你搵到更夾嘅室友。"}
+                </p>
               </div>
 
               <div className="space-y-6 p-6 pt-0">
@@ -1690,11 +1787,16 @@ export default function DashboardPageClient() {
                   <ul className="space-y-4">
                     {sortedIntentRows.map((row, index) => {
                       const groupEntity = toIntentGroupEntity(row);
+                      const isPropertyFullDismissed = isAutoDismissedPropertyFullIntent(row);
                       const cardUi = resolveIntentCardUi(row.status, groupEntity, {
                         isGloballyFrozen,
                       });
-                      const effectiveGroupStatus = cardUi.effectiveGroupStatus;
-                      const effectiveIntentStatus = cardUi.effectiveIntentStatus;
+                      const effectiveGroupStatus = isPropertyFullDismissed
+                        ? null
+                        : cardUi.effectiveGroupStatus;
+                      const effectiveIntentStatus = isPropertyFullDismissed
+                        ? "cancelled"
+                        : cardUi.effectiveIntentStatus;
                       const isPropertyOffline =
                         row.target_property_id != null && !row.target_property_title;
                       const currentSize =
@@ -1713,6 +1815,7 @@ export default function DashboardPageClient() {
                         groupId: row.match_group_id,
                         groupStatus: effectiveGroupStatus ?? row.match_group_status,
                         rawIntentStatus: row.status,
+                        cancelReason: row.cancel_reason,
                         currentMemberCount: currentSize ?? row.match_group_current_size,
                         targetSize: targetSize ?? row.match_group_target_size,
                         isPropertyOffline,
@@ -1725,14 +1828,20 @@ export default function DashboardPageClient() {
                       const isPropertyFirst = row.target_property_id != null;
                       const propertyLinkLabel =
                         row.target_property_title?.trim() || "查看樓盤詳情";
-                      const isIntentPaused = effectiveIntentStatus === "paused";
-                      const reorderDisabled = isGloballyFrozen || reordering || isIntentPaused;
+                      const isIntentPaused =
+                        !isPropertyFullDismissed && effectiveIntentStatus === "paused";
+                      const reorderDisabled =
+                        isGloballyFrozen ||
+                        reordering ||
+                        isIntentPaused ||
+                        isPropertyFullDismissed;
                       const neighborUp = index > 0 ? sortedIntentRows[index - 1] : null;
                       const neighborDown =
                         index < sortedIntentRows.length - 1
                           ? sortedIntentRows[index + 1]
                           : null;
                       const canMoveUp =
+                        !isPropertyFullDismissed &&
                         index > 0 &&
                         neighborUp != null &&
                         neighborUp.preference_rank != null &&
@@ -1740,6 +1849,7 @@ export default function DashboardPageClient() {
                         row.preference_rank != null &&
                         row.preference_rank > 0;
                       const canMoveDown =
+                        !isPropertyFullDismissed &&
                         index < sortedIntentRows.length - 1 &&
                         neighborDown != null &&
                         neighborDown.preference_rank != null &&
@@ -1752,7 +1862,8 @@ export default function DashboardPageClient() {
                             className={cn(
                               "overflow-hidden border-zinc-200 shadow-sm transition-shadow hover:shadow-md",
                               cardUi.isCardMuted && "pointer-events-none opacity-60 grayscale",
-                              isIntentPaused && "opacity-50 grayscale"
+                              isIntentPaused && "opacity-50 grayscale",
+                              isPropertyFullDismissed && "opacity-60 grayscale"
                             )}
                           >
                             <CardContent className="p-5">
@@ -1880,6 +1991,21 @@ export default function DashboardPageClient() {
                                       </div>
                                     </dl>
                                   )}
+                                  {isPropertyFullDismissed ? (
+                                    <div
+                                      className="rounded-xl border border-zinc-200 bg-zinc-50/90 px-4 py-3.5 text-sm leading-relaxed text-zinc-700 shadow-sm"
+                                      role="status"
+                                    >
+                                      <p className="font-semibold text-zinc-800">
+                                        🚫 樓盤已滿員並停止招租
+                                      </p>
+                                      <p className="mt-1.5 text-zinc-600">
+                                        {buildPropertyFullDismissMessage(
+                                          row.target_property_title ?? ""
+                                        )}
+                                      </p>
+                                    </div>
+                                  ) : null}
                                   {isIntentPaused ? (
                                     <div
                                       className="rounded-xl border border-zinc-200 bg-zinc-50/90 px-4 py-3.5 text-sm leading-relaxed text-zinc-700 shadow-sm"
@@ -1895,6 +2021,7 @@ export default function DashboardPageClient() {
                                   ) : null}
                                   {userId &&
                                   !isPropertyOffline &&
+                                  !isPropertyFullDismissed &&
                                   cardUi.showMatchedTeammates &&
                                   row.match_group_id ? (
                                     effectiveGroupStatus === "confirmed" ||
@@ -1920,7 +2047,27 @@ export default function DashboardPageClient() {
                                     <ViewingProgressPanel groupId={row.match_group_id} />
                                   ) : null}
                                 </div>
-                                {effectiveIntentStatus !== "pending_opt_in" ? (
+                                {isPropertyFullDismissed ? (
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    className="shrink-0 border-zinc-300 text-zinc-700 hover:bg-zinc-50"
+                                    disabled={cancellingId === row.intent_id}
+                                    onClick={() =>
+                                      void handleClearPropertyFullDismissed(row.intent_id)
+                                    }
+                                  >
+                                    {cancellingId === row.intent_id ? (
+                                      <>
+                                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                        處理中…
+                                      </>
+                                    ) : (
+                                      "刪除紀錄"
+                                    )}
+                                  </Button>
+                                ) : effectiveIntentStatus !== "pending_opt_in" ? (
                                   <Button
                                     type="button"
                                     variant={isIntentPaused ? "default" : "outline"}

@@ -27,7 +27,7 @@ type UseRealtimeChatResult = {
 const MESSAGE_SELECT_BASE =
   "message_id, room_id, sender_id, content, is_read, created_at";
 
-const MESSAGE_SELECT_WITH_SENDER = `${MESSAGE_SELECT_BASE}, profiles:sender_id ( id, display_name, nickname, avatar_url )`;
+const MESSAGE_SELECT_WITH_SENDER = `${MESSAGE_SELECT_BASE}, profiles:sender_id ( id, display_name, nickname, avatar_url, role )`;
 
 function isChatPermissionError(error: { code?: string; message?: string }) {
   const code = error.code ?? "";
@@ -40,10 +40,9 @@ function isChatPermissionError(error: { code?: string; message?: string }) {
   );
 }
 
-function messageSelectFor(roomType?: ChatRoomType): string {
-  return roomType === "group" || roomType === "peer"
-    ? MESSAGE_SELECT_WITH_SENDER
-    : MESSAGE_SELECT_BASE;
+function messageSelectFor(_roomType?: ChatRoomType): string {
+  // 一律帶 sender profile（含 role），供前端官方身份覆寫與氣泡樣式使用
+  return MESSAGE_SELECT_WITH_SENDER;
 }
 
 function sortMessages(rows: ChatMessage[]): ChatMessage[] {
@@ -139,7 +138,6 @@ export function useRealtimeChat(
   options?: UseRealtimeChatOptions
 ): UseRealtimeChatResult {
   const roomType = options?.roomType ?? "direct";
-  const isGroupChat = roomType === "group" || roomType === "peer";
   const messageSelect = messageSelectFor(roomType);
 
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
@@ -165,8 +163,6 @@ export function useRealtimeChat(
 
   const resolveMissingSenders = useCallback(
     async (rows: ChatMessage[]): Promise<ChatMessage[]> => {
-      if (!isGroupChat) return rows;
-
       const missingIds = [
         ...new Set(
           rows
@@ -179,7 +175,7 @@ export function useRealtimeChat(
 
       const { data, error: profileError } = await supabase
         .from("profiles")
-        .select("id, display_name, nickname, avatar_url")
+        .select("id, display_name, nickname, avatar_url, role")
         .in("id", missingIds);
 
       if (profileError || !data) return rows;
@@ -197,7 +193,7 @@ export function useRealtimeChat(
         return sender ? { ...row, sender } : row;
       });
     },
-    [isGroupChat, supabase]
+    [supabase]
   );
 
   const fetchMessages = useCallback(
@@ -286,7 +282,7 @@ export function useRealtimeChat(
           if (roomIdRef.current !== subscribedRoomId) return;
           const row = normalizeChatMessage(payload.new as Record<string, unknown>);
           setMessages((prev) => mergeMessage(prev, row));
-          if (isGroupChat && !row.sender && row.sender_id) {
+          if (!row.sender && row.sender_id) {
             void resolveMissingSenders([row]).then((enriched) => {
               const enrichedRow = enriched[0];
               if (!enrichedRow?.sender) return;
@@ -331,7 +327,7 @@ export function useRealtimeChat(
       active = false;
       teardownChannel(supabase, channel);
     };
-  }, [isGroupChat, messageSelect, resolveMissingSenders, roomId, supabase]);
+  }, [messageSelect, resolveMissingSenders, roomId, supabase]);
 
   // 補捉 Realtime 遺漏的 is_read 變更（focus / visibility）
   useEffect(() => {
@@ -389,7 +385,7 @@ export function useRealtimeChat(
 
       if (data) {
         let row = normalizeChatMessage(data as unknown as Record<string, unknown>);
-        if (isGroupChat && !row.sender) {
+        if (!row.sender) {
           const [enriched] = await resolveMissingSenders([row]);
           row = enriched ?? row;
         }
@@ -398,7 +394,7 @@ export function useRealtimeChat(
 
       return true;
     },
-    [isGroupChat, messageSelect, resolveMissingSenders, roomId, supabase]
+    [messageSelect, resolveMissingSenders, roomId, supabase]
   );
 
   return { messages, loading, sending, error, sendMessage };

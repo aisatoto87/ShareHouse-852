@@ -4,6 +4,10 @@ import { revalidatePath } from "next/cache";
 import {
   GLOBAL_FREEZE_BLOCKING_INTENT_STATUSES,
 } from "@/lib/housing-intent-status";
+import {
+  AUTO_CANCELLED_PROPERTY_FULL,
+  USER_CLEARED_PROPERTY_FULL,
+} from "@/lib/dismiss-property-queue";
 import { teardownHousingIntent } from "@/lib/intent-teardown";
 import {
   COMPATIBILITY_QUEUE_BLOCK_ERROR,
@@ -571,6 +575,77 @@ export async function cancelHousingIntentAction(
   if (!result.ok) {
     console.error("[actions/cancelHousingIntent] teardown failed", result.error);
     return { success: false, error: result.error };
+  }
+
+  revalidatePath("/dashboard");
+  return { success: true };
+}
+
+/**
+ * 清除「樓盤已滿員」系統遣散紀錄（軟隱藏：改 cancel_reason，保留列供冷卻查詢）。
+ */
+export async function clearPropertyFullDismissedIntentAction(
+  intentId: string
+): Promise<CancelIntentResult> {
+  const trimmedId = typeof intentId === "string" ? intentId.trim() : "";
+  if (!trimmedId) {
+    return { success: false, error: "缺少意向 ID。" };
+  }
+
+  const { user } = await getServerUser();
+  if (!user?.id) {
+    return { success: false, error: "請先登入。" };
+  }
+
+  let admin;
+  try {
+    admin = createSupabaseAdminClient();
+  } catch (e) {
+    console.error("[actions/clearPropertyFullDismissedIntent] admin client", e);
+    return { success: false, error: "伺服器未設定 Supabase Service Role。" };
+  }
+
+  const { data: row, error: fetchErr } = await admin
+    .from("housing_intents")
+    .select("intent_id, status, cancel_reason")
+    .eq("user_id", user.id)
+    .eq("intent_id", trimmedId)
+    .maybeSingle();
+
+  if (fetchErr) {
+    console.error("[actions/clearPropertyFullDismissedIntent] fetch", fetchErr);
+    return { success: false, error: fetchErr.message };
+  }
+
+  if (!row) {
+    return { success: false, error: "找不到對應的租屋意向。" };
+  }
+
+  const status =
+    typeof (row as { status?: unknown }).status === "string"
+      ? String((row as { status: string }).status).trim().toLowerCase()
+      : "";
+  const reason =
+    typeof (row as { cancel_reason?: unknown }).cancel_reason === "string"
+      ? String((row as { cancel_reason: string }).cancel_reason).trim()
+      : "";
+
+  if (status !== "cancelled" || reason !== AUTO_CANCELLED_PROPERTY_FULL) {
+    return { success: false, error: "此意向不是可清除的滿員遣散紀錄。" };
+  }
+
+  const { error: updateErr } = await admin
+    .from("housing_intents")
+    .update({
+      cancel_reason: USER_CLEARED_PROPERTY_FULL,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("user_id", user.id)
+    .eq("intent_id", trimmedId);
+
+  if (updateErr) {
+    console.error("[actions/clearPropertyFullDismissedIntent] update", updateErr);
+    return { success: false, error: updateErr.message };
   }
 
   revalidatePath("/dashboard");

@@ -9,6 +9,7 @@ import {
   type WaitingPoolPropertyGroup,
   type WaitingPoolUser,
 } from "@/lib/admin-waiting-pool";
+import { dismissWaitingIntentsOnPropertyFull } from "@/lib/dismiss-property-queue";
 import { disbandGroupAndReleaseMembers, closeChatRoomsForMatchGroup } from "@/lib/intent-teardown";
 import { ensureOfflineDealForGroup } from "@/lib/offline-deals";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
@@ -28,6 +29,28 @@ export type AdminCreateVirtualMatchGroupResult =
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+const SYNCNEST_CLIQUE_FAILED_TOAST =
+  "配對失敗：勾選用戶之間的契合度不足 72 分";
+
+/** 從 RPC / 未知 throw 值抽出 message + details，並轉譯 SyncNest clique 攔截。 */
+function resolveCreateVirtualMatchGroupError(e: unknown): string {
+  const record =
+    typeof e === "object" && e !== null ? (e as Record<string, unknown>) : null;
+  const message =
+    (e instanceof Error && e.message) ||
+    (typeof record?.message === "string" ? record.message : "") ||
+    "";
+  const details = typeof record?.details === "string" ? record.details : "";
+  const hint = typeof record?.hint === "string" ? record.hint : "";
+  const combined = [message, details, hint].filter(Boolean).join("\n");
+
+  if (combined.includes("SyncNest clique check failed")) {
+    return SYNCNEST_CLIQUE_FAILED_TOAST;
+  }
+
+  return message.trim() || details.trim() || "手動拉人成團失敗。";
+}
 
 async function requireAdminRpcClient(): Promise<
   { ok: true; rpc: ReturnType<typeof createSupabaseAdminClient> } | { ok: false; error: string }
@@ -140,9 +163,9 @@ export async function adminCreateVirtualMatchGroupAction(
       pausedCount: created.paused_count,
     };
   } catch (e) {
-    const message = e instanceof Error ? e.message : "伺服器錯誤";
-    console.error("[adminCreateVirtualMatchGroupAction]", message);
-    return { ok: false, error: message || "手動拉人成團失敗。" };
+    const message = resolveCreateVirtualMatchGroupError(e);
+    console.error("[adminCreateVirtualMatchGroupAction]", e);
+    return { ok: false, error: message };
   }
 }
 
@@ -504,6 +527,26 @@ export async function adminUpdateOfflineDealAction(
       if (propertyErr) {
         console.error("[adminUpdateOfflineDealAction] mark rented", propertyErr.message);
         return { ok: false, error: `結案成功，但標記樓盤已租出失敗：${propertyErr.message}` };
+      }
+
+      // 保險：結案租出後再次遣散仍殘留於該樓盤的排隊意向
+      try {
+        const dismissed = await dismissWaitingIntentsOnPropertyFull(
+          gate.rpc,
+          propertyId
+        );
+        if (dismissed.dismissedCount > 0) {
+          console.log("[adminUpdateOfflineDealAction] property-full queue dismissed", {
+            groupId: trimmedGroupId,
+            propertyId,
+            dismissedCount: dismissed.dismissedCount,
+          });
+        }
+      } catch (dismissErr) {
+        console.error(
+          "[adminUpdateOfflineDealAction] dismiss waiting queue",
+          dismissErr instanceof Error ? dismissErr.message : dismissErr
+        );
       }
     }
   }

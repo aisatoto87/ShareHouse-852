@@ -5,6 +5,8 @@ export type ChatSenderProfile = {
   display_name: string | null;
   nickname: string | null;
   avatar_url: string | null;
+  /** profiles.role；用於前端官方身份覆寫（不影響 DB 真實 sender_id） */
+  role?: string | null;
 };
 
 /** 配對群組內的租客成員（不含 Admin / 管家） */

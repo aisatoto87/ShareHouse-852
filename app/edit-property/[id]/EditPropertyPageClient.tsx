@@ -8,6 +8,7 @@ import Navbar from "@/components/Navbar";
 import SharedPropertyForm from "@/components/SharedPropertyForm";
 import { propertyRowToInitialData, roomPricesArrayToDbObject } from "@/lib/map-property-row-to-shared-form-initial";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
+import { resolveUniversityZonesForWrite } from "@/lib/utils/zoneMapper";
 import type { SharedPropertyFormInitialData, SharedPropertyFormSubmitPayload } from "@/types/shared-property-form";
 
 type EditPropertyPageClientProps = {
@@ -186,6 +187,11 @@ export default function EditPropertyPageClient({ propertyId }: EditPropertyPageC
         amenities: data.amenities,
         roommates_req: data.roommates_req,
         tags: data.tags,
+        university_zones: resolveUniversityZonesForWrite({
+          district: data.district,
+          sub_district: data.sub_district,
+          university_zones: data.university_zones,
+        }),
         gallery: galleryStrings,
         room_count: data.room_count,
         max_tenants: data.max_tenants,

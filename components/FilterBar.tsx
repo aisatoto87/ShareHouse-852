@@ -1,11 +1,21 @@
 "use client";
 
 import type {
+  CategoryPresetFilter,
   DistrictFilter,
   Filters,
   PriceFilter,
   SizeFilter,
 } from "@/types/property";
+import {
+  CATEGORY_PRESETS,
+  getCategoryPreset,
+} from "@/lib/category-presets";
+import LocalStudentFilter from "@/components/LocalStudentFilter";
+import {
+  sanitizeUniversityZones,
+  type UniversityZoneId,
+} from "@/lib/university-zones";
 import {
   Select,
   SelectContent,
@@ -16,7 +26,6 @@ import {
 import { cn } from "@/lib/utils";
 
 export type ListingsViewMode = "matched" | "all";
-
 
 interface FilterBarProps {
   filters: Filters;
@@ -39,6 +48,27 @@ export default function FilterBar({
   onToggleSortByMatch,
 }: FilterBarProps) {
   const tabDisabled = listingsLoading;
+  const activePreset = getCategoryPreset(filters.categoryPreset);
+  const showStudentZones = filters.categoryPreset === "local_student";
+  const selectedZones = sanitizeUniversityZones(filters.universityZones);
+
+  function setCategoryPreset(next: CategoryPresetFilter) {
+    const clearing = filters.categoryPreset === next;
+    const nextPreset = clearing ? "" : next;
+    onChange({
+      ...filters,
+      categoryPreset: nextPreset,
+      // 離開本地學生時清空通勤圈
+      universityZones: nextPreset === "local_student" ? filters.universityZones : [],
+    });
+  }
+
+  function setUniversityZones(zones: UniversityZoneId[]) {
+    onChange({
+      ...filters,
+      universityZones: zones,
+    });
+  }
 
   return (
     <div className="sticky top-[57px] z-40 border-b border-zinc-200 bg-white/95 backdrop-blur-sm">
@@ -84,6 +114,64 @@ export default function FilterBar({
             🌍 全部租盤
           </button>
         </div>
+
+        <div className="mb-2.5">
+          <p className="mb-1.5 text-xs font-medium tracking-wide text-zinc-500">
+            客群專屬推薦
+          </p>
+          <div
+            className="flex flex-wrap gap-2"
+            role="group"
+            aria-label="客群專屬推薦"
+          >
+            {CATEGORY_PRESETS.map((preset) => {
+              const selected = filters.categoryPreset === preset.id;
+              return (
+                <button
+                  key={preset.id}
+                  type="button"
+                  aria-pressed={selected}
+                  onClick={() => setCategoryPreset(preset.id)}
+                  className={cn(
+                    "rounded-md border px-3 py-1.5 text-sm font-medium transition-colors",
+                    selected
+                      ? "border-[#0f2540] bg-[#0f2540] text-white shadow-sm"
+                      : "border-zinc-200 bg-white text-zinc-700 hover:border-zinc-300 hover:bg-zinc-50"
+                  )}
+                >
+                  {preset.label}
+                </button>
+              );
+            })}
+          </div>
+          {activePreset ? (
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              <span className="text-xs text-zinc-500">已套用：</span>
+              {activePreset.displayTags.map((tag) => (
+                <span
+                  key={tag}
+                  className="inline-flex items-center rounded-md border border-sky-200 bg-sky-50 px-2 py-0.5 text-xs font-medium text-sky-900"
+                >
+                  {tag}
+                </span>
+              ))}
+              <button
+                type="button"
+                onClick={() => setCategoryPreset("")}
+                className="ml-1 text-xs font-medium text-zinc-500 underline-offset-2 hover:text-zinc-800 hover:underline"
+              >
+                清除
+              </button>
+            </div>
+          ) : null}
+
+          {showStudentZones ? (
+            <LocalStudentFilter
+              selectedZones={selectedZones}
+              onChange={setUniversityZones}
+            />
+          ) : null}
+        </div>
       </div>
       <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-2.5 px-4 pb-2.5 sm:px-6">
         <Select
@@ -116,7 +204,7 @@ export default function FilterBar({
             <SelectValue placeholder="租金 — 全部" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">全部租金</SelectItem>
+            <SelectItem value="all">全部租金（單房／人均）</SelectItem>
             <SelectItem value="low">HK$4,000 以下</SelectItem>
             <SelectItem value="mid">HK$4,000 - $6,000</SelectItem>
             <SelectItem value="high">HK$6,000 以上</SelectItem>

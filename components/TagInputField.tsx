@@ -36,6 +36,8 @@ export type TagInputFieldProps = {
   onRemove: (value: string) => void;
   onAddCustom: () => void;
   canAddCustom: boolean;
+  /** 顯示用標籤文案（例如 slug → 中文） */
+  formatLabel?: (value: string) => string;
 };
 
 export function TagInputField({
@@ -53,7 +55,10 @@ export function TagInputField({
   onRemove,
   onAddCustom,
   canAddCustom,
+  formatLabel,
 }: TagInputFieldProps) {
+  const labelOf = (value: string) => formatLabel?.(value) ?? value;
+
   return (
     <div className="sm:col-span-2">
       <label className="mb-1 block text-sm font-medium text-zinc-700">{label}</label>
@@ -65,12 +70,12 @@ export function TagInputField({
               variant="secondary"
               className="gap-1 border border-[#1a3a5c]/15 bg-[#eef2ff] text-[#0f2540]"
             >
-              {item}
+              {labelOf(item)}
               <button
                 type="button"
                 className="rounded-full p-0.5 hover:bg-[#0f2540]/10"
                 onClick={() => onRemove(item)}
-                aria-label={`移除 ${item}`}
+                aria-label={`移除 ${labelOf(item)}`}
               >
                 <X className="h-3 w-3" />
               </button>
@@ -134,11 +139,11 @@ export function TagInputField({
                   return (
                     <CommandItem
                       key={option}
-                      value={option}
+                      value={`${option} ${labelOf(option)}`}
                       onSelect={() => onToggle(option)}
                       className="justify-between"
                     >
-                      <span>{option}</span>
+                      <span>{labelOf(option)}</span>
                       <span className="flex items-center gap-2">
                         <Checkbox checked={checked} />
                         {checked ? <Check className="h-4 w-4 text-[#0f2540]" /> : null}

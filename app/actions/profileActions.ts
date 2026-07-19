@@ -76,3 +76,69 @@ export async function updateProfileBio(bio: string): Promise<UpdateProfileBioRes
   revalidatePath("/dashboard");
   return { success: true };
 }
+
+export type ProfileHabitScores = {
+  habit_cleanliness: number;
+  habit_ac_temp: number;
+  habit_guests: number;
+  habit_noise: number;
+};
+
+export type UpdateProfileHabitsResult =
+  | { success: true }
+  | { success: false; error: string };
+
+function clampHabitScore(value: unknown): number | null {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  const rounded = Math.round(n);
+  if (rounded < 1 || rounded > 5) return null;
+  return rounded;
+}
+
+/**
+ * 更新當前用戶 profiles 四維習慣分數（租客生活習慣／業主預設 Vibe 範本共用）。
+ * 對應任務中的 habit_v1–v4 → habit_cleanliness / habit_ac_temp / habit_guests / habit_noise。
+ */
+export async function updateProfileHabits(
+  habits: ProfileHabitScores
+): Promise<UpdateProfileHabitsResult> {
+  const { user } = await getServerUser();
+  if (!user?.id) {
+    return { success: false, error: "請先登入。" };
+  }
+
+  const habit_cleanliness = clampHabitScore(habits.habit_cleanliness);
+  const habit_ac_temp = clampHabitScore(habits.habit_ac_temp);
+  const habit_guests = clampHabitScore(habits.habit_guests);
+  const habit_noise = clampHabitScore(habits.habit_noise);
+
+  if (
+    habit_cleanliness == null ||
+    habit_ac_temp == null ||
+    habit_guests == null ||
+    habit_noise == null
+  ) {
+    return { success: false, error: "習慣分數必須為 1–5 的整數。" };
+  }
+
+  const supabase = await createSupabaseServerClient();
+  const { error } = await supabase
+    .from("profiles")
+    .update({
+      habit_cleanliness,
+      habit_ac_temp,
+      habit_guests,
+      habit_noise,
+    })
+    .eq("id", user.id);
+
+  if (error) {
+    console.error("[profileActions/updateProfileHabits]", error);
+    return { success: false, error: error.message || "儲存失敗，請稍後再試。" };
+  }
+
+  revalidatePath("/dashboard");
+  revalidatePath("/list-property");
+  return { success: true };
+}
